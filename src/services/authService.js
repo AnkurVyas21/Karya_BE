@@ -2,11 +2,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const OTPVerification = require('../models/OTPVerification');
-const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
-
-let mailTransporter;
 
 class AuthService {
   async signup(userData) {
@@ -79,15 +76,13 @@ class AuthService {
       logger.info('Preparing OTP email', {
         userId: user._id.toString(),
         email: user.email,
-        hasEmailUser: Boolean(process.env.EMAIL_USER),
-        hasEmailPass: Boolean(process.env.EMAIL_PASS),
+        hasResendApiKey: Boolean(process.env.RESEND_API_KEY),
+        hasResendFrom: Boolean(process.env.RESEND_FROM),
         environment: process.env.NODE_ENV || 'undefined'
       });
 
-      const transporter = this.getMailTransporter();
       try {
-        const info = await transporter.sendMail({
-          from: `"Karya" <${process.env.EMAIL_USER}>`,
+        const info = await this.sendEmailWithResend({
           to: user.email,
           subject: 'Your Karya verification OTP',
           text: `Your OTP is ${otp}. It will expire in 10 minutes.`,
@@ -102,18 +97,17 @@ class AuthService {
             </div>
           `
         });
+
         logger.info('Email OTP sent successfully', {
           userId: user._id.toString(),
           email: user.email,
-          messageId: info.messageId,
-          response: info.response
+          resendEmailId: info.id
         });
       } catch (error) {
-        logger.error('Nodemailer sendMail failed', {
+        logger.error('Resend send email failed', {
           userId: user._id.toString(),
           email: user.email,
           code: error.code,
-          command: error.command,
           response: error.response,
           responseCode: error.responseCode,
           message: error.message,
@@ -128,27 +122,42 @@ class AuthService {
     }
   }
 
-  getMailTransporter() {
-    if (mailTransporter) {
-      return mailTransporter;
+  async sendEmailWithResend({ to, subject, text, html }) {
+    if (!process.env.RESEND_API_KEY) {
+      throw new Error('RESEND_API_KEY is not configured');
     }
 
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      throw new Error('Email credentials are not configured');
+    const from = process.env.RESEND_FROM;
+    if (!from) {
+      throw new Error('RESEND_FROM is not configured');
     }
 
-    mailTransporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json'
       },
-      connectionTimeout: 20000,
-      greetingTimeout: 20000,
-      socketTimeout: 30000
+      body: JSON.stringify({
+        from,
+        to: [to],
+        subject,
+        text,
+        html
+      })
     });
 
-    return mailTransporter;
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const error = new Error(payload.message || payload.error || `Resend API request failed with status ${response.status}`);
+      error.code = 'RESEND_API_ERROR';
+      error.responseCode = response.status;
+      error.response = JSON.stringify(payload);
+      throw error;
+    }
+
+    return payload;
   }
 
   async resendOTP(identifier, type = 'email') {
