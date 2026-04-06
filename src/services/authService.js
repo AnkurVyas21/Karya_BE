@@ -24,8 +24,7 @@ class AuthService {
     logger.info(`User signed up: ${user._id}`);
     
     try {
-      // Send OTP for mobile and email
-      await this.sendOTP(user, 'mobile');
+      // Email-only OTP verification for now
       await this.sendOTP(user, 'email');
     } catch (error) {
       // If OTP sending fails, delete the user to prevent partial signup
@@ -46,6 +45,10 @@ class AuthService {
   }
 
   async verifyOTP(identifier, otp, type) {
+    if (type !== 'email') {
+      throw new Error('Only email OTP verification is enabled right now');
+    }
+
     // Find user by email or mobile
     const user = await User.findOne(type === 'email' ? { email: identifier } : { mobile: identifier });
     if (!user) {
@@ -113,6 +116,10 @@ class AuthService {
   }
 
   async resendOTP(identifier, type = 'email') {
+    if (type !== 'email') {
+      throw new Error('Only email OTP resend is enabled right now');
+    }
+
     const user = await User.findOne(type === 'email' ? { email: identifier } : { mobile: identifier });
     if (!user) {
       throw new Error('User not found');
