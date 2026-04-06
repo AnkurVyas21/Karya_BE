@@ -6,6 +6,8 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 
+let mailTransporter;
+
 class AuthService {
   async signup(userData) {
     const { firstName, lastName, email, mobile, password, role = 'user' } = userData;
@@ -61,31 +63,53 @@ class AuthService {
   }
 
   async sendOTP(user, type) {
-    const otp = process.env.NODE_ENV === 'production' ? crypto.randomInt(100000, 999999).toString() : '123456'; // Fixed OTP for testing
+    const otp = process.env.TEST_OTP || (process.env.NODE_ENV === 'production' ? crypto.randomInt(100000, 999999).toString() : '123456');
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
     await OTPVerification.create({ user: user._id, otp, type, expiresAt });
     if (type === 'email') {
-      // For development/testing, just log the OTP instead of sending email
-      console.log(`OTP for ${user.email}: ${otp}`);
-      logger.info(`OTP sent to ${user.email}: ${otp}`);
-      // Uncomment below for production email sending
-      /*
-      const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
-      });
+      const transporter = this.getMailTransporter();
       await transporter.sendMail({
-        from: process.env.EMAIL_USER,
+        from: `"Karya" <${process.env.EMAIL_USER}>`,
         to: user.email,
-        subject: 'OTP Verification',
-        text: `Your OTP is ${otp}`
+        subject: 'Your Karya verification OTP',
+        text: `Your OTP is ${otp}. It will expire in 10 minutes.`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; color: #1f2937;">
+            <h2 style="margin-bottom: 12px;">Verify your Karya account</h2>
+            <p style="margin-bottom: 16px;">Use the following OTP to complete your signup:</p>
+            <div style="font-size: 32px; font-weight: 700; letter-spacing: 8px; padding: 16px 20px; background: #f3f6fb; border-radius: 12px; display: inline-block;">
+              ${otp}
+            </div>
+            <p style="margin-top: 16px;">This OTP will expire in 10 minutes.</p>
+          </div>
+        `
       });
-      */
+      logger.info(`Email OTP sent to ${user.email}`);
     } else if (type === 'mobile') {
       // Mock SMS, in real, use twilio
       console.log(`SMS OTP to ${user.mobile}: ${otp}`);
       logger.info(`SMS OTP sent to ${user.mobile}`);
     }
+  }
+
+  getMailTransporter() {
+    if (mailTransporter) {
+      return mailTransporter;
+    }
+
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      throw new Error('Email credentials are not configured');
+    }
+
+    mailTransporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+      }
+    });
+
+    return mailTransporter;
   }
 
   async resendOTP(identifier, type = 'email') {
