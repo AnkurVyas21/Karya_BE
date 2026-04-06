@@ -27,6 +27,12 @@ class AuthService {
       // Email-only OTP verification for now
       await this.sendOTP(user, 'email');
     } catch (error) {
+      logger.error('Signup OTP delivery failed', {
+        userId: user._id.toString(),
+        email,
+        message: error.message,
+        stack: error.stack
+      });
       // If OTP sending fails, delete the user to prevent partial signup
       await User.findByIdAndDelete(user._id);
       throw error;
@@ -70,24 +76,51 @@ class AuthService {
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
     await OTPVerification.create({ user: user._id, otp, type, expiresAt });
     if (type === 'email') {
-      const transporter = this.getMailTransporter();
-      await transporter.sendMail({
-        from: `"Karya" <${process.env.EMAIL_USER}>`,
-        to: user.email,
-        subject: 'Your Karya verification OTP',
-        text: `Your OTP is ${otp}. It will expire in 10 minutes.`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; color: #1f2937;">
-            <h2 style="margin-bottom: 12px;">Verify your Karya account</h2>
-            <p style="margin-bottom: 16px;">Use the following OTP to complete your signup:</p>
-            <div style="font-size: 32px; font-weight: 700; letter-spacing: 8px; padding: 16px 20px; background: #f3f6fb; border-radius: 12px; display: inline-block;">
-              ${otp}
-            </div>
-            <p style="margin-top: 16px;">This OTP will expire in 10 minutes.</p>
-          </div>
-        `
+      logger.info('Preparing OTP email', {
+        userId: user._id.toString(),
+        email: user.email,
+        hasEmailUser: Boolean(process.env.EMAIL_USER),
+        hasEmailPass: Boolean(process.env.EMAIL_PASS),
+        environment: process.env.NODE_ENV || 'undefined'
       });
-      logger.info(`Email OTP sent to ${user.email}`);
+
+      const transporter = this.getMailTransporter();
+      try {
+        const info = await transporter.sendMail({
+          from: `"Karya" <${process.env.EMAIL_USER}>`,
+          to: user.email,
+          subject: 'Your Karya verification OTP',
+          text: `Your OTP is ${otp}. It will expire in 10 minutes.`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; color: #1f2937;">
+              <h2 style="margin-bottom: 12px;">Verify your Karya account</h2>
+              <p style="margin-bottom: 16px;">Use the following OTP to complete your signup:</p>
+              <div style="font-size: 32px; font-weight: 700; letter-spacing: 8px; padding: 16px 20px; background: #f3f6fb; border-radius: 12px; display: inline-block;">
+                ${otp}
+              </div>
+              <p style="margin-top: 16px;">This OTP will expire in 10 minutes.</p>
+            </div>
+          `
+        });
+        logger.info('Email OTP sent successfully', {
+          userId: user._id.toString(),
+          email: user.email,
+          messageId: info.messageId,
+          response: info.response
+        });
+      } catch (error) {
+        logger.error('Nodemailer sendMail failed', {
+          userId: user._id.toString(),
+          email: user.email,
+          code: error.code,
+          command: error.command,
+          response: error.response,
+          responseCode: error.responseCode,
+          message: error.message,
+          stack: error.stack
+        });
+        throw error;
+      }
     } else if (type === 'mobile') {
       // Mock SMS, in real, use twilio
       console.log(`SMS OTP to ${user.mobile}: ${otp}`);
@@ -109,7 +142,10 @@ class AuthService {
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
-      }
+      },
+      connectionTimeout: 20000,
+      greetingTimeout: 20000,
+      socketTimeout: 30000
     });
 
     return mailTransporter;
