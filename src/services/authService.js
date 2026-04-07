@@ -2,12 +2,13 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const OTPVerification = require('../models/OTPVerification');
+const ProfessionalProfile = require('../models/ProfessionalProfile');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 
 class AuthService {
   async signup(userData) {
-    const { firstName, lastName, email, mobile, password, role = 'user' } = userData;
+    const { firstName, lastName, email, mobile, password, role = 'user', profession = '' } = userData;
     
     // Check if user already exists
     const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
@@ -18,6 +19,24 @@ class AuthService {
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new User({ firstName, lastName, email, mobile, password: hashedPassword, role });
     await user.save();
+
+    if (role === 'professional') {
+      await ProfessionalProfile.findOneAndUpdate(
+        { user: user._id },
+        {
+          $setOnInsert: {
+            user: user._id,
+            profession: profession || 'Professional',
+            description: `${firstName} ${lastName} is available on Karya.`,
+            skills: [],
+            allowContactDisplay: true
+          }
+        },
+        { upsert: true, new: true }
+      );
+      logger.info(`Starter professional profile created for user: ${user._id}`);
+    }
+
     logger.info(`User signed up: ${user._id}`);
     
     try {
@@ -37,8 +56,10 @@ class AuthService {
     return user;
   }
 
-  async login(email, password) {
-    const user = await User.findOne({ email });
+  async login(identifier, password) {
+    const user = await User.findOne({
+      $or: [{ email: identifier }, { mobile: identifier }]
+    });
     if (!user || !(await bcrypt.compare(password, user.password))) {
       throw new Error('Invalid credentials');
     }

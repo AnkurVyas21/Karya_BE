@@ -268,11 +268,17 @@ class ProfessionalService {
 
   keywordBasedProfessionDetection(description) {
     const lowered = description.toLowerCase();
-    if (lowered.includes('website') || lowered.includes('app') || lowered.includes('software')) {
-      return { profession: 'Developer', skills: ['JavaScript', 'Angular', 'Node.js'] };
+    if (lowered.includes('deploy') || lowered.includes('devops') || lowered.includes('server') || lowered.includes('cloud')) {
+      return { profession: 'DevOps Engineer', skills: ['AWS', 'CI/CD', 'Docker', 'Kubernetes'] };
+    }
+    if (lowered.includes('website') || lowered.includes('app') || lowered.includes('software') || lowered.includes('coding')) {
+      return { profession: 'Software Engineer', skills: ['JavaScript', 'Angular', 'Node.js', 'System Design'] };
+    }
+    if (lowered.includes('frontend') || lowered.includes('ui') || lowered.includes('landing page')) {
+      return { profession: 'Web Developer', skills: ['HTML', 'CSS', 'Angular', 'Responsive Design'] };
     }
     if (lowered.includes('logo') || lowered.includes('design')) {
-      return { profession: 'Designer', skills: ['Branding', 'UI/UX', 'Graphic Design'] };
+      return { profession: 'UI/UX Designer', skills: ['Branding', 'UI/UX', 'Graphic Design'] };
     }
     if (lowered.includes('pipe') || lowered.includes('leak')) {
       return { profession: 'Plumber', skills: ['Pipe repair', 'Home service', 'Maintenance'] };
@@ -285,6 +291,14 @@ class ProfessionalService {
   }
 
   keywordBasedSearch(problem) {
+    const lowered = problem.toLowerCase();
+    if (lowered.includes('deploy') || lowered.includes('website')) {
+      return {
+        professions: ['DevOps Engineer', 'Web Developer', 'Software Engineer'],
+        skills: ['AWS', 'Deployment', 'Node.js', 'Angular']
+      };
+    }
+
     const detection = this.keywordBasedProfessionDetection(problem);
     return {
       professions: [detection.profession],

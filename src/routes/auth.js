@@ -12,13 +12,15 @@ const signupSchema = Joi.object({
   email: Joi.string().email().required(),
   mobile: Joi.string().required(),
   password: Joi.string().min(6).required(),
-  role: Joi.string().valid('user', 'professional').default('user')
+  role: Joi.string().valid('user', 'professional').default('user'),
+  profession: Joi.string().allow('').optional()
 });
 
 const loginSchema = Joi.object({
-  email: Joi.string().email().required(),
+  identifier: Joi.string().optional(),
+  email: Joi.string().optional(),
   password: Joi.string().required()
-});
+}).or('identifier', 'email');
 
 const otpSchema = Joi.object({
   otp: Joi.string().required(),
