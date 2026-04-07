@@ -1,5 +1,4 @@
 const ProfessionalProfile = require('../models/ProfessionalProfile');
-const Subscription = require('../models/Subscription');
 const Review = require('../models/Review');
 const Bookmark = require('../models/Bookmark');
 const mongoose = require('mongoose');
@@ -14,11 +13,6 @@ const uniqueStrings = (values = []) => [...new Set(values.filter(Boolean).map((v
 
 class ProfessionalService {
   async createProfile(userId, profileData) {
-    // Check subscription
-    const subscription = await Subscription.findOne({ user: userId, status: 'active' });
-    if (!subscription) {
-      throw new Error('Active subscription required');
-    }
     const profile = new ProfessionalProfile({ user: userId, ...profileData });
     await profile.save();
     logger.info(`Profile created for user: ${userId}`);
