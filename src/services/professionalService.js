@@ -10,6 +10,14 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPE
 
 const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const uniqueStrings = (values = []) => [...new Set(values.filter(Boolean).map((value) => value.trim()).filter(Boolean))];
+const buildStructuredLocation = ({ town = '', area = '', city = '', state = '', location = '' }) => {
+  const computed = [town || area, city, state]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(', ');
+
+  return computed || String(location || '').trim();
+};
 const normalizeList = (value) => {
   if (Array.isArray(value)) {
     return uniqueStrings(value);
@@ -49,6 +57,10 @@ class ProfessionalService {
 
     if ('experience' in update) {
       update.experience = normalizeOptionalNumber(update.experience, 0);
+    }
+
+    if ('town' in update || 'area' in update || 'city' in update || 'state' in update || 'location' in update) {
+      update.location = buildStructuredLocation(update);
     }
 
     if (update.charges) {
