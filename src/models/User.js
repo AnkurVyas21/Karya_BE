@@ -7,6 +7,13 @@ const userSchema = new mongoose.Schema({
   mobile: { type: String, required: true, unique: true },
   password: { type: String, required: true },
   role: { type: String, enum: ['user', 'professional', 'admin'], default: 'user' },
+  country: { type: String, default: 'India' },
+  state: { type: String, default: '' },
+  city: { type: String, default: '' },
+  town: { type: String, default: '' },
+  area: { type: String, default: '' },
+  addressLine: { type: String, default: '' },
+  pincode: { type: String, default: '' },
   isVerified: { type: Boolean, default: false },
   isBanned: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }

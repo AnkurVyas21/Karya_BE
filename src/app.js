@@ -76,6 +76,7 @@ app.get('/uploads/:filename', (req, res, next) => {
 // Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/professional', require('./routes/professional'));
+app.use('/api/messages', require('./routes/messages'));
 app.use('/api/subscriptions', require('./routes/subscriptions'));
 app.use('/api/admin', require('./routes/admin'));
 

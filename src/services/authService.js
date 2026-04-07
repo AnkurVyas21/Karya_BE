@@ -56,7 +56,21 @@ class AuthService {
     }
     
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = new User({ firstName, lastName, email, mobile, password: hashedPassword, role });
+    const user = new User({
+      firstName,
+      lastName,
+      email,
+      mobile,
+      password: hashedPassword,
+      role,
+      country: String(country || 'India').trim() || 'India',
+      state: String(state || '').trim(),
+      city: String(city || '').trim(),
+      town: String(town || '').trim(),
+      area: String(area || '').trim(),
+      addressLine: String(addressLine || '').trim(),
+      pincode: String(pincode || '').trim()
+    });
     await user.save();
 
     if (role === 'professional') {
