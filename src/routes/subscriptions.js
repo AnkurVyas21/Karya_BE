@@ -31,4 +31,13 @@ router.get('/status', authMiddleware, async (req, res) => {
   }
 });
 
+router.get('/history', authMiddleware, async (req, res) => {
+  try {
+    const history = await paymentService.getSubscriptionHistory(req.user._id);
+    res.json({ success: true, data: history });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 module.exports = router;

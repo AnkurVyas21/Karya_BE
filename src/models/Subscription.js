@@ -6,6 +6,8 @@ const subscriptionSchema = new mongoose.Schema({
   startDate: { type: Date, required: true },
   expiryDate: { type: Date, required: true },
   status: { type: String, enum: ['active', 'expired'], default: 'active' }
+}, {
+  timestamps: true
 });
 
 module.exports = mongoose.model('Subscription', subscriptionSchema);

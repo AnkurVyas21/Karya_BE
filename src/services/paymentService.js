@@ -3,6 +3,18 @@ const logger = require('../utils/logger');
 const { getSubscriptionPlan } = require('../constants/subscriptionPlans');
 
 class PaymentService {
+  inferPlan(subscription) {
+    let inferredPlanId = 'growth';
+    const durationDays = Math.round((subscription.expiryDate - subscription.startDate) / (24 * 60 * 60 * 1000));
+    if (durationDays <= 35) {
+      inferredPlanId = 'starter';
+    } else if (durationDays >= 170) {
+      inferredPlanId = 'pro';
+    }
+
+    return getSubscriptionPlan(inferredPlanId);
+  }
+
   async createSubscription(userId, planId = 'growth') {
     const plan = getSubscriptionPlan(planId);
     if (!plan) {
@@ -26,15 +38,7 @@ class PaymentService {
       return null;
     }
 
-    let inferredPlanId = 'growth';
-    const durationDays = Math.round((subscription.expiryDate - subscription.startDate) / (24 * 60 * 60 * 1000));
-    if (durationDays <= 35) {
-      inferredPlanId = 'starter';
-    } else if (durationDays >= 170) {
-      inferredPlanId = 'pro';
-    }
-
-    const plan = getSubscriptionPlan(inferredPlanId);
+    const plan = this.inferPlan(subscription);
 
     return {
       id: subscription._id.toString(),
@@ -44,6 +48,21 @@ class PaymentService {
       expiryDate: subscription.expiryDate,
       plan
     };
+  }
+
+  async getSubscriptionHistory(userId) {
+    const subscriptions = await Subscription.find({ user: userId }).sort({ startDate: -1 });
+
+    return subscriptions.map((subscription) => ({
+      id: subscription._id.toString(),
+      paymentId: subscription.paymentId,
+      status: subscription.status,
+      startDate: subscription.startDate,
+      expiryDate: subscription.expiryDate,
+      createdAt: subscription.createdAt || subscription.startDate,
+      updatedAt: subscription.updatedAt || subscription.expiryDate,
+      plan: this.inferPlan(subscription)
+    }));
   }
 }
 
