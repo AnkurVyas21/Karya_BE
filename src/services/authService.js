@@ -6,9 +6,45 @@ const ProfessionalProfile = require('../models/ProfessionalProfile');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 
+const uniqueStrings = (values = []) => [...new Set(
+  values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+)];
+
+const normalizeList = (value) => {
+  if (Array.isArray(value)) {
+    return uniqueStrings(value);
+  }
+
+  if (typeof value === 'string') {
+    return uniqueStrings(value.split(','));
+  }
+
+  return [];
+};
+
+const buildLocation = ({ area = '', city = '' }) => {
+  return [area, city].map((value) => String(value || '').trim()).filter(Boolean).join(', ');
+};
+
 class AuthService {
   async signup(userData) {
-    const { firstName, lastName, email, mobile, password, role = 'user', profession = '' } = userData;
+    const {
+      firstName,
+      lastName,
+      email,
+      mobile,
+      password,
+      role = 'user',
+      profession = '',
+      addressLine = '',
+      city = '',
+      area = '',
+      pincode = '',
+      serviceAreas = [],
+      skills = []
+    } = userData;
     
     // Check if user already exists
     const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
@@ -21,6 +57,10 @@ class AuthService {
     await user.save();
 
     if (role === 'professional') {
+      const normalizedSkills = normalizeList(skills);
+      const normalizedServiceAreas = normalizeList(serviceAreas);
+      const location = buildLocation({ area, city });
+
       await ProfessionalProfile.findOneAndUpdate(
         { user: user._id },
         {
@@ -28,7 +68,13 @@ class AuthService {
             user: user._id,
             profession: profession || 'Professional',
             description: `${firstName} ${lastName} is available on Karya.`,
-            skills: [],
+            skills: normalizedSkills,
+            serviceAreas: normalizedServiceAreas,
+            addressLine: String(addressLine || '').trim(),
+            city: String(city || '').trim(),
+            area: String(area || '').trim(),
+            pincode: String(pincode || '').trim(),
+            location,
             allowContactDisplay: true
           }
         },

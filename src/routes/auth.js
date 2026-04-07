@@ -13,7 +13,19 @@ const signupSchema = Joi.object({
   mobile: Joi.string().required(),
   password: Joi.string().min(6).required(),
   role: Joi.string().valid('user', 'professional').default('user'),
-  profession: Joi.string().allow('').optional()
+  profession: Joi.string().allow('').optional(),
+  addressLine: Joi.string().allow('').optional(),
+  city: Joi.string().allow('').optional(),
+  area: Joi.string().allow('').optional(),
+  pincode: Joi.string().allow('').optional(),
+  serviceAreas: Joi.alternatives().try(
+    Joi.array().items(Joi.string()),
+    Joi.string().allow('')
+  ).optional(),
+  skills: Joi.alternatives().try(
+    Joi.array().items(Joi.string()),
+    Joi.string().allow('')
+  ).optional()
 });
 
 const loginSchema = Joi.object({
