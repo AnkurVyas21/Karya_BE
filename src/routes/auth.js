@@ -14,8 +14,11 @@ const signupSchema = Joi.object({
   password: Joi.string().min(6).required(),
   role: Joi.string().valid('user', 'professional').default('user'),
   profession: Joi.string().allow('').optional(),
+  country: Joi.string().allow('').optional(),
+  state: Joi.string().allow('').optional(),
   addressLine: Joi.string().allow('').optional(),
   city: Joi.string().allow('').optional(),
+  town: Joi.string().allow('').optional(),
   area: Joi.string().allow('').optional(),
   pincode: Joi.string().allow('').optional(),
   serviceAreas: Joi.alternatives().try(

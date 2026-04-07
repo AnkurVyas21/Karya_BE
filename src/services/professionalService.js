@@ -10,6 +10,21 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPE
 
 const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const uniqueStrings = (values = []) => [...new Set(values.filter(Boolean).map((value) => value.trim()).filter(Boolean))];
+const normalizeList = (value) => {
+  if (Array.isArray(value)) {
+    return uniqueStrings(value);
+  }
+
+  if (typeof value === 'string') {
+    return uniqueStrings(value.split(','));
+  }
+
+  return [];
+};
+const normalizeOptionalNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
 
 class ProfessionalService {
   async createProfile(userId, profileData) {
@@ -24,8 +39,16 @@ class ProfessionalService {
       ...profileData
     };
 
-    if (update.skills) {
-      update.skills = uniqueStrings(update.skills);
+    if ('skills' in update) {
+      update.skills = normalizeList(update.skills);
+    }
+
+    if ('serviceAreas' in update) {
+      update.serviceAreas = normalizeList(update.serviceAreas);
+    }
+
+    if ('experience' in update) {
+      update.experience = normalizeOptionalNumber(update.experience, 0);
     }
 
     if (update.charges) {
@@ -81,13 +104,35 @@ class ProfessionalService {
     if (filters.profession) query.profession = filters.profession;
     if (filters.skills && filters.skills.length > 0) query.skills = { $in: filters.skills };
     if (filters.location) query.location = filters.location;
+    if (filters.state) query.state = filters.state;
+    if (filters.city) query.city = filters.city;
+    if (filters.town) query.town = filters.town;
+    if (filters.country) {
+      if (filters.country === 'India') {
+        query.$and = query.$and || [];
+        query.$and.push({
+          $or: [
+            { country: 'India' },
+            { country: '' },
+            { country: { $exists: false } }
+          ]
+        });
+      } else {
+        query.country = filters.country;
+      }
+    }
     if (filters.query) {
       const regex = new RegExp(escapeRegExp(filters.query), 'i');
       query.$or = [
         { profession: regex },
         { skills: regex },
         { description: regex },
-        { location: regex }
+        { location: regex },
+        { city: regex },
+        { town: regex },
+        { area: regex },
+        { state: regex },
+        { serviceAreas: regex }
       ];
     }
     const options = {

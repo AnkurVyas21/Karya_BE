@@ -24,7 +24,7 @@ const router = express.Router();
 
 router.post('/profile', authMiddleware, roleMiddleware(['professional']), upload.fields([{ name: 'profilePicture', maxCount: 1 }, { name: 'certificates', maxCount: 5 }]), createProfile);
 router.get('/profile', authMiddleware, roleMiddleware(['professional', 'admin']), getMyProfile);
-router.put('/profile', authMiddleware, roleMiddleware(['professional', 'admin']), updateProfile);
+router.put('/profile', authMiddleware, roleMiddleware(['professional', 'admin']), upload.fields([{ name: 'profilePicture', maxCount: 1 }, { name: 'certificates', maxCount: 5 }]), updateProfile);
 router.get('/dashboard/summary', authMiddleware, roleMiddleware(['professional', 'admin']), getDashboardSummary);
 router.get('/search', searchProfessionals);
 router.post('/search/ai', aiSearch);

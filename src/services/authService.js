@@ -24,8 +24,8 @@ const normalizeList = (value) => {
   return [];
 };
 
-const buildLocation = ({ area = '', city = '' }) => {
-  return [area, city].map((value) => String(value || '').trim()).filter(Boolean).join(', ');
+const buildLocation = ({ town = '', area = '', city = '', state = '' }) => {
+  return [town || area, city, state].map((value) => String(value || '').trim()).filter(Boolean).join(', ');
 };
 
 class AuthService {
@@ -38,8 +38,11 @@ class AuthService {
       password,
       role = 'user',
       profession = '',
+      country = 'India',
+      state = '',
       addressLine = '',
       city = '',
+      town = '',
       area = '',
       pincode = '',
       serviceAreas = [],
@@ -59,7 +62,7 @@ class AuthService {
     if (role === 'professional') {
       const normalizedSkills = normalizeList(skills);
       const normalizedServiceAreas = normalizeList(serviceAreas);
-      const location = buildLocation({ area, city });
+      const location = buildLocation({ town, area, city, state });
 
       await ProfessionalProfile.findOneAndUpdate(
         { user: user._id },
@@ -70,8 +73,11 @@ class AuthService {
             description: `${firstName} ${lastName} is available on Karya.`,
             skills: normalizedSkills,
             serviceAreas: normalizedServiceAreas,
+            country: String(country || 'India').trim() || 'India',
+            state: String(state || '').trim(),
             addressLine: String(addressLine || '').trim(),
             city: String(city || '').trim(),
+            town: String(town || '').trim(),
             area: String(area || '').trim(),
             pincode: String(pincode || '').trim(),
             location,

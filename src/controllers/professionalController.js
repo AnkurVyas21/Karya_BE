@@ -20,8 +20,17 @@ const createProfile = async (req, res) => {
 
 const searchProfessionals = async (req, res) => {
   try {
-    const { q, profession, skills, location, page = 1, limit = 12 } = req.query;
-    const filters = { query: q, profession, skills: skills ? skills.split(',') : [], location };
+    const { q, profession, skills, location, country, state, city, town, page = 1, limit = 12 } = req.query;
+    const filters = {
+      query: q,
+      profession,
+      skills: skills ? skills.split(',') : [],
+      location,
+      country,
+      state,
+      city,
+      town
+    };
     const result = await professionalService.searchProfessionals(filters, page, limit, req.user?._id);
     res.json({ success: true, data: result });
   } catch (error) {
@@ -116,6 +125,7 @@ const updateProfile = async (req, res) => {
   try {
     const payload = { ...req.body };
     const userUpdates = {};
+    const files = req.files || {};
 
     if ('firstName' in payload) {
       userUpdates.firstName = payload.firstName;
@@ -143,6 +153,14 @@ const updateProfile = async (req, res) => {
     if ('showContactNumber' in payload) {
       payload.allowContactDisplay = Boolean(payload.showContactNumber);
       delete payload.showContactNumber;
+    }
+
+    if (files.profilePicture && files.profilePicture[0]) {
+      payload.profilePicture = files.profilePicture[0].path;
+    }
+
+    if (files.certificates && files.certificates.length > 0) {
+      payload.certificates = files.certificates.map((file) => file.path);
     }
 
     if (Object.keys(userUpdates).length > 0) {
