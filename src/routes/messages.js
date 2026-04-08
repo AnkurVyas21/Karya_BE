@@ -4,10 +4,13 @@ const {
   getConversations,
   createConversation,
   getConversation,
-  sendMessage
+  sendMessage,
+  streamMessages
 } = require('../controllers/messageController');
 
 const router = express.Router();
+
+router.get('/stream', streamMessages);
 
 router.use(authMiddleware);
 

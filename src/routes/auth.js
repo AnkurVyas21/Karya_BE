@@ -3,8 +3,20 @@ const { signup, login, verifyOTP, resendOTP } = require('../controllers/authCont
 const authMiddleware = require('../middlewares/authMiddleware');
 const validationMiddleware = require('../middlewares/validationMiddleware');
 const Joi = require('joi');
+const rateLimit = require('express-rate-limit');
 
 const router = express.Router();
+
+const loginRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many login attempts. Please try again in a few minutes.'
+  }
+});
 
 const signupSchema = Joi.object({
   firstName: Joi.string().required(),
@@ -44,7 +56,7 @@ const otpSchema = Joi.object({
 });
 
 router.post('/signup', validationMiddleware(signupSchema), signup);
-router.post('/login', validationMiddleware(loginSchema), login);
+router.post('/login', loginRateLimiter, validationMiddleware(loginSchema), login);
 router.post('/verify-otp', validationMiddleware(otpSchema), verifyOTP);
 router.post('/resend-otp', resendOTP);
 

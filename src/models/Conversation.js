@@ -5,7 +5,9 @@ const conversationSchema = new mongoose.Schema({
   professional: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   professionalProfile: { type: mongoose.Schema.Types.ObjectId, ref: 'ProfessionalProfile', required: true },
   lastMessage: { type: String, default: '' },
-  lastMessageAt: { type: Date, default: Date.now }
+  lastMessageAt: { type: Date, default: Date.now },
+  customerUnreadCount: { type: Number, default: 0, min: 0 },
+  professionalUnreadCount: { type: Number, default: 0, min: 0 }
 }, {
   timestamps: true
 });

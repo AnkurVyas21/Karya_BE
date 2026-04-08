@@ -50,7 +50,11 @@ const detectMimeType = (buffer) => {
 
 app.use(cors());
 app.use(express.json());
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  skip: (req) => req.path === '/api/messages/stream' || req.path === '/api/auth/login'
+}));
 app.get('/uploads/:filename', (req, res, next) => {
   const filename = path.basename(req.params.filename || '');
   const filePath = path.join(uploadsDir, filename);

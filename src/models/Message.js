@@ -5,6 +5,8 @@ const messageSchema = new mongoose.Schema({
   sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   senderRole: { type: String, enum: ['user', 'professional', 'admin'], required: true },
   body: { type: String, required: true, trim: true },
+  deliveredAt: { type: Date, default: null },
+  readAt: { type: Date, default: null },
   isRead: { type: Boolean, default: false }
 }, {
   timestamps: true

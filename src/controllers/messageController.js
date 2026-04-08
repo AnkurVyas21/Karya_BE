@@ -1,4 +1,32 @@
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 const messageService = require('../services/messageService');
+const messageRealtimeService = require('../services/messageRealtimeService');
+
+const authenticateStreamUser = async (req) => {
+  const header = req.header('Authorization') || '';
+  const bearerToken = header.startsWith('Bearer ') ? header.slice(7) : '';
+  const token = String(req.query.token || bearerToken || '').trim();
+
+  if (!token) {
+    throw new Error('Please authenticate.');
+  }
+
+  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  const user = await User.findById(decoded.id);
+
+  if (!user || user.isBanned) {
+    throw new Error('Please authenticate.');
+  }
+
+  return user;
+};
+
+const emitStatusUpdates = (updates = []) => {
+  for (const update of updates) {
+    messageRealtimeService.emitToUser(update.senderId, 'message.status', update);
+  }
+};
 
 const getConversations = async (req, res) => {
   try {
@@ -20,6 +48,8 @@ const createConversation = async (req, res) => {
       professionalProfileId: req.body.professionalProfileId,
       initialMessage: req.body.message
     });
+
+    emitStatusUpdates(conversation.statusUpdates);
     res.status(201).json({ success: true, data: conversation });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -29,6 +59,7 @@ const createConversation = async (req, res) => {
 const getConversation = async (req, res) => {
   try {
     const conversation = await messageService.getConversation(req.params.id, req.user._id);
+    emitStatusUpdates(conversation.statusUpdates);
     res.json({ success: true, data: conversation });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -37,16 +68,56 @@ const getConversation = async (req, res) => {
 
 const sendMessage = async (req, res) => {
   try {
-    await messageService.sendMessage({
+    const { message, recipientId } = await messageService.sendMessage({
       conversationId: req.params.id,
       senderId: req.user._id,
       senderRole: req.user.role,
       body: req.body.body
     });
+
+    const payload = {
+      conversationId: req.params.id,
+      message: messageService.serializeMessage(message)
+    };
+
+    messageRealtimeService.emitToUser(req.user._id, 'message.new', payload);
+    messageRealtimeService.emitToUser(recipientId, 'message.new', payload);
+
+    if (message.deliveredAt) {
+      messageRealtimeService.emitToUser(req.user._id, 'message.status', {
+        conversationId: req.params.id,
+        messageId: message._id.toString(),
+        senderId: req.user._id.toString(),
+        deliveredAt: message.deliveredAt.toISOString(),
+        readAt: null
+      });
+    }
+
     const conversation = await messageService.getConversation(req.params.id, req.user._id);
+    emitStatusUpdates(conversation.statusUpdates);
     res.status(201).json({ success: true, data: conversation });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const streamMessages = async (req, res) => {
+  try {
+    const user = await authenticateStreamUser(req);
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+    res.write('retry: 5000\n\n');
+
+    messageRealtimeService.registerClient(user._id, res);
+
+    const deliveredUpdates = await messageService.markMessagesDeliveredForUser(user._id);
+    emitStatusUpdates(deliveredUpdates);
+  } catch (error) {
+    res.status(401).json({ success: false, message: error.message || 'Please authenticate.' });
   }
 };
 
@@ -54,5 +125,6 @@ module.exports = {
   getConversations,
   createConversation,
   getConversation,
-  sendMessage
+  sendMessage,
+  streamMessages
 };
