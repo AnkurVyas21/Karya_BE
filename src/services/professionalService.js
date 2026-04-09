@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const OpenAI = require('openai');
 const logger = require('../utils/logger');
 const { buildProfessionalSummary } = require('../utils/professionalPresenter');
+const aiSearchService = require('./aiSearchService');
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
@@ -178,23 +179,17 @@ class ProfessionalService {
     };
   }
 
-  async aiSearch(problem) {
-    if (!problem || !problem.trim()) {
+  async aiSearch(input) {
+    const options = typeof input === 'string'
+      ? { problem: input }
+      : { ...(input || {}) };
+
+    if (!options.problem || !String(options.problem).trim()) {
       throw new Error('Problem description is required');
     }
 
-    if (!openai) {
-      return this.keywordBasedSearch(problem);
-    }
-
-    const prompt = `User problem: "${problem}". Suggest relevant professions and skills. Return in JSON: { "professions": ["prof1"], "skills": ["skill1"] }`;
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 200
-    });
-    const result = JSON.parse(response.choices[0].message.content);
-    logger.info(`AI search for problem: ${problem}`);
+    const result = await aiSearchService.inferSearch(options);
+    logger.info(`AI search for problem: ${options.problem} using ${result.providerUsed}`);
     return result;
   }
 

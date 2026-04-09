@@ -40,8 +40,20 @@ const searchProfessionals = async (req, res) => {
 
 const aiSearch = async (req, res) => {
   try {
-    const { problem } = req.body;
-    const result = await professionalService.aiSearch(problem);
+    const {
+      problem,
+      provider,
+      allowedProfessions,
+      selectedLocation,
+      currentLocation
+    } = req.body;
+    const result = await professionalService.aiSearch({
+      problem,
+      provider,
+      allowedProfessions,
+      selectedLocation,
+      currentLocation
+    });
     res.json({ success: true, data: result });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
