@@ -112,62 +112,69 @@ class ProfessionalService {
   }
 
   async searchProfessionals(filters, page, limit, viewerId = null) {
-    const query = {};
-    if (filters.profession) query.profession = filters.profession;
-    if (filters.skills && filters.skills.length > 0) query.skills = { $in: filters.skills };
-    if (filters.location) query.location = filters.location;
-    if (filters.state) query.state = filters.state;
-    if (filters.city) query.city = filters.city;
-    if (filters.town) query.town = filters.town;
-    if (filters.country) {
-      if (filters.country === 'India') {
-        query.$and = query.$and || [];
-        query.$and.push({
-          $or: [
-            { country: 'India' },
-            { country: '' },
-            { country: { $exists: false } }
-          ]
-        });
-      } else {
-        query.country = filters.country;
-      }
-    }
-    if (filters.query) {
-      const regex = new RegExp(escapeRegExp(filters.query), 'i');
-      query.$or = [
-        { profession: regex },
-        { skills: regex },
-        { description: regex },
-        { location: regex },
-        { city: regex },
-        { town: regex },
-        { area: regex },
-        { state: regex },
-        { serviceAreas: regex }
-      ];
-    }
-    const options = {
-      page: Number(page) || 1,
-      limit: Number(limit) || 10,
-      populate: 'user',
-      lean: false,
-      sort: { createdAt: -1 }
+    const normalizedFilters = {
+      query: String(filters?.query || '').trim(),
+      profession: String(filters?.profession || '').trim(),
+      location: String(filters?.location || '').trim(),
+      country: String(filters?.country || '').trim(),
+      state: String(filters?.state || '').trim(),
+      city: String(filters?.city || '').trim(),
+      town: String(filters?.town || '').trim(),
+      skills: normalizeList(filters?.skills || [])
     };
-    const result = await ProfessionalProfile.paginate(query, options);
-    logger.info(`Search performed with filters: ${JSON.stringify(filters)}`);
 
-    const profileIds = result.docs.map((profile) => profile._id.toString());
+    const candidateQuery = this.buildSearchCandidateQuery(normalizedFilters);
+    const candidates = await ProfessionalProfile.find(candidateQuery)
+      .populate('user')
+      .sort({ createdAt: -1 });
+
+    const scoredProfiles = candidates
+      .map((profile) => ({
+        profile,
+        ranking: this.scoreProfessionalProfile(profile, normalizedFilters)
+      }))
+      .filter(({ ranking }) => ranking.include);
+
+    scoredProfiles.sort((left, right) => {
+      if (right.ranking.matchedSignals !== left.ranking.matchedSignals) {
+        return right.ranking.matchedSignals - left.ranking.matchedSignals;
+      }
+
+      if (right.ranking.score !== left.ranking.score) {
+        return right.ranking.score - left.ranking.score;
+      }
+
+      return new Date(right.profile.createdAt || 0).getTime() - new Date(left.profile.createdAt || 0).getTime();
+    });
+
+    const pageNumber = Math.max(Number(page) || 1, 1);
+    const pageSize = Math.max(Number(limit) || 10, 1);
+    const totalDocs = scoredProfiles.length;
+    const totalPages = totalDocs > 0 ? Math.ceil(totalDocs / pageSize) : 1;
+    const startIndex = (pageNumber - 1) * pageSize;
+    const pagedProfiles = scoredProfiles.slice(startIndex, startIndex + pageSize).map((item) => item.profile);
+
+    logger.info(`Search performed with filters: ${JSON.stringify(normalizedFilters)}`);
+
+    const profileIds = pagedProfiles.map((profile) => profile._id.toString());
     const reviewStats = await this.getReviewStatsMap(profileIds);
     const bookmarkedIds = await this.getBookmarkedProfileIds(viewerId, profileIds);
 
     return {
-      ...result,
-      docs: result.docs.map((profile) => buildProfessionalSummary({
+      docs: pagedProfiles.map((profile) => buildProfessionalSummary({
         profile,
         reviewStats: reviewStats[profile._id.toString()] || {},
         bookmarkedIds
-      }))
+      })),
+      totalDocs,
+      limit: pageSize,
+      page: pageNumber,
+      totalPages,
+      pagingCounter: startIndex + 1,
+      hasPrevPage: pageNumber > 1,
+      hasNextPage: pageNumber < totalPages,
+      prevPage: pageNumber > 1 ? pageNumber - 1 : null,
+      nextPage: pageNumber < totalPages ? pageNumber + 1 : null
     };
   }
 
@@ -321,6 +328,213 @@ class ProfessionalService {
       reviewStats: reviewStats[profileId] || {},
       bookmarkedIds
     });
+  }
+
+  buildSearchCandidateQuery(filters = {}) {
+    const query = {};
+    const orConditions = [];
+    const pushRegexConditions = (fields, value) => {
+      const term = String(value || '').trim();
+      if (!term) {
+        return;
+      }
+
+      const regex = new RegExp(escapeRegExp(term), 'i');
+      fields.forEach((field) => {
+        orConditions.push({ [field]: regex });
+      });
+    };
+
+    if (filters.country) {
+      if (filters.country.toLowerCase() === 'india') {
+        query.$and = query.$and || [];
+        query.$and.push({
+          $or: [
+            { country: /india/i },
+            { country: '' },
+            { country: { $exists: false } }
+          ]
+        });
+      } else {
+        query.country = new RegExp(`^${escapeRegExp(filters.country)}$`, 'i');
+      }
+    }
+
+    pushRegexConditions(['profession', 'skills'], filters.profession);
+    pushRegexConditions(['location', 'city', 'town', 'area', 'state', 'serviceAreas'], filters.location);
+    pushRegexConditions(['state', 'location', 'serviceAreas'], filters.state);
+    pushRegexConditions(['city', 'location', 'serviceAreas'], filters.city);
+    pushRegexConditions(['town', 'area', 'location', 'serviceAreas'], filters.town);
+    (filters.skills || []).forEach((skill) => pushRegexConditions(['skills', 'profession', 'description'], skill));
+    pushRegexConditions(['profession', 'skills', 'description', 'location', 'city', 'town', 'area', 'state', 'serviceAreas'], filters.query);
+
+    if (orConditions.length > 0) {
+      query.$or = orConditions;
+    }
+
+    return query;
+  }
+
+  scoreProfessionalProfile(profile, filters = {}) {
+    const signals = {};
+    let score = 0;
+
+    const profileData = {
+      profession: this.normalizeSearchText(profile.profession),
+      location: this.normalizeSearchText(profile.location),
+      country: this.normalizeSearchText(profile.country),
+      state: this.normalizeSearchText(profile.state),
+      city: this.normalizeSearchText(profile.city),
+      town: this.normalizeSearchText(profile.town),
+      area: this.normalizeSearchText(profile.area),
+      description: this.normalizeSearchText(profile.description),
+      skills: normalizeList(profile.skills || []).map((item) => this.normalizeSearchText(item)),
+      serviceAreas: normalizeList(profile.serviceAreas || []).map((item) => this.normalizeSearchText(item))
+    };
+
+    const combinedLocation = [
+      profileData.location,
+      profileData.area,
+      profileData.town,
+      profileData.city,
+      profileData.state,
+      profileData.country,
+      ...profileData.serviceAreas
+    ].filter(Boolean).join(' ');
+
+    const combinedSearchable = [
+      profileData.profession,
+      profileData.description,
+      combinedLocation,
+      ...profileData.skills,
+      ...profileData.serviceAreas
+    ].filter(Boolean).join(' ');
+
+    const markSignal = (name, matched, weight) => {
+      signals[name] = matched;
+      if (matched) {
+        score += weight;
+      }
+    };
+
+    markSignal('profession', this.matchWeightedText(profileData.profession, filters.profession) > 0, this.matchWeightedText(profileData.profession, filters.profession));
+    markSignal('location', this.matchWeightedText(combinedLocation, filters.location) > 0, this.matchWeightedText(combinedLocation, filters.location));
+    markSignal('state', this.matchWeightedText(`${profileData.state} ${combinedLocation}`, filters.state) > 0, this.matchWeightedText(`${profileData.state} ${combinedLocation}`, filters.state));
+    markSignal('city', this.matchWeightedText(`${profileData.city} ${combinedLocation}`, filters.city) > 0, this.matchWeightedText(`${profileData.city} ${combinedLocation}`, filters.city));
+    markSignal('town', this.matchWeightedText(`${profileData.town} ${profileData.area} ${combinedLocation}`, filters.town) > 0, this.matchWeightedText(`${profileData.town} ${profileData.area} ${combinedLocation}`, filters.town));
+
+    const countryScore = this.matchCountry(profileData.country, filters.country);
+    markSignal('country', countryScore > 0, countryScore);
+
+    const skillsScore = (filters.skills || []).reduce((total, skill) => {
+      const normalizedSkill = this.normalizeSearchText(skill);
+      const skillMatch = profileData.skills.some((item) => item === normalizedSkill)
+        ? 6
+        : profileData.skills.some((item) => item.includes(normalizedSkill) || normalizedSkill.includes(item))
+          ? 4
+          : combinedSearchable.includes(normalizedSkill)
+            ? 2
+            : 0;
+      return total + skillMatch;
+    }, 0);
+    markSignal('skills', skillsScore > 0, skillsScore);
+
+    const queryScore = this.scoreQueryTokens(combinedSearchable, filters.query);
+    markSignal('query', queryScore > 0, queryScore);
+
+    const activeFilters = Object.entries({
+      query: filters.query,
+      profession: filters.profession,
+      location: filters.location,
+      country: filters.country,
+      state: filters.state,
+      city: filters.city,
+      town: filters.town,
+      skills: (filters.skills || []).join(' ')
+    }).filter(([, value]) => String(value || '').trim()).length;
+
+    const matchedSignals = Object.values(signals).filter(Boolean).length;
+
+    return {
+      include: activeFilters === 0 || matchedSignals > 0,
+      matchedSignals,
+      score
+    };
+  }
+
+  normalizeSearchText(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  matchWeightedText(haystack, needle) {
+    const target = this.normalizeSearchText(needle);
+    const source = this.normalizeSearchText(haystack);
+    if (!target || !source) {
+      return 0;
+    }
+
+    if (source === target) {
+      return 12;
+    }
+
+    if (source.startsWith(target)) {
+      return 9;
+    }
+
+    if (source.includes(target)) {
+      return 7;
+    }
+
+    const sourceTokens = source.split(' ').filter(Boolean);
+    const targetTokens = target.split(' ').filter(Boolean);
+    const overlap = targetTokens.filter((token) => sourceTokens.some((item) => item.includes(token) || token.includes(item)));
+    if (overlap.length > 0) {
+      return Math.min(6, overlap.length * 2);
+    }
+
+    return 0;
+  }
+
+  matchCountry(countryValue, countryFilter) {
+    const filter = this.normalizeSearchText(countryFilter);
+    if (!filter) {
+      return 0;
+    }
+
+    const value = this.normalizeSearchText(countryValue);
+    if (value === filter) {
+      return 8;
+    }
+
+    if (filter === 'india' && !value) {
+      return 3;
+    }
+
+    return value.includes(filter) ? 5 : 0;
+  }
+
+  scoreQueryTokens(searchableText, rawQuery) {
+    const query = this.normalizeSearchText(rawQuery);
+    if (!query) {
+      return 0;
+    }
+
+    const text = this.normalizeSearchText(searchableText);
+    if (!text) {
+      return 0;
+    }
+
+    if (text.includes(query)) {
+      return 10;
+    }
+
+    return query
+      .split(' ')
+      .filter(Boolean)
+      .reduce((total, token) => total + (text.includes(token) ? 3 : 0), 0);
   }
 
   keywordBasedProfessionDetection(description) {
