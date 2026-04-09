@@ -7,8 +7,22 @@ const path = require('path');
 
 const app = express();
 const uploadsDir = path.resolve(process.cwd(), 'uploads');
+const mimeTypesByExtension = {
+  '.avif': 'image/avif',
+  '.gif': 'image/gif',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.pdf': 'application/pdf',
+  '.png': 'image/png',
+  '.txt': 'text/plain; charset=utf-8',
+  '.webm': 'video/webm',
+  '.webp': 'image/webp',
+  '.zip': 'application/zip'
+};
 
-const detectMimeType = (buffer) => {
+const detectMimeType = (buffer, filename = '') => {
   if (!buffer || buffer.length < 4) {
     return 'application/octet-stream';
   }
@@ -45,6 +59,11 @@ const detectMimeType = (buffer) => {
     return 'image/avif';
   }
 
+  const ext = path.extname(filename || '').toLowerCase();
+  if (ext && mimeTypesByExtension[ext]) {
+    return mimeTypesByExtension[ext];
+  }
+
   return 'application/octet-stream';
 };
 
@@ -71,7 +90,7 @@ app.get('/uploads/:filename', (req, res, next) => {
       return next(error);
     }
 
-    res.setHeader('Content-Type', detectMimeType(fileBuffer));
+    res.setHeader('Content-Type', detectMimeType(fileBuffer, filename));
     res.setHeader('Cache-Control', 'public, max-age=86400');
     res.send(fileBuffer);
   });

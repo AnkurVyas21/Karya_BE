@@ -41,7 +41,7 @@ class MessageService {
     return this.getConversation(conversation._id.toString(), customerId);
   }
 
-  async sendMessage({ conversationId, senderId, senderRole, body }) {
+  async sendMessage({ conversationId, senderId, senderRole, body, attachments = [] }) {
     const conversation = await Conversation.findById(conversationId);
     if (!conversation) {
       throw new Error('Conversation not found');
@@ -50,21 +50,19 @@ class MessageService {
     const senderKey = senderId.toString();
     const customerId = this.toIdString(conversation.customer);
     const professionalId = this.toIdString(conversation.professional);
-    const isParticipant =
-      customerId === senderKey ||
-      professionalId === senderKey;
+    const isParticipant = customerId === senderKey || professionalId === senderKey;
 
     if (!isParticipant) {
       throw new Error('Access denied');
     }
 
     const trimmedBody = String(body || '').trim();
-    if (!trimmedBody) {
-      throw new Error('Message body is required');
+    const normalizedAttachments = this.normalizeAttachments(attachments);
+    if (!trimmedBody && !normalizedAttachments.length) {
+      throw new Error('Message content is required');
     }
 
     const recipientId = customerId === senderKey ? professionalId : customerId;
-
     const deliveredAt = messageRealtimeService.hasConnections(recipientId) ? new Date() : null;
 
     const message = await Message.create({
@@ -72,31 +70,89 @@ class MessageService {
       sender: senderId,
       senderRole,
       body: trimmedBody,
+      attachments: normalizedAttachments,
       deliveredAt
     });
 
-    conversation.lastMessage = message.body;
-    conversation.lastMessageAt = message.createdAt;
-
+    await this.updateConversationSnapshot(conversation);
     if (recipientId === customerId) {
       conversation.customerUnreadCount = (Number(conversation.customerUnreadCount) || 0) + 1;
     } else {
       conversation.professionalUnreadCount = (Number(conversation.professionalUnreadCount) || 0) + 1;
     }
-
     await conversation.save();
     await message.populate('sender');
 
-    return {
-      message,
-      recipientId
-    };
+    return { message, recipientId };
+  }
+
+  async updateMessage({ conversationId, messageId, userId, body }) {
+    const conversation = await Conversation.findById(conversationId);
+    if (!conversation) {
+      throw new Error('Conversation not found');
+    }
+
+    await this.assertParticipant(conversation, userId);
+    const message = await Message.findOne({ _id: messageId, conversation: conversation._id }).populate('sender');
+    if (!message) {
+      throw new Error('Message not found');
+    }
+
+    if (this.toIdString(message.sender) !== userId.toString()) {
+      throw new Error('Only the sender can edit this message');
+    }
+
+    if (message.isDeleted) {
+      throw new Error('Deleted messages cannot be edited');
+    }
+
+    const trimmedBody = String(body || '').trim();
+    if (!trimmedBody && !message.attachments.length) {
+      throw new Error('Message content is required');
+    }
+
+    message.body = trimmedBody;
+    message.editedAt = new Date();
+    await message.save();
+    await this.updateConversationSnapshot(conversation);
+    await conversation.save();
+    await message.populate('sender');
+
+    return message;
+  }
+
+  async deleteMessage({ conversationId, messageId, userId }) {
+    const conversation = await Conversation.findById(conversationId);
+    if (!conversation) {
+      throw new Error('Conversation not found');
+    }
+
+    await this.assertParticipant(conversation, userId);
+    const message = await Message.findOne({ _id: messageId, conversation: conversation._id }).populate('sender');
+    if (!message) {
+      throw new Error('Message not found');
+    }
+
+    if (this.toIdString(message.sender) !== userId.toString()) {
+      throw new Error('Only the sender can delete this message');
+    }
+
+    if (!message.isDeleted) {
+      message.body = '';
+      message.attachments = [];
+      message.isDeleted = true;
+      message.deletedAt = new Date();
+      await message.save();
+      await this.updateConversationSnapshot(conversation);
+      await conversation.save();
+    }
+
+    await message.populate('sender');
+    return message;
   }
 
   async listConversations(userId, role) {
-    const filter = role === 'professional'
-      ? { professional: userId }
-      : { customer: userId };
+    const filter = role === 'professional' ? { professional: userId } : { customer: userId };
 
     const conversations = await Conversation.find(filter)
       .populate('customer')
@@ -124,16 +180,7 @@ class MessageService {
       throw new Error('Conversation not found');
     }
 
-    const userKey = userId.toString();
-    const isParticipant =
-      conversation.customer?._id?.toString() === userKey ||
-      conversation.professional?.toString() === userKey ||
-      conversation.professionalProfile?.user?._id?.toString() === userKey;
-
-    if (!isParticipant) {
-      throw new Error('Access denied');
-    }
-
+    await this.assertParticipant(conversation, userId);
     await this.ensureUnreadCounters(conversation);
     const statusUpdates = await this.markConversationAsRead(conversation, userId);
     const messages = await Message.find({ conversation: conversation._id })
@@ -187,13 +234,7 @@ class MessageService {
 
     await Message.updateMany(
       { _id: { $in: unreadMessages.map((message) => message._id) } },
-      {
-        $set: {
-          deliveredAt: now,
-          readAt: now,
-          isRead: true
-        }
-      }
+      { $set: { deliveredAt: now, readAt: now, isRead: true } }
     );
 
     if (isCustomer) {
@@ -249,13 +290,17 @@ class MessageService {
   serializeMessage(message) {
     return {
       id: message._id.toString(),
-      body: message.body,
+      body: message.isDeleted ? 'This message was deleted.' : message.body,
+      attachments: message.isDeleted ? [] : this.normalizeAttachments(message.attachments),
       senderId: message.sender?._id?.toString() || message.sender?.toString?.() || null,
       senderName: [message.sender?.firstName, message.sender?.lastName].filter(Boolean).join(' ').trim() || 'User',
       senderRole: message.senderRole,
       createdAt: message.createdAt,
       deliveredAt: message.deliveredAt,
       readAt: message.readAt,
+      editedAt: message.editedAt,
+      deletedAt: message.deletedAt,
+      isDeleted: !!message.isDeleted,
       isRead: !!message.readAt || !!message.isRead
     };
   }
@@ -299,14 +344,6 @@ class MessageService {
     return 0;
   }
 
-  toIdString(value) {
-    if (!value) {
-      return '';
-    }
-
-    return value._id?.toString?.() || value.toString();
-  }
-
   async ensureUnreadCounters(conversation) {
     if (
       typeof conversation.customerUnreadCount === 'number' &&
@@ -334,6 +371,82 @@ class MessageService {
     conversation.customerUnreadCount = customerUnreadCount;
     conversation.professionalUnreadCount = professionalUnreadCount;
     await conversation.save();
+  }
+
+  async updateConversationSnapshot(conversation) {
+    const latestMessage = await Message.findOne({ conversation: conversation._id }).sort({ createdAt: -1 });
+    if (!latestMessage) {
+      conversation.lastMessage = '';
+      conversation.lastMessageAt = conversation.updatedAt || new Date();
+      return;
+    }
+
+    if (latestMessage.isDeleted) {
+      conversation.lastMessage = 'Message deleted';
+    } else if (latestMessage.attachments?.length && !latestMessage.body) {
+      conversation.lastMessage = latestMessage.attachments.length === 1 ? 'Attachment' : 'Attachments';
+    } else {
+      conversation.lastMessage = latestMessage.body;
+    }
+    conversation.lastMessageAt = latestMessage.createdAt;
+  }
+
+  async assertParticipant(conversation, userId) {
+    const userKey = userId.toString();
+    const isParticipant =
+      this.toIdString(conversation.customer) === userKey ||
+      this.toIdString(conversation.professional) === userKey ||
+      conversation.professionalProfile?.user?._id?.toString() === userKey;
+
+    if (!isParticipant) {
+      throw new Error('Access denied');
+    }
+  }
+
+  normalizeAttachments(attachments = []) {
+    return (attachments || [])
+      .map((attachment) => {
+        if (!attachment) {
+          return null;
+        }
+
+        if (attachment.url) {
+          return {
+            url: attachment.url,
+            originalName: attachment.originalName || '',
+            mimeType: attachment.mimeType || '',
+            size: Number(attachment.size || 0)
+          };
+        }
+
+        const storedPath = attachment.path || '';
+        if (!storedPath) {
+          return null;
+        }
+
+        const normalizedPath = String(storedPath).replace(/\\/g, '/');
+        const publicPath = normalizedPath.startsWith('uploads/')
+          ? `/${normalizedPath}`
+          : normalizedPath.startsWith('/uploads/')
+            ? normalizedPath
+            : `/uploads/${normalizedPath.split('/').pop()}`;
+
+        return {
+          url: publicPath,
+          originalName: attachment.originalname || attachment.originalName || '',
+          mimeType: attachment.mimetype || attachment.mimeType || '',
+          size: Number(attachment.size || 0)
+        };
+      })
+      .filter(Boolean);
+  }
+
+  toIdString(value) {
+    if (!value) {
+      return '';
+    }
+
+    return value._id?.toString?.() || value.toString();
   }
 }
 

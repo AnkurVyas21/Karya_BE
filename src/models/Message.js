@@ -4,9 +4,18 @@ const messageSchema = new mongoose.Schema({
   conversation: { type: mongoose.Schema.Types.ObjectId, ref: 'Conversation', required: true },
   sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   senderRole: { type: String, enum: ['user', 'professional', 'admin'], required: true },
-  body: { type: String, required: true, trim: true },
+  body: { type: String, default: '', trim: true },
+  attachments: [{
+    url: { type: String, required: true },
+    originalName: { type: String, default: '' },
+    mimeType: { type: String, default: '' },
+    size: { type: Number, default: 0 }
+  }],
   deliveredAt: { type: Date, default: null },
   readAt: { type: Date, default: null },
+  editedAt: { type: Date, default: null },
+  deletedAt: { type: Date, default: null },
+  isDeleted: { type: Boolean, default: false },
   isRead: { type: Boolean, default: false }
 }, {
   timestamps: true

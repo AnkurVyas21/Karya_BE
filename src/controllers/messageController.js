@@ -14,7 +14,6 @@ const authenticateStreamUser = async (req) => {
 
   const decoded = jwt.verify(token, process.env.JWT_SECRET);
   const user = await User.findById(decoded.id);
-
   if (!user || user.isBanned) {
     throw new Error('Please authenticate.');
   }
@@ -25,6 +24,21 @@ const authenticateStreamUser = async (req) => {
 const emitStatusUpdates = (updates = []) => {
   for (const update of updates) {
     messageRealtimeService.emitToUser(update.senderId, 'message.status', update);
+  }
+};
+
+const emitMessageEventToParticipants = (conversation, eventName, message) => {
+  const payload = {
+    conversationId: conversation.id,
+    message: messageService.serializeMessage(message)
+  };
+
+  if (conversation.customer?.id) {
+    messageRealtimeService.emitToUser(conversation.customer.id, eventName, payload);
+  }
+
+  if (conversation.professional?.userId) {
+    messageRealtimeService.emitToUser(conversation.professional.userId, eventName, payload);
   }
 };
 
@@ -72,30 +86,61 @@ const sendMessage = async (req, res) => {
       conversationId: req.params.id,
       senderId: req.user._id,
       senderRole: req.user.role,
-      body: req.body.body
+      body: req.body.body,
+      attachments: req.files || []
     });
 
-    const payload = {
-      conversationId: req.params.id,
-      message: messageService.serializeMessage(message)
-    };
-
-    messageRealtimeService.emitToUser(req.user._id, 'message.new', payload);
-    messageRealtimeService.emitToUser(recipientId, 'message.new', payload);
+    const conversation = await messageService.getConversation(req.params.id, req.user._id);
+    emitStatusUpdates(conversation.statusUpdates);
+    emitMessageEventToParticipants(conversation, 'message.new', message);
 
     if (message.deliveredAt) {
       messageRealtimeService.emitToUser(req.user._id, 'message.status', {
         conversationId: req.params.id,
         messageId: message._id.toString(),
         senderId: req.user._id.toString(),
+        recipientId,
         deliveredAt: message.deliveredAt.toISOString(),
         readAt: null
       });
     }
 
+    res.status(201).json({ success: true, data: conversation });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const updateMessage = async (req, res) => {
+  try {
+    const message = await messageService.updateMessage({
+      conversationId: req.params.id,
+      messageId: req.params.messageId,
+      userId: req.user._id,
+      body: req.body.body
+    });
+
     const conversation = await messageService.getConversation(req.params.id, req.user._id);
     emitStatusUpdates(conversation.statusUpdates);
-    res.status(201).json({ success: true, data: conversation });
+    emitMessageEventToParticipants(conversation, 'message.updated', message);
+    res.json({ success: true, data: conversation });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const deleteMessage = async (req, res) => {
+  try {
+    const message = await messageService.deleteMessage({
+      conversationId: req.params.id,
+      messageId: req.params.messageId,
+      userId: req.user._id
+    });
+
+    const conversation = await messageService.getConversation(req.params.id, req.user._id);
+    emitStatusUpdates(conversation.statusUpdates);
+    emitMessageEventToParticipants(conversation, 'message.updated', message);
+    res.json({ success: true, data: conversation });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -113,7 +158,6 @@ const streamMessages = async (req, res) => {
     res.write('retry: 5000\n\n');
 
     messageRealtimeService.registerClient(user._id, res);
-
     const deliveredUpdates = await messageService.markMessagesDeliveredForUser(user._id);
     emitStatusUpdates(deliveredUpdates);
   } catch (error) {
@@ -126,5 +170,7 @@ module.exports = {
   createConversation,
   getConversation,
   sendMessage,
+  updateMessage,
+  deleteMessage,
   streamMessages
 };
