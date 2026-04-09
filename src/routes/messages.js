@@ -7,6 +7,7 @@ const {
   getConversations,
   createConversation,
   getConversation,
+  deleteConversation,
   sendMessage,
   updateMessage,
   deleteMessage,
@@ -40,6 +41,7 @@ router.use(authMiddleware);
 router.get('/conversations', getConversations);
 router.post('/conversations', createConversation);
 router.get('/conversations/:id', getConversation);
+router.delete('/conversations/:id', deleteConversation);
 router.post('/conversations/:id/messages', uploadMessageAttachments, sendMessage);
 router.patch('/conversations/:id/messages/:messageId', updateMessage);
 router.delete('/conversations/:id/messages/:messageId', deleteMessage);

@@ -80,6 +80,24 @@ const getConversation = async (req, res) => {
   }
 };
 
+const deleteConversation = async (req, res) => {
+  try {
+    await messageService.deleteConversation({
+      conversationId: req.params.id,
+      userId: req.user._id
+    });
+
+    const conversations = await messageService.listConversations(req.user._id, req.user.role);
+    res.json({
+      success: true,
+      message: 'Conversation moved to 30-day backup before permanent deletion.',
+      data: conversations
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const sendMessage = async (req, res) => {
   try {
     const { message, recipientId } = await messageService.sendMessage({
@@ -169,6 +187,7 @@ module.exports = {
   getConversations,
   createConversation,
   getConversation,
+  deleteConversation,
   sendMessage,
   updateMessage,
   deleteMessage,

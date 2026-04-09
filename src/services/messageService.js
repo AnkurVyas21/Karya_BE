@@ -29,6 +29,9 @@ class MessageService {
       });
     }
 
+    this.restoreConversationForUser(conversation, customerId);
+    await conversation.save();
+
     if (initialMessage && initialMessage.trim()) {
       await this.sendMessage({
         conversationId: conversation._id.toString(),
@@ -64,6 +67,8 @@ class MessageService {
 
     const recipientId = customerId === senderKey ? professionalId : customerId;
     const deliveredAt = messageRealtimeService.hasConnections(recipientId) ? new Date() : null;
+    this.restoreConversationForUser(conversation, senderId);
+    this.restoreConversationForUser(conversation, recipientId);
 
     const message = await Message.create({
       conversation: conversation._id,
@@ -84,6 +89,30 @@ class MessageService {
     await message.populate('sender');
 
     return { message, recipientId };
+  }
+
+  async deleteConversation({ conversationId, userId }) {
+    const conversation = await Conversation.findById(conversationId);
+    if (!conversation) {
+      throw new Error('Conversation not found');
+    }
+
+    await this.assertParticipant(conversation, userId);
+    const now = new Date();
+    const userKey = userId.toString();
+
+    if (this.toIdString(conversation.customer) === userKey) {
+      conversation.customerDeletedAt = now;
+      conversation.customerUnreadCount = 0;
+    }
+
+    if (this.toIdString(conversation.professional) === userKey) {
+      conversation.professionalDeletedAt = now;
+      conversation.professionalUnreadCount = 0;
+    }
+
+    await conversation.save();
+    return conversation;
   }
 
   async updateMessage({ conversationId, messageId, userId, body }) {
@@ -152,7 +181,9 @@ class MessageService {
   }
 
   async listConversations(userId, role) {
-    const filter = role === 'professional' ? { professional: userId } : { customer: userId };
+    const filter = role === 'professional'
+      ? { professional: userId, professionalDeletedAt: null }
+      : { customer: userId, customerDeletedAt: null };
 
     const conversations = await Conversation.find(filter)
       .populate('customer')
@@ -181,6 +212,9 @@ class MessageService {
     }
 
     await this.assertParticipant(conversation, userId);
+    if (this.isConversationDeletedForUser(conversation, userId)) {
+      throw new Error('Conversation not found');
+    }
     await this.ensureUnreadCounters(conversation);
     const statusUpdates = await this.markConversationAsRead(conversation, userId);
     const messages = await Message.find({ conversation: conversation._id })
@@ -255,7 +289,10 @@ class MessageService {
 
   async markMessagesDeliveredForUser(userId) {
     const conversations = await Conversation.find({
-      $or: [{ customer: userId }, { professional: userId }]
+      $or: [
+        { customer: userId, customerDeletedAt: null },
+        { professional: userId, professionalDeletedAt: null }
+      ]
     }).select('_id');
 
     if (!conversations.length) {
@@ -320,7 +357,8 @@ class MessageService {
         id: conversation.customer._id?.toString?.() || conversation.customer.toString(),
         fullName: [conversation.customer.firstName, conversation.customer.lastName].filter(Boolean).join(' ').trim(),
         email: conversation.customer.email || '',
-        mobile: conversation.customer.mobile || ''
+        mobile: conversation.customer.mobile || '',
+        profilePicture: conversation.customer.profilePicture || ''
       } : null,
       professional: professionalSummary
     };
@@ -400,6 +438,27 @@ class MessageService {
 
     if (!isParticipant) {
       throw new Error('Access denied');
+    }
+  }
+
+  isConversationDeletedForUser(conversation, userId) {
+    const userKey = userId.toString();
+    if (this.toIdString(conversation.customer) === userKey) {
+      return !!conversation.customerDeletedAt;
+    }
+    if (this.toIdString(conversation.professional) === userKey) {
+      return !!conversation.professionalDeletedAt;
+    }
+    return false;
+  }
+
+  restoreConversationForUser(conversation, userId) {
+    const userKey = userId.toString();
+    if (this.toIdString(conversation.customer) === userKey) {
+      conversation.customerDeletedAt = null;
+    }
+    if (this.toIdString(conversation.professional) === userKey) {
+      conversation.professionalDeletedAt = null;
     }
   }
 

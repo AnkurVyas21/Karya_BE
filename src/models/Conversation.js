@@ -7,7 +7,9 @@ const conversationSchema = new mongoose.Schema({
   lastMessage: { type: String, default: '' },
   lastMessageAt: { type: Date, default: Date.now },
   customerUnreadCount: { type: Number, default: 0, min: 0 },
-  professionalUnreadCount: { type: Number, default: 0, min: 0 }
+  professionalUnreadCount: { type: Number, default: 0, min: 0 },
+  customerDeletedAt: { type: Date, default: null },
+  professionalDeletedAt: { type: Date, default: null }
 }, {
   timestamps: true
 });
