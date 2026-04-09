@@ -11,6 +11,12 @@ const messageSchema = new mongoose.Schema({
     mimeType: { type: String, default: '' },
     size: { type: Number, default: 0 }
   }],
+  replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
+  reactions: [{
+    emoji: { type: String, required: true, trim: true },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    createdAt: { type: Date, default: Date.now }
+  }],
   deliveredAt: { type: Date, default: null },
   readAt: { type: Date, default: null },
   editedAt: { type: Date, default: null },

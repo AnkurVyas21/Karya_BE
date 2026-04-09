@@ -105,7 +105,8 @@ const sendMessage = async (req, res) => {
       senderId: req.user._id,
       senderRole: req.user.role,
       body: req.body.body,
-      attachments: req.files || []
+      attachments: req.files || [],
+      replyToId: req.body.replyToId
     });
 
     const conversation = await messageService.getConversation(req.params.id, req.user._id);
@@ -164,6 +165,24 @@ const deleteMessage = async (req, res) => {
   }
 };
 
+const reactToMessage = async (req, res) => {
+  try {
+    const message = await messageService.toggleReaction({
+      conversationId: req.params.id,
+      messageId: req.params.messageId,
+      userId: req.user._id,
+      emoji: req.body.emoji
+    });
+
+    const conversation = await messageService.getConversation(req.params.id, req.user._id);
+    emitStatusUpdates(conversation.statusUpdates);
+    emitMessageEventToParticipants(conversation, 'message.updated', message);
+    res.json({ success: true, data: conversation });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const streamMessages = async (req, res) => {
   try {
     const user = await authenticateStreamUser(req);
@@ -191,5 +210,6 @@ module.exports = {
   sendMessage,
   updateMessage,
   deleteMessage,
+  reactToMessage,
   streamMessages
 };

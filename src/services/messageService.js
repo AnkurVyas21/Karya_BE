@@ -44,7 +44,7 @@ class MessageService {
     return this.getConversation(conversation._id.toString(), customerId);
   }
 
-  async sendMessage({ conversationId, senderId, senderRole, body, attachments = [] }) {
+  async sendMessage({ conversationId, senderId, senderRole, body, attachments = [], replyToId = null }) {
     const conversation = await Conversation.findById(conversationId);
     if (!conversation) {
       throw new Error('Conversation not found');
@@ -65,6 +65,7 @@ class MessageService {
       throw new Error('Message content is required');
     }
 
+    const replyTarget = await this.resolveReplyTarget(conversation._id, replyToId);
     const recipientId = customerId === senderKey ? professionalId : customerId;
     const deliveredAt = messageRealtimeService.hasConnections(recipientId) ? new Date() : null;
     this.restoreConversationForUser(conversation, senderId);
@@ -76,6 +77,7 @@ class MessageService {
       senderRole,
       body: trimmedBody,
       attachments: normalizedAttachments,
+      replyTo: replyTarget?._id || null,
       deliveredAt
     });
 
@@ -86,7 +88,7 @@ class MessageService {
       conversation.professionalUnreadCount = (Number(conversation.professionalUnreadCount) || 0) + 1;
     }
     await conversation.save();
-    await message.populate('sender');
+    await this.populateMessageRelations(message);
 
     return { message, recipientId };
   }
@@ -145,7 +147,7 @@ class MessageService {
     await message.save();
     await this.updateConversationSnapshot(conversation);
     await conversation.save();
-    await message.populate('sender');
+    await this.populateMessageRelations(message);
 
     return message;
   }
@@ -176,7 +178,47 @@ class MessageService {
       await conversation.save();
     }
 
-    await message.populate('sender');
+    await this.populateMessageRelations(message);
+    return message;
+  }
+
+  async toggleReaction({ conversationId, messageId, userId, emoji }) {
+    const conversation = await Conversation.findById(conversationId);
+    if (!conversation) {
+      throw new Error('Conversation not found');
+    }
+
+    await this.assertParticipant(conversation, userId);
+    const normalizedEmoji = String(emoji || '').trim();
+    if (!normalizedEmoji) {
+      throw new Error('Reaction emoji is required');
+    }
+
+    const message = await Message.findOne({ _id: messageId, conversation: conversation._id }).populate('sender');
+    if (!message) {
+      throw new Error('Message not found');
+    }
+
+    if (message.isDeleted) {
+      throw new Error('Deleted messages cannot be reacted to');
+    }
+
+    const existingIndex = (message.reactions || []).findIndex((reaction) =>
+      this.toIdString(reaction.user) === userId.toString() && reaction.emoji === normalizedEmoji
+    );
+
+    if (existingIndex >= 0) {
+      message.reactions.splice(existingIndex, 1);
+    } else {
+      message.reactions.push({
+        emoji: normalizedEmoji,
+        user: userId,
+        createdAt: new Date()
+      });
+    }
+
+    await message.save();
+    await this.populateMessageRelations(message);
     return message;
   }
 
@@ -219,6 +261,11 @@ class MessageService {
     const statusUpdates = await this.markConversationAsRead(conversation, userId);
     const messages = await Message.find({ conversation: conversation._id })
       .populate('sender')
+      .populate({
+        path: 'replyTo',
+        populate: { path: 'sender' }
+      })
+      .populate('reactions.user')
       .sort({ createdAt: 1 });
 
     return {
@@ -325,10 +372,16 @@ class MessageService {
   }
 
   serializeMessage(message) {
+    const replySource = message.replyTo && typeof message.replyTo === 'object'
+      ? message.replyTo
+      : null;
+
     return {
       id: message._id.toString(),
       body: message.isDeleted ? 'This message was deleted.' : message.body,
       attachments: message.isDeleted ? [] : this.normalizeAttachments(message.attachments),
+      replyTo: this.serializeReplyTarget(replySource),
+      reactions: this.serializeReactions(message.reactions),
       senderId: message.sender?._id?.toString() || message.sender?.toString?.() || null,
       senderName: [message.sender?.firstName, message.sender?.lastName].filter(Boolean).join(' ').trim() || 'User',
       senderRole: message.senderRole,
@@ -498,6 +551,58 @@ class MessageService {
         };
       })
       .filter(Boolean);
+  }
+
+  serializeReplyTarget(message) {
+    if (!message) {
+      return null;
+    }
+
+    const replyBody = message.isDeleted
+      ? 'This message was deleted.'
+      : String(message.body || '').trim();
+    const replyAttachments = message.isDeleted ? [] : this.normalizeAttachments(message.attachments);
+
+    return {
+      id: message._id?.toString?.() || message.id || '',
+      body: replyBody,
+      attachments: replyAttachments,
+      senderId: message.sender?._id?.toString?.() || message.sender?.toString?.() || null,
+      senderName: [message.sender?.firstName, message.sender?.lastName].filter(Boolean).join(' ').trim() || 'User',
+      isDeleted: !!message.isDeleted
+    };
+  }
+
+  serializeReactions(reactions = []) {
+    return (reactions || []).map((reaction) => ({
+      emoji: reaction.emoji,
+      userId: reaction.user?._id?.toString?.() || reaction.user?.toString?.() || null,
+      createdAt: reaction.createdAt || null
+    }));
+  }
+
+  async resolveReplyTarget(conversationId, replyToId) {
+    const normalizedId = String(replyToId || '').trim();
+    if (!normalizedId) {
+      return null;
+    }
+
+    const replyTarget = await Message.findOne({ _id: normalizedId, conversation: conversationId });
+    if (!replyTarget) {
+      throw new Error('Reply target not found');
+    }
+
+    return replyTarget;
+  }
+
+  async populateMessageRelations(message) {
+    await message.populate('sender');
+    await message.populate({
+      path: 'replyTo',
+      populate: { path: 'sender' }
+    });
+    await message.populate('reactions.user');
+    return message;
   }
 
   toIdString(value) {

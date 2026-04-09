@@ -11,6 +11,7 @@ const {
   sendMessage,
   updateMessage,
   deleteMessage,
+  reactToMessage,
   streamMessages
 } = require('../controllers/messageController');
 
@@ -45,5 +46,6 @@ router.delete('/conversations/:id', deleteConversation);
 router.post('/conversations/:id/messages', uploadMessageAttachments, sendMessage);
 router.patch('/conversations/:id/messages/:messageId', updateMessage);
 router.delete('/conversations/:id/messages/:messageId', deleteMessage);
+router.post('/conversations/:id/messages/:messageId/reactions', reactToMessage);
 
 module.exports = router;
