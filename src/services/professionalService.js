@@ -7,7 +7,8 @@ const logger = require('../utils/logger');
 const { buildProfessionalSummary } = require('../utils/professionalPresenter');
 const aiSearchService = require('./aiSearchService');
 const { composeLocation, isProfessionalProfileListable } = require('../utils/accountPresenter');
-const { deriveProfileTags, normalizeList } = require('../utils/profileTagUtils');
+const { deriveProfileTags, normalizeList, uniqueStrings } = require('../utils/profileTagUtils');
+const professionCatalogService = require('./professionCatalogService');
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
@@ -39,6 +40,10 @@ class ProfessionalService {
 
     if ('skills' in update) {
       update.skills = normalizeList(update.skills);
+    }
+
+    if ('tags' in update) {
+      update.tags = normalizeList(update.tags);
     }
 
     if ('serviceAreas' in update) {
@@ -75,17 +80,28 @@ class ProfessionalService {
       ...update
     };
 
-    update.tags = deriveProfileTags({
-      profession: mergedProfile.profession,
-      specializations: mergedProfile.skills,
-      description: mergedProfile.description,
-      serviceAreas: mergedProfile.serviceAreas,
-      country: mergedProfile.country,
-      state: mergedProfile.state,
-      city: mergedProfile.city,
-      town: mergedProfile.town,
-      area: mergedProfile.area
-    });
+    if ('profession' in mergedProfile) {
+      mergedProfile.profession = await professionCatalogService.ensureProfession(mergedProfile.profession, {
+        source: 'provider-profile'
+      });
+      update.profession = mergedProfile.profession;
+    }
+
+    const professionCatalog = await professionCatalogService.getAllProfessions();
+    if (!('tags' in update)) {
+      update.tags = deriveProfileTags({
+        profession: mergedProfile.profession,
+        specializations: mergedProfile.skills,
+        description: mergedProfile.description,
+        serviceAreas: mergedProfile.serviceAreas,
+        country: mergedProfile.country,
+        state: mergedProfile.state,
+        city: mergedProfile.city,
+        town: mergedProfile.town,
+        area: mergedProfile.area,
+        professionCatalog
+      });
+    }
 
     const profile = await ProfessionalProfile.findOneAndUpdate(
       { user: userId },
@@ -111,19 +127,40 @@ class ProfessionalService {
       throw new Error('Description is required');
     }
 
+    const professionCatalog = await professionCatalogService.getAllProfessions();
+
     if (!openai) {
-      return this.keywordBasedProfessionDetection(description);
+      return this.finalizeProfessionSuggestion(
+        this.keywordBasedProfessionDetection(description, professionCatalog),
+        description,
+        professionCatalog
+      );
     }
 
-    const prompt = `Based on the description: "${description}", suggest a profession and categorized skills. Return in JSON format: { "profession": "string", "skills": ["skill1", "skill2"] }`;
+    const prompt = [
+      'You analyze a local-service provider profile description.',
+      'Find the best profession title for what this provider actually does.',
+      `Prefer one from this existing catalog when it fits: ${professionCatalog.join(', ')}`,
+      'If none fits well, create a concise new profession title in 2 to 4 words.',
+      'Return JSON only with this shape:',
+      '{"profession":"","specializations":[""],"tags":[""],"similarProfessions":[""]}',
+      `Description: ${JSON.stringify(description)}`
+    ].join('\n');
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 200
+      max_tokens: 250
     });
-    const result = JSON.parse(response.choices[0].message.content);
-    logger.info(`Profession detected: ${result.profession}`);
-    return result;
+    const rawContent = String(response.choices?.[0]?.message?.content || '{}').trim();
+    const jsonText = rawContent.startsWith('{')
+      ? rawContent
+      : rawContent.match(/\{[\s\S]*\}/)?.[0] || '{}';
+    const result = JSON.parse(jsonText);
+    return this.finalizeProfessionSuggestion(result, description, professionCatalog);
+  }
+
+  async getProfessionCatalog() {
+    return professionCatalogService.getAllProfessions();
   }
 
   async searchProfessionals(filters, page, limit, viewerId = null) {
@@ -552,28 +589,92 @@ class ProfessionalService {
       .reduce((total, token) => total + (text.includes(token) ? 3 : 0), 0);
   }
 
+  async finalizeProfessionSuggestion(rawResult, description, professionCatalog = []) {
+    const suggestedProfession = rawResult?.profession || this.extractCustomProfessionFromDescription(description) || 'Consultant';
+    const ensuredProfession = await professionCatalogService.ensureProfession(suggestedProfession, {
+      aliases: rawResult?.similarProfessions || [],
+      source: 'ai-detect'
+    });
+    const updatedCatalog = await professionCatalogService.getAllProfessions();
+    const specializations = normalizeList(rawResult?.specializations || rawResult?.skills || []);
+    const similarProfessions = uniqueStrings([
+      ...(rawResult?.similarProfessions || []),
+      ...updatedCatalog.filter((item) => {
+        const normalizedItem = this.normalizeSearchText(item);
+        const normalizedProfession = this.normalizeSearchText(ensuredProfession);
+        return normalizedItem !== normalizedProfession
+          && (
+            normalizedItem.includes(normalizedProfession)
+            || normalizedProfession.includes(normalizedItem)
+            || normalizedItem.split(' ').some((token) => token && normalizedProfession.includes(token))
+          );
+      }).slice(0, 5)
+    ]);
+    const tags = deriveProfileTags({
+      profession: ensuredProfession,
+      specializations,
+      description,
+      tags: [...(rawResult?.tags || []), ...similarProfessions],
+      professionCatalog: updatedCatalog
+    });
+
+    logger.info(`Profession detected: ${ensuredProfession}`);
+    return {
+      profession: ensuredProfession,
+      specializations,
+      tags,
+      similarProfessions,
+      professions: updatedCatalog
+    };
+  }
+
+  extractCustomProfessionFromDescription(description = '') {
+    const text = String(description || '').trim();
+    const patterns = [
+      /\b(?:i am|i'm|i work as|my profession is|my job is)\s+(?:an?\s+)?([a-z/&+\s-]{3,40})/i,
+      /\b(?:we are|we work as)\s+(?:an?\s+)?([a-z/&+\s-]{3,40})/i,
+      /\b(?:looking for|need)\s+(?:an?\s+)?([a-z/&+\s-]{3,40})/i
+    ];
+
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      const candidate = String(match?.[1] || '')
+        .replace(/\b(in|at|for|with|who|and)\b.*$/i, '')
+        .trim();
+
+      if (candidate.length >= 3) {
+        return professionCatalogService.formatProfessionName(candidate);
+      }
+    }
+
+    return '';
+  }
+
   keywordBasedProfessionDetection(description) {
     const lowered = description.toLowerCase();
     if (lowered.includes('deploy') || lowered.includes('devops') || lowered.includes('server') || lowered.includes('cloud')) {
-      return { profession: 'DevOps Engineer', skills: ['AWS', 'CI/CD', 'Docker', 'Kubernetes'] };
+      return { profession: 'DevOps Engineer', specializations: ['AWS', 'CI/CD', 'Docker', 'Kubernetes'] };
     }
     if (lowered.includes('website') || lowered.includes('app') || lowered.includes('software') || lowered.includes('coding')) {
-      return { profession: 'Software Engineer', skills: ['JavaScript', 'Angular', 'Node.js', 'System Design'] };
+      return { profession: 'Software Engineer', specializations: ['JavaScript', 'Angular', 'Node.js', 'System Design'] };
     }
     if (lowered.includes('frontend') || lowered.includes('ui') || lowered.includes('landing page')) {
-      return { profession: 'Web Developer', skills: ['HTML', 'CSS', 'Angular', 'Responsive Design'] };
+      return { profession: 'Web Developer', specializations: ['HTML', 'CSS', 'Angular', 'Responsive Design'] };
     }
     if (lowered.includes('logo') || lowered.includes('design')) {
-      return { profession: 'UI/UX Designer', skills: ['Branding', 'UI/UX', 'Graphic Design'] };
+      return { profession: 'UI/UX Designer', specializations: ['Branding', 'UI/UX', 'Graphic Design'] };
     }
     if (lowered.includes('pipe') || lowered.includes('leak')) {
-      return { profession: 'Plumber', skills: ['Pipe repair', 'Home service', 'Maintenance'] };
+      return { profession: 'Plumber', specializations: ['Pipe repair', 'Home service', 'Maintenance'] };
     }
     if (lowered.includes('wiring') || lowered.includes('electrical')) {
-      return { profession: 'Electrician', skills: ['Wiring', 'Installation', 'Repair'] };
+      return { profession: 'Electrician', specializations: ['Wiring', 'Installation', 'Repair'] };
     }
 
-    return { profession: 'Consultant', skills: ['Consulting', 'Problem solving', 'Client communication'] };
+    return {
+      profession: this.extractCustomProfessionFromDescription(description) || 'Consultant',
+      specializations: ['Customer service', 'Problem solving', 'Professional support']
+    };
   }
 
   keywordBasedSearch(problem) {

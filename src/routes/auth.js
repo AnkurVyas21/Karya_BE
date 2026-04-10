@@ -54,6 +54,10 @@ const signupSchema = Joi.object({
     Joi.array().items(Joi.string()),
     Joi.string().allow('')
   ).optional(),
+  tags: Joi.alternatives().try(
+    Joi.array().items(Joi.string()),
+    Joi.string().allow('')
+  ).optional(),
   description: Joi.string().allow('').optional(),
   allowContactDisplay: Joi.boolean().optional(),
   socialAccount: Joi.object({

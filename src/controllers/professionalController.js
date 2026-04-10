@@ -132,6 +132,15 @@ const detectProfession = async (req, res) => {
   }
 };
 
+const getProfessions = async (_req, res) => {
+  try {
+    const professions = await professionalService.getProfessionCatalog();
+    res.json({ success: true, data: professions });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const getMyProfile = async (req, res) => {
   try {
     const profile = await professionalService.getProfileByUserId(req.user._id, req.user._id);
@@ -243,6 +252,7 @@ module.exports = {
   createBookmark,
   createSubscription,
   detectProfession,
+  getProfessions,
   getMyProfile,
   updateProfile,
   getRatings,

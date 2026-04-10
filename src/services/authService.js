@@ -8,6 +8,7 @@ const logger = require('../utils/logger');
 const { buildAuthenticatedUser, composeLocation, sanitizeUser, toCleanString } = require('../utils/accountPresenter');
 const { normalizeSocialAccount } = require('../utils/socialAccountUtils');
 const { deriveProfileTags, normalizeList } = require('../utils/profileTagUtils');
+const professionCatalogService = require('./professionCatalogService');
 
 class AuthService {
   async signup(userData) {
@@ -30,6 +31,7 @@ class AuthService {
       skills = [],
       specializations = [],
       description = '',
+      tags: providedTags = [],
       allowContactDisplay = false,
       socialAccount = null
     } = userData;
@@ -78,22 +80,28 @@ class AuthService {
     await user.save();
 
     if (role === 'professional') {
+      const savedProfession = await professionCatalogService.ensureProfession(profession, {
+        source: 'provider-signup'
+      });
       const normalizedSkills = normalizeList(specializations).length
         ? normalizeList(specializations)
         : normalizeList(skills);
       const normalizedServiceAreas = normalizeList(serviceAreas);
       const location = composeLocation({ town, area, city, state });
       const normalizedDescription = toCleanString(description);
+      const professionCatalog = await professionCatalogService.getAllProfessions();
       const tags = deriveProfileTags({
-        profession,
+        profession: savedProfession,
         specializations: normalizedSkills,
         description: normalizedDescription,
+        tags: providedTags,
         serviceAreas: normalizedServiceAreas,
         country,
         state,
         city,
         town,
-        area
+        area,
+        professionCatalog
       });
 
       await ProfessionalProfile.findOneAndUpdate(
@@ -101,7 +109,7 @@ class AuthService {
         {
           $setOnInsert: {
             user: user._id,
-            profession: toCleanString(profession),
+            profession: savedProfession,
             description: normalizedDescription,
             skills: normalizedSkills,
             tags,
@@ -308,7 +316,9 @@ class AuthService {
       };
 
       if ('profession' in payload) {
-        professionalUpdates.profession = toCleanString(payload.profession);
+        professionalUpdates.profession = await professionCatalogService.ensureProfession(payload.profession, {
+          source: 'account-profile'
+        });
       }
 
       const nextProfession = 'profession' in professionalUpdates
@@ -318,12 +328,14 @@ class AuthService {
       const nextDescription = existingProfessionalProfile?.description || '';
       const nextServiceAreas = existingProfessionalProfile?.serviceAreas || [];
 
+      const professionCatalog = await professionCatalogService.getAllProfessions();
       professionalUpdates.tags = deriveProfileTags({
         profession: nextProfession,
         specializations: nextSkills,
         description: nextDescription,
         serviceAreas: nextServiceAreas,
-        ...nextLocationState
+        ...nextLocationState,
+        professionCatalog
       });
 
       await ProfessionalProfile.findOneAndUpdate(

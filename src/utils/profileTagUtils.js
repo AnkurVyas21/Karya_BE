@@ -93,14 +93,15 @@ const extractDescriptionPhrases = (description = '') => {
   return uniqueStrings(phrases).slice(0, 20);
 };
 
-const deriveRelatedProfessionTags = (profession = '') => {
+const deriveRelatedProfessionTags = (profession = '', professionCatalog = DEFAULT_PROFESSIONS) => {
   const cleaned = String(profession || '').trim();
   if (!cleaned) {
     return [];
   }
 
   const exactMatch = professionAliasMap[cleaned.toLowerCase()] || [];
-  const nearbyMatches = DEFAULT_PROFESSIONS.filter((item) => {
+  const catalog = uniqueStrings([...(professionCatalog || []), ...DEFAULT_PROFESSIONS]);
+  const nearbyMatches = catalog.filter((item) => {
     const normalizedItem = item.toLowerCase();
     const normalizedProfession = cleaned.toLowerCase();
     return normalizedItem !== normalizedProfession
@@ -119,22 +120,25 @@ const deriveProfileTags = ({
   specializations = [],
   description = '',
   serviceAreas = [],
+  tags = [],
   country = '',
   state = '',
   city = '',
   town = '',
-  area = ''
+  area = '',
+  professionCatalog = DEFAULT_PROFESSIONS
 } = {}) => {
   const normalizedSpecializations = normalizeList(specializations);
   const descriptionPhrases = extractDescriptionPhrases(description);
   const descriptionTokens = tokenizeText(description).slice(0, 24);
-  const relatedProfessionTags = deriveRelatedProfessionTags(profession);
+  const relatedProfessionTags = deriveRelatedProfessionTags(profession, professionCatalog);
   const locationTags = uniqueStrings([country, state, city, town, area, ...normalizeList(serviceAreas)]);
 
   return uniqueStrings([
     profession,
     ...relatedProfessionTags,
     ...normalizedSpecializations,
+    ...normalizeList(tags),
     ...descriptionPhrases,
     ...descriptionTokens,
     ...locationTags

@@ -8,6 +8,7 @@ const {
   createBookmark,
   createSubscription,
   detectProfession,
+  getProfessions,
   getMyProfile,
   updateProfile,
   getRatings,
@@ -26,6 +27,7 @@ router.post('/profile', authMiddleware, roleMiddleware(['professional']), upload
 router.get('/profile', authMiddleware, roleMiddleware(['professional', 'admin']), getMyProfile);
 router.put('/profile', authMiddleware, roleMiddleware(['professional', 'admin']), upload.fields([{ name: 'profilePicture', maxCount: 1 }, { name: 'certificates', maxCount: 5 }]), updateProfile);
 router.get('/dashboard/summary', authMiddleware, roleMiddleware(['professional', 'admin']), getDashboardSummary);
+router.get('/professions', getProfessions);
 router.get('/search', searchProfessionals);
 router.post('/search/ai', aiSearch);
 router.get('/bookmarks', authMiddleware, getBookmarks);
