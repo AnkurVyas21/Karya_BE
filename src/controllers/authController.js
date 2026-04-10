@@ -1,4 +1,5 @@
 const authService = require('../services/authService');
+const { socialAuthService } = require('../services/socialAuthService');
 
 const signup = async (req, res) => {
   try {
@@ -50,4 +51,39 @@ const resendOTP = async (req, res) => {
   }
 };
 
-module.exports = { signup, login, verifyOTP, resendOTP };
+const startSocialAuth = async (req, res) => {
+  const frontendOrigin = String(req.query.frontendOrigin || '').trim();
+  try {
+    const authorizationUrl = socialAuthService.createAuthorizationUrl(req.params.provider, req, {
+      intent: req.query.intent,
+      frontendOrigin,
+      returnUrl: req.query.returnUrl
+    });
+    res.redirect(authorizationUrl);
+  } catch (error) {
+    res
+      .status(400)
+      .send(socialAuthService.renderPopupResponse(frontendOrigin || '*', {
+        type: 'error',
+        provider: req.params.provider,
+        message: error.message
+      }));
+  }
+};
+
+const handleSocialCallback = async (req, res) => {
+  try {
+    const result = await socialAuthService.handleCallback(req.params.provider, req);
+    res.status(200).send(socialAuthService.renderPopupResponse(result.targetOrigin, result.payload));
+  } catch (error) {
+    res
+      .status(400)
+      .send(socialAuthService.renderPopupResponse('*', {
+        type: 'error',
+        provider: req.params.provider,
+        message: error.message
+      }));
+  }
+};
+
+module.exports = { signup, login, verifyOTP, resendOTP, startSocialAuth, handleSocialCallback };

@@ -1,5 +1,5 @@
 const express = require('express');
-const { signup, login, verifyOTP, resendOTP } = require('../controllers/authController');
+const { signup, login, verifyOTP, resendOTP, startSocialAuth, handleSocialCallback } = require('../controllers/authController');
 const authMiddleware = require('../middlewares/authMiddleware');
 const validationMiddleware = require('../middlewares/validationMiddleware');
 const Joi = require('joi');
@@ -40,7 +40,15 @@ const signupSchema = Joi.object({
   skills: Joi.alternatives().try(
     Joi.array().items(Joi.string()),
     Joi.string().allow('')
-  ).optional()
+  ).optional(),
+  socialAccount: Joi.object({
+    provider: Joi.string().valid('google', 'facebook', 'linkedin', 'x').required(),
+    providerId: Joi.string().required(),
+    email: Joi.string().allow('').optional(),
+    displayName: Joi.string().allow('').optional(),
+    avatarUrl: Joi.string().allow('').optional(),
+    profileUrl: Joi.string().allow('').optional()
+  }).optional()
 });
 
 const loginSchema = Joi.object({
@@ -59,5 +67,7 @@ router.post('/signup', validationMiddleware(signupSchema), signup);
 router.post('/login', loginRateLimiter, validationMiddleware(loginSchema), login);
 router.post('/verify-otp', validationMiddleware(otpSchema), verifyOTP);
 router.post('/resend-otp', resendOTP);
+router.get('/social/:provider/start', startSocialAuth);
+router.get('/social/:provider/callback', handleSocialCallback);
 
 module.exports = router;

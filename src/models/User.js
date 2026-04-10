@@ -6,6 +6,14 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   mobile: { type: String, required: true, unique: true },
   password: { type: String, required: true },
+  socialAccounts: [{
+    provider: { type: String, enum: ['google', 'facebook', 'linkedin', 'x'], required: true },
+    providerId: { type: String, required: true },
+    email: { type: String, default: '' },
+    displayName: { type: String, default: '' },
+    avatarUrl: { type: String, default: '' },
+    profileUrl: { type: String, default: '' }
+  }],
   role: { type: String, enum: ['user', 'professional', 'admin'], default: 'user' },
   country: { type: String, default: 'India' },
   state: { type: String, default: '' },

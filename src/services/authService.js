@@ -5,6 +5,7 @@ const OTPVerification = require('../models/OTPVerification');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
+const { socialAuthService, sanitizeUser } = require('./socialAuthService');
 
 const uniqueStrings = (values = []) => [...new Set(
   values
@@ -46,13 +47,32 @@ class AuthService {
       area = '',
       pincode = '',
       serviceAreas = [],
-      skills = []
+      skills = [],
+      socialAccount = null
     } = userData;
     
     // Check if user already exists
     const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
     if (existingUser) {
       throw new Error('User with this email or mobile already exists');
+    }
+
+    const normalizedSocialAccount = socialAccount
+      ? socialAuthService.normalizeSocialAccount(socialAccount)
+      : null;
+
+    if (normalizedSocialAccount?.provider && normalizedSocialAccount?.providerId) {
+      const existingSocialUser = await User.findOne({
+        socialAccounts: {
+          $elemMatch: {
+            provider: normalizedSocialAccount.provider,
+            providerId: normalizedSocialAccount.providerId
+          }
+        }
+      });
+      if (existingSocialUser) {
+        throw new Error('This social account is already linked to another user');
+      }
     }
     
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -62,6 +82,9 @@ class AuthService {
       email,
       mobile,
       password: hashedPassword,
+      socialAccounts: normalizedSocialAccount?.provider && normalizedSocialAccount?.providerId
+        ? [normalizedSocialAccount]
+        : [],
       role,
       country: String(country || 'India').trim() || 'India',
       state: String(state || '').trim(),
@@ -119,7 +142,7 @@ class AuthService {
       await User.findByIdAndDelete(user._id);
       throw error;
     }
-    return user;
+    return sanitizeUser(user);
   }
 
   async login(identifier, password) {
@@ -131,7 +154,7 @@ class AuthService {
     }
     const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
     logger.info(`User logged in: ${user._id}`);
-    return { user, token };
+    return { user: sanitizeUser(user), token };
   }
 
   async verifyOTP(identifier, otp, type) {
