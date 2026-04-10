@@ -136,6 +136,7 @@ const RELATED_PROFESSIONS = {
   mason: ['Construction Worker', 'Tile Mason', 'Brick Mason'],
   architect: ['Civil Engineer', 'Interior Designer', 'House Planner', 'Building Designer'],
   'civil engineer': ['Architect', 'Structural Engineer', 'Building Contractor'],
+  builder: ['Building Contractor', 'Civil Engineer', 'Mason', 'Architect'],
   'interior designer': ['Architect', 'Space Planner', 'Modular Kitchen Designer'],
   'ac repair technician': ['HVAC Technician', 'Cooling Technician', 'Air Conditioner Mechanic'],
   'mobile repair technician': ['Phone Repair Expert', 'Device Technician', 'Electronics Repair Technician'],

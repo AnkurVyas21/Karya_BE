@@ -1,5 +1,6 @@
 const logger = require('../utils/logger');
 const DEFAULT_PROFESSIONS = require('../constants/professions');
+const { PROFESSION_RULES, inferProfessionFromText } = require('../utils/professionInferenceUtils');
 
 const AI_PROVIDERS = {
   GEMINI: 'gemini',
@@ -21,39 +22,10 @@ const compactObject = (value = {}) => Object.fromEntries(
   Object.entries(value).filter(([, item]) => item !== undefined && item !== null && String(item).trim() !== '')
 );
 
-const KEYWORD_RULES = [
-  { profession: 'Plumber', keywords: ['tap', 'leak', 'leakage', 'pipe', 'bathroom', 'sink', 'washbasin', 'faucet', 'flush', 'drain', 'sewer', 'geyser fitting', 'nal', 'paani ka pipe', 'plumber', 'pipeline', 'water leakage'] },
-  { profession: 'Beautician', keywords: ['facial', 'massage', 'salon', 'makeup', 'bridal', 'waxing', 'spa', 'skin care', 'threading', 'pedicure', 'manicure', 'parlour', 'beauty parlour', 'make up'] },
-  { profession: 'Electrician', keywords: ['electric', 'electrical', 'wiring', 'switch', 'socket', 'fan', 'light', 'power', 'mcb', 'short circuit', 'inverter', 'bijli', 'wireman', 'current problem'] },
-  { profession: 'AC Repair Technician', keywords: ['ac', 'air conditioner', 'cooling', 'compressor', 'split ac', 'window ac', 'cooler jaisa nahi chal raha', 'thanda nahi kar raha', 'ac repair'] },
-  { profession: 'Mobile Repair Technician', keywords: ['mobile repair', 'phone repair', 'screen replacement', 'battery replacement', 'smartphone'] },
-  { profession: 'Auto Mechanic', keywords: ['car repair', 'bike repair', 'vehicle service', 'garage', 'mechanic', 'engine', 'puncture', 'gaadi mechanic', 'bike mechanic', 'vehicle', 'cylinder', 'engine noise', 'vehicle noise', 'car noise', 'bike noise', 'silencer', 'clutch', 'gear', 'brake'] },
-  { profession: 'Carpenter', keywords: ['wood', 'furniture', 'carpenter', 'wardrobe', 'cabinet', 'door fitting', 'table repair'] },
-  { profession: 'Painter', keywords: ['paint', 'painting', 'wall paint', 'texture', 'putty'] },
-  { profession: 'Cleaner', keywords: ['cleaning', 'deep clean', 'sanitize', 'office clean'] },
-  { profession: 'House Cleaner', keywords: ['house cleaning', 'home cleaning', 'kitchen clean', 'bathroom clean'] },
-  { profession: 'Doctor', keywords: ['doctor', 'medical', 'fever', 'clinic', 'health', 'treatment'] },
-  { profession: 'Lawyer', keywords: ['lawyer', 'legal', 'court', 'agreement', 'notice', 'case'] },
-  { profession: 'Teacher', keywords: ['tuition', 'teacher', 'tutor', 'coaching', 'homework', 'study'] },
-  { profession: 'Home Tutor', keywords: ['home tutor', 'private tutor', 'home tuition'] },
-  { profession: 'Photographer', keywords: ['photographer', 'photo shoot', 'wedding photo', 'camera'] },
-  { profession: 'Videographer', keywords: ['videographer', 'video shoot', 'reel shoot', 'cinematic'] },
-  { profession: 'Caterer', keywords: ['caterer', 'food service', 'party food', 'event food'] },
-  { profession: 'Event Planner', keywords: ['event planner', 'wedding planner', 'event management', 'birthday setup'] },
-  { profession: 'Architect', keywords: ['architect', 'architecture', 'architectural', 'house design', 'home design', 'building design', 'floor plan', 'house plan', 'elevation design', 'blueprint', 'construction drawing', 'map approval', 'ghar ka naksha', 'house map'] },
-  { profession: 'Interior Designer', keywords: ['interior design', 'interior designer', 'room design', 'kitchen design', 'modular kitchen', 'living room design', 'bedroom design', 'home interior', 'ghar ka interior'] },
-  { profession: 'Web Developer', keywords: ['website', 'web app', 'frontend', 'landing page', 'portfolio site', 'shopify', 'wordpress', 'website banana', 'site banana'] },
-  { profession: 'Developer', keywords: ['developer', 'app development', 'software development', 'coding', 'bug fix', 'build app', 'app banana'] },
-  { profession: 'Software Engineer', keywords: ['software engineer', 'system design', 'backend', 'api development'] },
-  { profession: 'DevOps Engineer', keywords: ['deployment', 'server', 'devops', 'cloud', 'ci/cd', 'docker', 'kubernetes'] },
-  { profession: 'Designer', keywords: ['branding', 'creative', 'mockup', 'general design'] },
-  { profession: 'Graphic Designer', keywords: ['graphic design', 'poster', 'brochure', 'social post', 'logo'] },
-  { profession: 'UI/UX Designer', keywords: ['ui', 'ux', 'product design', 'figma', 'wireframe'] },
-  { profession: 'Digital Marketer', keywords: ['digital marketing', 'ads', 'campaign', 'meta ads'] },
-  { profession: 'SEO Specialist', keywords: ['seo', 'search ranking', 'google ranking', 'organic traffic'] },
-  { profession: 'Content Writer', keywords: ['content writing', 'blog writing', 'copywriting', 'article'] },
-  { profession: 'Consultant', keywords: ['consult', 'advisor', 'strategy', 'consultant'] }
-];
+const KEYWORD_RULES = PROFESSION_RULES.map((rule) => ({
+  profession: rule.profession,
+  keywords: rule.keywords
+}));
 
 class AiSearchService {
   async inferSearch(options = {}) {
@@ -371,7 +343,10 @@ class AiSearchService {
   }
 
   keywordFallback(problem, allowedProfessions, selectedLocation, currentLocation) {
-    const professionCandidates = this.keywordProfessionCandidates(problem, allowedProfessions);
+    const inferred = inferProfessionFromText(problem, allowedProfessions);
+    const professionCandidates = inferred.profession
+      ? [inferred.profession, ...(inferred.similarProfessions || [])]
+      : this.keywordProfessionCandidates(problem, allowedProfessions);
     const extractedLocation = this.extractLocationFromProblem(problem);
     const location = {
       ...(currentLocation.city || currentLocation.state || currentLocation.country ? currentLocation : selectedLocation),
@@ -385,8 +360,10 @@ class AiSearchService {
       state: location.state || '',
       city: location.city || '',
       town: location.town || '',
-      skills: [],
-      reason: 'Matched the request with built-in keyword rules.',
+      skills: inferred.specializations || [],
+      reason: inferred.profession
+        ? 'Matched the request with built-in profession rules.'
+        : 'Matched the request with built-in keyword rules.',
       locationSource: location.city || location.state || location.country ? location.source || 'selected-filters' : 'none'
     };
   }

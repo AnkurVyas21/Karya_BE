@@ -9,6 +9,7 @@ const aiSearchService = require('./aiSearchService');
 const { composeLocation, isProfessionalProfileListable } = require('../utils/accountPresenter');
 const { deriveProfileTags, deriveRelatedProfessionTags, normalizeList, uniqueStrings } = require('../utils/profileTagUtils');
 const professionCatalogService = require('./professionCatalogService');
+const { inferProfessionFromText } = require('../utils/professionInferenceUtils');
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
@@ -128,6 +129,15 @@ class ProfessionalService {
     }
 
     const professionCatalog = await professionCatalogService.getAllProfessions();
+    const heuristicSuggestion = inferProfessionFromText(description, professionCatalog);
+
+    if (heuristicSuggestion.profession && heuristicSuggestion.score >= 4) {
+      return this.finalizeProfessionSuggestion({
+        profession: heuristicSuggestion.profession,
+        specializations: heuristicSuggestion.specializations,
+        similarProfessions: heuristicSuggestion.similarProfessions
+      }, description, professionCatalog);
+    }
 
     if (!openai) {
       return this.finalizeProfessionSuggestion(
@@ -156,6 +166,19 @@ class ProfessionalService {
       ? rawContent
       : rawContent.match(/\{[\s\S]*\}/)?.[0] || '{}';
     const result = JSON.parse(jsonText);
+
+    if ((!result?.profession || /^consultant$/i.test(String(result.profession || '').trim())) && heuristicSuggestion.profession) {
+      result.profession = heuristicSuggestion.profession;
+      result.specializations = normalizeList([
+        ...(result.specializations || result.skills || []),
+        ...heuristicSuggestion.specializations
+      ]);
+      result.similarProfessions = uniqueStrings([
+        ...(result.similarProfessions || []),
+        ...(heuristicSuggestion.similarProfessions || [])
+      ]);
+    }
+
     return this.finalizeProfessionSuggestion(result, description, professionCatalog);
   }
 
@@ -644,24 +667,13 @@ class ProfessionalService {
   }
 
   keywordBasedProfessionDetection(description) {
-    const lowered = description.toLowerCase();
-    if (lowered.includes('deploy') || lowered.includes('devops') || lowered.includes('server') || lowered.includes('cloud')) {
-      return { profession: 'DevOps Engineer', specializations: ['AWS', 'CI/CD', 'Docker', 'Kubernetes'] };
-    }
-    if (lowered.includes('website') || lowered.includes('app') || lowered.includes('software') || lowered.includes('coding')) {
-      return { profession: 'Software Engineer', specializations: ['JavaScript', 'Angular', 'Node.js', 'System Design'] };
-    }
-    if (lowered.includes('frontend') || lowered.includes('ui') || lowered.includes('landing page')) {
-      return { profession: 'Web Developer', specializations: ['HTML', 'CSS', 'Angular', 'Responsive Design'] };
-    }
-    if (lowered.includes('logo') || lowered.includes('design')) {
-      return { profession: 'UI/UX Designer', specializations: ['Branding', 'UI/UX', 'Graphic Design'] };
-    }
-    if (lowered.includes('pipe') || lowered.includes('leak')) {
-      return { profession: 'Plumber', specializations: ['Pipe repair', 'Home service', 'Maintenance'] };
-    }
-    if (lowered.includes('wiring') || lowered.includes('electrical')) {
-      return { profession: 'Electrician', specializations: ['Wiring', 'Installation', 'Repair'] };
+    const inferred = inferProfessionFromText(description);
+    if (inferred.profession) {
+      return {
+        profession: inferred.profession,
+        specializations: inferred.specializations,
+        similarProfessions: inferred.similarProfessions
+      };
     }
 
     return {

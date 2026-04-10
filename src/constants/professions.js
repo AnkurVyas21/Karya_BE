@@ -3,6 +3,7 @@ module.exports = [
   'Architect',
   'Auto Mechanic',
   'Beautician',
+  'Builder',
   'Carpenter',
   'Caterer',
   'Civil Engineer',
