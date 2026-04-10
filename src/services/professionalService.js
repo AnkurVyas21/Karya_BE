@@ -7,7 +7,7 @@ const logger = require('../utils/logger');
 const { buildProfessionalSummary } = require('../utils/professionalPresenter');
 const aiSearchService = require('./aiSearchService');
 const { composeLocation, isProfessionalProfileListable } = require('../utils/accountPresenter');
-const { deriveProfileTags, normalizeList, uniqueStrings } = require('../utils/profileTagUtils');
+const { deriveProfileTags, deriveRelatedProfessionTags, normalizeList, uniqueStrings } = require('../utils/profileTagUtils');
 const professionCatalogService = require('./professionCatalogService');
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -599,17 +599,10 @@ class ProfessionalService {
     const specializations = normalizeList(rawResult?.specializations || rawResult?.skills || []);
     const similarProfessions = uniqueStrings([
       ...(rawResult?.similarProfessions || []),
-      ...updatedCatalog.filter((item) => {
-        const normalizedItem = this.normalizeSearchText(item);
-        const normalizedProfession = this.normalizeSearchText(ensuredProfession);
-        return normalizedItem !== normalizedProfession
-          && (
-            normalizedItem.includes(normalizedProfession)
-            || normalizedProfession.includes(normalizedItem)
-            || normalizedItem.split(' ').some((token) => token && normalizedProfession.includes(token))
-          );
-      }).slice(0, 5)
-    ]);
+      ...deriveRelatedProfessionTags(ensuredProfession, updatedCatalog)
+    ])
+      .filter((item) => this.normalizeSearchText(item) !== this.normalizeSearchText(ensuredProfession))
+      .slice(0, 5);
     const tags = deriveProfileTags({
       profession: ensuredProfession,
       specializations,
@@ -689,7 +682,7 @@ class ProfessionalService {
     const detection = this.keywordBasedProfessionDetection(problem);
     return {
       professions: [detection.profession],
-      skills: detection.skills
+      skills: detection.specializations || detection.skills || []
     };
   }
 }

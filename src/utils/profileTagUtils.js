@@ -23,11 +23,110 @@ const cleanText = (value = '') => String(value || '')
   .replace(/\s+/g, ' ')
   .trim();
 
-const tokenizeText = (value = '') => cleanText(value)
+const STOPWORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'because', 'been', 'being', 'based', 'by',
+  'can', 'could', 'do', 'does', 'doing', 'for', 'from', 'good', 'have', 'has', 'had',
+  'he', 'her', 'his', 'i', 'if', 'in', 'into', 'is', 'it', 'its', 'kind', 'like', 'many',
+  'me', 'my', 'of', 'on', 'or', 'our', 'ours', 'she', 'so', 'some', 'than', 'that', 'the',
+  'their', 'them', 'there', 'these', 'they', 'this', 'those', 'to', 'too', 'various', 'we',
+  'what', 'when', 'where', 'which', 'who', 'why', 'with', 'you', 'your', 'especially'
+]);
+
+const GENERIC_NON_TAG_TOKENS = new Set([
+  'ability', 'abilities', 'actual', 'actually', 'based', 'best', 'business', 'client', 'clients',
+  'customer', 'customers', 'develop', 'develops', 'developing', 'experience', 'experienced', 'general',
+  'good', 'great', 'help', 'helps', 'job', 'jobs', 'kind', 'kinds', 'many', 'professional', 'professionals',
+  'service', 'services', 'skill', 'skills', 'technology', 'technologies', 'term', 'terms', 'various',
+  'work', 'works'
+]);
+
+const SHORT_ALLOWED_TAGS = new Set(['ac', 'ai', 'api', 'aws', 'css', 'hr', 'ios', 'it', 'qa', 'seo', 'ui', 'ux']);
+
+const TOKEN_DISPLAY_MAP = {
+  android: 'Android',
+  angular: 'Angular',
+  api: 'API',
+  aws: 'AWS',
+  css: 'CSS',
+  devops: 'DevOps',
+  figma: 'Figma',
+  ios: 'iOS',
+  java: 'Java',
+  javascript: 'JavaScript',
+  kubernetes: 'Kubernetes',
+  mongodb: 'MongoDB',
+  nextjs: 'Next.js',
+  nodejs: 'Node.js',
+  php: 'PHP',
+  python: 'Python',
+  react: 'React',
+  seo: 'SEO',
+  typescript: 'TypeScript',
+  ui: 'UI',
+  ux: 'UX',
+  wordpress: 'WordPress'
+};
+
+const DESCRIPTION_PATTERN_TAGS = [
+  /\b(?:android|ios|wordpress|shopify|angular|react|node\.?js|javascript|typescript|python|java|php|kubernetes|docker|seo|figma|api|aws|mongodb)\b/ig,
+  /\b(?:vehicle|car|bike|engine|cylinder|brake|clutch|gear|garage|mechanic|plumbing|plumber|pipe|leakage|wiring|electrical|cleaning|painting|photography|videography|architect|interior|tutor|teacher|lawyer|doctor)\b/ig,
+  /\b(?:software|web|website|app|mobile|graphic|civil|interior|backend|frontend|full stack|full-stack)\s+(?:developer|design|designer|development|engineer|mechanic|repair|repairing|repairer|service|cleaning|cleaner|technician|consultant|writer|marketer|planner)\b/ig,
+  /\b[a-z0-9/+.-]+\s+(?:repair|repairs|repairing|development|design|installation|maintenance|cleaning|fitting|service|servicing|marketing|teaching|consulting|photography|videography|writing|editing|painting)\b/ig
+];
+
+const splitWords = (value = '') => cleanText(value)
   .toLowerCase()
   .split(/[\s,/&-]+/)
   .map((item) => item.trim())
-  .filter((item) => item.length >= 3);
+  .filter(Boolean);
+
+const toSingular = (value = '') => {
+  const token = String(value || '').trim().toLowerCase();
+  if (token.endsWith('ies') && token.length > 4) {
+    return `${token.slice(0, -3)}y`;
+  }
+  if (token.endsWith('s') && !token.endsWith('ss') && token.length > 4) {
+    return token.slice(0, -1);
+  }
+  return token;
+};
+
+const formatToken = (value = '') => {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9+/.-]+/g, '');
+  return TOKEN_DISPLAY_MAP[normalized] || value;
+};
+
+const sanitizeTag = (value = '') => {
+  const words = splitWords(value).map((item) => toSingular(item));
+  const filteredWords = words.filter((item) => {
+    if (!item) {
+      return false;
+    }
+
+    if (STOPWORDS.has(item) || GENERIC_NON_TAG_TOKENS.has(item)) {
+      return false;
+    }
+
+    if (item.length < 3 && !SHORT_ALLOWED_TAGS.has(item)) {
+      return false;
+    }
+
+    return true;
+  });
+
+  if (filteredWords.length === 0 || filteredWords.length > 5) {
+    return '';
+  }
+
+  return filteredWords
+    .map((item) => formatToken(item))
+    .join(' ')
+    .trim();
+};
+
+const tokenizeText = (value = '') => splitWords(value)
+  .map((item) => sanitizeTag(item))
+  .filter(Boolean);
 
 const RELATED_PROFESSIONS = {
   plumber: ['Pipe Fitter', 'Bathroom Fitting Expert', 'Sanitary Technician', 'Drainage Technician'],
@@ -84,13 +183,20 @@ const extractDescriptionPhrases = (description = '') => {
   const phrases = segments.flatMap((segment) => {
     const parts = segment
       .split(/,| and | or | with | for | plus | also /i)
-      .map((item) => cleanText(item))
-      .filter((item) => item.length >= 4);
+      .map((item) => sanitizeTag(item))
+      .filter(Boolean);
 
     return parts.slice(0, 8);
   });
 
-  return uniqueStrings(phrases).slice(0, 20);
+  const matchedPatterns = DESCRIPTION_PATTERN_TAGS.flatMap((pattern) => {
+    const matches = String(description || '').match(pattern) || [];
+    return matches
+      .map((item) => sanitizeTag(item))
+      .filter(Boolean);
+  });
+
+  return uniqueStrings([...phrases, ...matchedPatterns]).slice(0, 20);
 };
 
 const deriveRelatedProfessionTags = (profession = '', professionCatalog = DEFAULT_PROFESSIONS) => {
@@ -133,12 +239,18 @@ const deriveProfileTags = ({
   const descriptionTokens = tokenizeText(description).slice(0, 24);
   const relatedProfessionTags = deriveRelatedProfessionTags(profession, professionCatalog);
   const locationTags = uniqueStrings([country, state, city, town, area, ...normalizeList(serviceAreas)]);
+  const providedTags = normalizeList(tags)
+    .map((item) => sanitizeTag(item))
+    .filter(Boolean);
+  const specializationTags = normalizedSpecializations
+    .map((item) => sanitizeTag(item) || cleanText(item))
+    .filter(Boolean);
 
   return uniqueStrings([
-    profession,
+    sanitizeTag(profession) || profession,
     ...relatedProfessionTags,
-    ...normalizedSpecializations,
-    ...normalizeList(tags),
+    ...specializationTags,
+    ...providedTags,
     ...descriptionPhrases,
     ...descriptionTokens,
     ...locationTags

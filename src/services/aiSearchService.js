@@ -13,6 +13,10 @@ const OLLAMA_BASE_URL = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:8b';
 
 const normalizeText = (value = '') => String(value || '').trim().toLowerCase();
+const normalizeSearchableText = (value = '') => normalizeText(value)
+  .replace(/[^a-z0-9\s]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
 const compactObject = (value = {}) => Object.fromEntries(
   Object.entries(value).filter(([, item]) => item !== undefined && item !== null && String(item).trim() !== '')
 );
@@ -21,9 +25,9 @@ const KEYWORD_RULES = [
   { profession: 'Plumber', keywords: ['tap', 'leak', 'leakage', 'pipe', 'bathroom', 'sink', 'washbasin', 'faucet', 'flush', 'drain', 'sewer', 'geyser fitting', 'nal', 'paani ka pipe', 'plumber', 'pipeline', 'water leakage'] },
   { profession: 'Beautician', keywords: ['facial', 'massage', 'salon', 'makeup', 'bridal', 'waxing', 'spa', 'skin care', 'threading', 'pedicure', 'manicure', 'parlour', 'beauty parlour', 'make up'] },
   { profession: 'Electrician', keywords: ['electric', 'electrical', 'wiring', 'switch', 'socket', 'fan', 'light', 'power', 'mcb', 'short circuit', 'inverter', 'bijli', 'wireman', 'current problem'] },
-  { profession: 'AC Repair Technician', keywords: ['ac', 'air conditioner', 'cooling', 'compressor', 'split ac', 'window ac', 'cooler jaisa nahi chal raha', 'thanda nahi kar raha'] },
+  { profession: 'AC Repair Technician', keywords: ['ac', 'air conditioner', 'cooling', 'compressor', 'split ac', 'window ac', 'cooler jaisa nahi chal raha', 'thanda nahi kar raha', 'ac repair'] },
   { profession: 'Mobile Repair Technician', keywords: ['mobile repair', 'phone repair', 'screen replacement', 'battery replacement', 'smartphone'] },
-  { profession: 'Auto Mechanic', keywords: ['car repair', 'bike repair', 'vehicle service', 'garage', 'mechanic', 'engine', 'puncture', 'gaadi mechanic', 'bike mechanic'] },
+  { profession: 'Auto Mechanic', keywords: ['car repair', 'bike repair', 'vehicle service', 'garage', 'mechanic', 'engine', 'puncture', 'gaadi mechanic', 'bike mechanic', 'vehicle', 'cylinder', 'engine noise', 'vehicle noise', 'car noise', 'bike noise', 'silencer', 'clutch', 'gear', 'brake'] },
   { profession: 'Carpenter', keywords: ['wood', 'furniture', 'carpenter', 'wardrobe', 'cabinet', 'door fitting', 'table repair'] },
   { profession: 'Painter', keywords: ['paint', 'painting', 'wall paint', 'texture', 'putty'] },
   { profession: 'Cleaner', keywords: ['cleaning', 'deep clean', 'sanitize', 'office clean'] },
@@ -388,17 +392,41 @@ class AiSearchService {
   }
 
   keywordProfessionCandidates(problem, allowedProfessions) {
-    const normalizedProblem = normalizeText(problem);
-    const matches = KEYWORD_RULES
-      .filter((rule) => rule.keywords.some((keyword) => normalizedProblem.includes(normalizeText(keyword))))
-      .map((rule) => this.matchProfession(rule.profession, allowedProfessions))
-      .filter(Boolean);
+    const normalizedProblem = normalizeSearchableText(problem);
+    const rankedMatches = KEYWORD_RULES
+      .map((rule) => {
+        const score = rule.keywords.reduce((total, keyword) => total + this.scoreKeywordMatch(normalizedProblem, keyword), 0);
+        return {
+          profession: this.matchProfession(rule.profession, allowedProfessions),
+          score
+        };
+      })
+      .filter((item) => item.profession && item.score > 0)
+      .sort((left, right) => right.score - left.score);
 
-    if (matches.length > 0) {
-      return [...new Set(matches)];
+    return [...new Set(rankedMatches.map((item) => item.profession))];
+  }
+
+  scoreKeywordMatch(problem, keyword) {
+    const normalizedKeyword = normalizeSearchableText(keyword);
+    if (!problem || !normalizedKeyword) {
+      return 0;
     }
 
-    return [];
+    const words = normalizedKeyword.split(' ').filter(Boolean);
+    const boundaryPattern = words.length === 1
+      ? new RegExp(`(^|\\s)${this.escapeRegex(words[0])}(?=\\s|$)`, 'i')
+      : new RegExp(`(^|\\s)${words.map((word) => this.escapeRegex(word)).join('\\s+')}(?=\\s|$)`, 'i');
+
+    if (!boundaryPattern.test(problem)) {
+      return 0;
+    }
+
+    return words.length >= 2 ? words.length * 4 : (words[0].length <= 3 ? 3 : 2);
+  }
+
+  escapeRegex(value = '') {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   extractLocationFromProblem(problem) {
