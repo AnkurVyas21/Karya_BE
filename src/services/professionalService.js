@@ -7,22 +7,11 @@ const logger = require('../utils/logger');
 const { buildProfessionalSummary } = require('../utils/professionalPresenter');
 const aiSearchService = require('./aiSearchService');
 const { composeLocation, isProfessionalProfileListable } = require('../utils/accountPresenter');
+const { deriveProfileTags, normalizeList } = require('../utils/profileTagUtils');
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
 const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const uniqueStrings = (values = []) => [...new Set(values.filter(Boolean).map((value) => value.trim()).filter(Boolean))];
-const normalizeList = (value) => {
-  if (Array.isArray(value)) {
-    return uniqueStrings(value);
-  }
-
-  if (typeof value === 'string') {
-    return uniqueStrings(value.split(','));
-  }
-
-  return [];
-};
 const normalizeOptionalNumber = (value, fallback = 0) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -37,9 +26,16 @@ class ProfessionalService {
   }
 
   async upsertProfile(userId, profileData) {
+    const existingProfile = await ProfessionalProfile.findOne({ user: userId });
+    const existingProfileData = existingProfile?.toObject?.() || {};
     const update = {
       ...profileData
     };
+
+    if ('specializations' in update && !('skills' in update)) {
+      update.skills = update.specializations;
+    }
+    delete update.specializations;
 
     if ('skills' in update) {
       update.skills = normalizeList(update.skills);
@@ -53,8 +49,16 @@ class ProfessionalService {
       update.experience = normalizeOptionalNumber(update.experience, 0);
     }
 
+    if ('allowContactDisplay' in update) {
+      update.allowContactDisplay = ['true', '1', 'yes', 'on'].includes(String(update.allowContactDisplay).trim().toLowerCase())
+        || update.allowContactDisplay === true;
+    }
+
     if ('town' in update || 'area' in update || 'city' in update || 'state' in update || 'location' in update) {
-      update.location = composeLocation(update);
+      update.location = composeLocation({
+        ...existingProfileData,
+        ...update
+      });
     }
 
     if (update.charges) {
@@ -65,6 +69,23 @@ class ProfessionalService {
         emergencyCharge: Number(update.charges.emergencyCharge || 0)
       };
     }
+
+    const mergedProfile = {
+      ...existingProfileData,
+      ...update
+    };
+
+    update.tags = deriveProfileTags({
+      profession: mergedProfile.profession,
+      specializations: mergedProfile.skills,
+      description: mergedProfile.description,
+      serviceAreas: mergedProfile.serviceAreas,
+      country: mergedProfile.country,
+      state: mergedProfile.state,
+      city: mergedProfile.city,
+      town: mergedProfile.town,
+      area: mergedProfile.area
+    });
 
     const profile = await ProfessionalProfile.findOneAndUpdate(
       { user: userId },
@@ -349,13 +370,13 @@ class ProfessionalService {
       }
     }
 
-    pushRegexConditions(['profession', 'skills'], filters.profession);
+    pushRegexConditions(['profession', 'skills', 'tags'], filters.profession);
     pushRegexConditions(['location', 'city', 'town', 'area', 'state', 'serviceAreas'], filters.location);
     pushRegexConditions(['state', 'location', 'serviceAreas'], filters.state);
     pushRegexConditions(['city', 'location', 'serviceAreas'], filters.city);
     pushRegexConditions(['town', 'area', 'location', 'serviceAreas'], filters.town);
-    (filters.skills || []).forEach((skill) => pushRegexConditions(['skills', 'profession', 'description'], skill));
-    pushRegexConditions(['profession', 'skills', 'description', 'location', 'city', 'town', 'area', 'state', 'serviceAreas'], filters.query);
+    (filters.skills || []).forEach((skill) => pushRegexConditions(['skills', 'tags', 'profession', 'description'], skill));
+    pushRegexConditions(['profession', 'skills', 'tags', 'description', 'location', 'city', 'town', 'area', 'state', 'serviceAreas'], filters.query);
 
     if (orConditions.length > 0) {
       query.$or = orConditions;
@@ -378,6 +399,7 @@ class ProfessionalService {
       area: this.normalizeSearchText(profile.area),
       description: this.normalizeSearchText(profile.description),
       skills: normalizeList(profile.skills || []).map((item) => this.normalizeSearchText(item)),
+      tags: normalizeList(profile.tags || []).map((item) => this.normalizeSearchText(item)),
       serviceAreas: normalizeList(profile.serviceAreas || []).map((item) => this.normalizeSearchText(item))
     };
 
@@ -396,6 +418,7 @@ class ProfessionalService {
       profileData.description,
       combinedLocation,
       ...profileData.skills,
+      ...profileData.tags,
       ...profileData.serviceAreas
     ].filter(Boolean).join(' ');
 
@@ -417,9 +440,12 @@ class ProfessionalService {
 
     const skillsScore = (filters.skills || []).reduce((total, skill) => {
       const normalizedSkill = this.normalizeSearchText(skill);
-      const skillMatch = profileData.skills.some((item) => item === normalizedSkill)
+      const exactSkill = profileData.skills.some((item) => item === normalizedSkill) || profileData.tags.some((item) => item === normalizedSkill);
+      const partialSkill = profileData.skills.some((item) => item.includes(normalizedSkill) || normalizedSkill.includes(item))
+        || profileData.tags.some((item) => item.includes(normalizedSkill) || normalizedSkill.includes(item));
+      const skillMatch = exactSkill
         ? 6
-        : profileData.skills.some((item) => item.includes(normalizedSkill) || normalizedSkill.includes(item))
+        : partialSkill
           ? 4
           : combinedSearchable.includes(normalizedSkill)
             ? 2

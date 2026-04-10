@@ -6,6 +6,7 @@ const professionalProfileSchema = new mongoose.Schema({
   profilePicture: { type: String },
   profession: { type: String },
   skills: [{ type: String }],
+  tags: [{ type: String }],
   serviceAreas: [{ type: String }],
   experience: { type: Number },
   description: { type: String },
@@ -25,7 +26,7 @@ const professionalProfileSchema = new mongoose.Schema({
     nightCharge: { type: Number },
     emergencyCharge: { type: Number }
   },
-  allowContactDisplay: { type: Boolean, default: true },
+  allowContactDisplay: { type: Boolean, default: false },
   viewCount: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now }
 });

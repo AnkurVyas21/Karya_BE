@@ -7,24 +7,7 @@ const crypto = require('crypto');
 const logger = require('../utils/logger');
 const { buildAuthenticatedUser, composeLocation, sanitizeUser, toCleanString } = require('../utils/accountPresenter');
 const { normalizeSocialAccount } = require('../utils/socialAccountUtils');
-
-const uniqueStrings = (values = []) => [...new Set(
-  values
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-)];
-
-const normalizeList = (value) => {
-  if (Array.isArray(value)) {
-    return uniqueStrings(value);
-  }
-
-  if (typeof value === 'string') {
-    return uniqueStrings(value.split(','));
-  }
-
-  return [];
-};
+const { deriveProfileTags, normalizeList } = require('../utils/profileTagUtils');
 
 class AuthService {
   async signup(userData) {
@@ -45,6 +28,9 @@ class AuthService {
       pincode = '',
       serviceAreas = [],
       skills = [],
+      specializations = [],
+      description = '',
+      allowContactDisplay = false,
       socialAccount = null
     } = userData;
 
@@ -92,9 +78,23 @@ class AuthService {
     await user.save();
 
     if (role === 'professional') {
-      const normalizedSkills = normalizeList(skills);
+      const normalizedSkills = normalizeList(specializations).length
+        ? normalizeList(specializations)
+        : normalizeList(skills);
       const normalizedServiceAreas = normalizeList(serviceAreas);
       const location = composeLocation({ town, area, city, state });
+      const normalizedDescription = toCleanString(description);
+      const tags = deriveProfileTags({
+        profession,
+        specializations: normalizedSkills,
+        description: normalizedDescription,
+        serviceAreas: normalizedServiceAreas,
+        country,
+        state,
+        city,
+        town,
+        area
+      });
 
       await ProfessionalProfile.findOneAndUpdate(
         { user: user._id },
@@ -102,8 +102,9 @@ class AuthService {
           $setOnInsert: {
             user: user._id,
             profession: toCleanString(profession),
-            description: `${firstName} ${lastName} is available on Karya.`,
+            description: normalizedDescription,
             skills: normalizedSkills,
+            tags,
             serviceAreas: normalizedServiceAreas,
             country: String(country || 'India').trim() || 'India',
             state: String(state || '').trim(),
@@ -113,7 +114,7 @@ class AuthService {
             area: String(area || '').trim(),
             pincode: String(pincode || '').trim(),
             location,
-            allowContactDisplay: true
+            allowContactDisplay: Boolean(allowContactDisplay)
           }
         },
         { upsert: true, new: true }
@@ -201,7 +202,8 @@ class AuthService {
             area: '',
             pincode: '',
             location: '',
-            allowContactDisplay: true
+            tags: [],
+            allowContactDisplay: false
           }
         },
         { upsert: true, new: true }
@@ -290,6 +292,7 @@ class AuthService {
     }
 
     if (user.role === 'professional') {
+      const existingProfessionalProfile = await ProfessionalProfile.findOne({ user: userId });
       const nextLocationState = {
         country: 'country' in userUpdates ? userUpdates.country : user.country,
         state: 'state' in userUpdates ? userUpdates.state : user.state,
@@ -308,6 +311,21 @@ class AuthService {
         professionalUpdates.profession = toCleanString(payload.profession);
       }
 
+      const nextProfession = 'profession' in professionalUpdates
+        ? professionalUpdates.profession
+        : existingProfessionalProfile?.profession || '';
+      const nextSkills = existingProfessionalProfile?.skills || [];
+      const nextDescription = existingProfessionalProfile?.description || '';
+      const nextServiceAreas = existingProfessionalProfile?.serviceAreas || [];
+
+      professionalUpdates.tags = deriveProfileTags({
+        profession: nextProfession,
+        specializations: nextSkills,
+        description: nextDescription,
+        serviceAreas: nextServiceAreas,
+        ...nextLocationState
+      });
+
       await ProfessionalProfile.findOneAndUpdate(
         { user: userId },
         {
@@ -315,9 +333,10 @@ class AuthService {
           $setOnInsert: {
             user: userId,
             skills: [],
+            tags: [],
             serviceAreas: [],
             description: '',
-            allowContactDisplay: true
+            allowContactDisplay: false
           }
         },
         { upsert: true, new: true, runValidators: true }

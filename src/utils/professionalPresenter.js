@@ -18,6 +18,8 @@ const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Se
     mobile: profile.allowContactDisplay ? toVisibleMobile(user.mobile) || null : null,
     profession: profile.profession || '',
     skills: profile.skills || [],
+    specializations: profile.skills || [],
+    tags: profile.tags || [],
     serviceAreas: profile.serviceAreas || [],
     experience: profile.experience || 0,
     description: profile.description || '',

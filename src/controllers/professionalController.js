@@ -4,6 +4,14 @@ const Review = require('../models/Review');
 const Bookmark = require('../models/Bookmark');
 const User = require('../models/User');
 
+const parseBooleanLike = (value) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  return ['true', '1', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+};
+
 const createProfile = async (req, res) => {
   try {
     const profileData = {
@@ -11,6 +19,10 @@ const createProfile = async (req, res) => {
       profilePicture: req.files.profilePicture ? req.files.profilePicture[0].path : null,
       certificates: req.files.certificates ? req.files.certificates.map(f => f.path) : []
     };
+    if ('showContactNumber' in profileData) {
+      profileData.allowContactDisplay = parseBooleanLike(profileData.showContactNumber);
+      delete profileData.showContactNumber;
+    }
     const profile = await professionalService.upsertProfile(req.user._id, profileData);
     res.status(201).json({ success: true, data: profile });
   } catch (error) {
@@ -163,7 +175,7 @@ const updateProfile = async (req, res) => {
     }
 
     if ('showContactNumber' in payload) {
-      payload.allowContactDisplay = Boolean(payload.showContactNumber);
+      payload.allowContactDisplay = parseBooleanLike(payload.showContactNumber);
       delete payload.showContactNumber;
     }
 

@@ -18,12 +18,12 @@ const compactObject = (value = {}) => Object.fromEntries(
 );
 
 const KEYWORD_RULES = [
-  { profession: 'Plumber', keywords: ['tap', 'leak', 'leakage', 'pipe', 'bathroom', 'sink', 'washbasin', 'faucet', 'flush', 'drain', 'sewer', 'geyser fitting'] },
-  { profession: 'Beautician', keywords: ['facial', 'massage', 'salon', 'makeup', 'bridal', 'waxing', 'spa', 'skin care', 'threading', 'pedicure', 'manicure'] },
-  { profession: 'Electrician', keywords: ['electric', 'electrical', 'wiring', 'switch', 'socket', 'fan', 'light', 'power', 'mcb', 'short circuit', 'inverter'] },
-  { profession: 'AC Repair Technician', keywords: ['ac', 'air conditioner', 'cooling', 'compressor', 'split ac', 'window ac'] },
+  { profession: 'Plumber', keywords: ['tap', 'leak', 'leakage', 'pipe', 'bathroom', 'sink', 'washbasin', 'faucet', 'flush', 'drain', 'sewer', 'geyser fitting', 'nal', 'paani ka pipe', 'plumber', 'pipeline', 'water leakage'] },
+  { profession: 'Beautician', keywords: ['facial', 'massage', 'salon', 'makeup', 'bridal', 'waxing', 'spa', 'skin care', 'threading', 'pedicure', 'manicure', 'parlour', 'beauty parlour', 'make up'] },
+  { profession: 'Electrician', keywords: ['electric', 'electrical', 'wiring', 'switch', 'socket', 'fan', 'light', 'power', 'mcb', 'short circuit', 'inverter', 'bijli', 'wireman', 'current problem'] },
+  { profession: 'AC Repair Technician', keywords: ['ac', 'air conditioner', 'cooling', 'compressor', 'split ac', 'window ac', 'cooler jaisa nahi chal raha', 'thanda nahi kar raha'] },
   { profession: 'Mobile Repair Technician', keywords: ['mobile repair', 'phone repair', 'screen replacement', 'battery replacement', 'smartphone'] },
-  { profession: 'Auto Mechanic', keywords: ['car repair', 'bike repair', 'vehicle service', 'garage', 'mechanic', 'engine', 'puncture'] },
+  { profession: 'Auto Mechanic', keywords: ['car repair', 'bike repair', 'vehicle service', 'garage', 'mechanic', 'engine', 'puncture', 'gaadi mechanic', 'bike mechanic'] },
   { profession: 'Carpenter', keywords: ['wood', 'furniture', 'carpenter', 'wardrobe', 'cabinet', 'door fitting', 'table repair'] },
   { profession: 'Painter', keywords: ['paint', 'painting', 'wall paint', 'texture', 'putty'] },
   { profession: 'Cleaner', keywords: ['cleaning', 'deep clean', 'sanitize', 'office clean'] },
@@ -36,10 +36,10 @@ const KEYWORD_RULES = [
   { profession: 'Videographer', keywords: ['videographer', 'video shoot', 'reel shoot', 'cinematic'] },
   { profession: 'Caterer', keywords: ['caterer', 'food service', 'party food', 'event food'] },
   { profession: 'Event Planner', keywords: ['event planner', 'wedding planner', 'event management', 'birthday setup'] },
-  { profession: 'Architect', keywords: ['architect', 'architecture', 'architectural', 'house design', 'home design', 'building design', 'floor plan', 'house plan', 'elevation design', 'blueprint', 'construction drawing', 'map approval'] },
-  { profession: 'Interior Designer', keywords: ['interior design', 'interior designer', 'room design', 'kitchen design', 'modular kitchen', 'living room design', 'bedroom design', 'home interior'] },
-  { profession: 'Web Developer', keywords: ['website', 'web app', 'frontend', 'landing page', 'portfolio site', 'shopify', 'wordpress'] },
-  { profession: 'Developer', keywords: ['developer', 'app development', 'software development', 'coding', 'bug fix', 'build app'] },
+  { profession: 'Architect', keywords: ['architect', 'architecture', 'architectural', 'house design', 'home design', 'building design', 'floor plan', 'house plan', 'elevation design', 'blueprint', 'construction drawing', 'map approval', 'ghar ka naksha', 'house map'] },
+  { profession: 'Interior Designer', keywords: ['interior design', 'interior designer', 'room design', 'kitchen design', 'modular kitchen', 'living room design', 'bedroom design', 'home interior', 'ghar ka interior'] },
+  { profession: 'Web Developer', keywords: ['website', 'web app', 'frontend', 'landing page', 'portfolio site', 'shopify', 'wordpress', 'website banana', 'site banana'] },
+  { profession: 'Developer', keywords: ['developer', 'app development', 'software development', 'coding', 'bug fix', 'build app', 'app banana'] },
   { profession: 'Software Engineer', keywords: ['software engineer', 'system design', 'backend', 'api development'] },
   { profession: 'DevOps Engineer', keywords: ['deployment', 'server', 'devops', 'cloud', 'ci/cd', 'docker', 'kubernetes'] },
   { profession: 'Designer', keywords: ['branding', 'creative', 'mockup', 'general design'] },
@@ -133,6 +133,7 @@ class AiSearchService {
 
     return [
       'You map a user service request into structured search filters for a local-services marketplace.',
+      'The user may write in English, Hindi, Hinglish, or a mix of local-language words. Detect the language automatically and infer intent regardless of script.',
       'Choose profession values only from this exact allowed list:',
       professionList,
       'If the problem mentions a city/state/country/town, use that.',
