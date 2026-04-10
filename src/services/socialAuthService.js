@@ -1,7 +1,8 @@
 const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const logger = require('../utils/logger');
+const authService = require('./authService');
+const { normalizeSocialAccount, uniqueSocialAccounts } = require('../utils/socialAccountUtils');
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 const pendingStates = new Map();
@@ -16,24 +17,6 @@ const cleanupExpiredStates = () => {
 };
 
 setInterval(cleanupExpiredStates, STATE_TTL_MS).unref();
-
-const uniqueSocialAccounts = (accounts = []) => {
-  const seen = new Set();
-  return accounts.filter((account) => {
-    const key = `${account.provider}:${account.providerId}`;
-    if (!account.provider || !account.providerId || seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-};
-
-const sanitizeUser = (user) => {
-  const plain = typeof user?.toObject === 'function' ? user.toObject() : { ...(user || {}) };
-  delete plain.password;
-  return plain;
-};
 
 const splitDisplayName = (displayName = '') => {
   const parts = String(displayName || '').trim().split(/\s+/).filter(Boolean);
@@ -143,6 +126,7 @@ class SocialAuthService {
   createAuthorizationUrl(provider, req, options = {}) {
     const config = this.ensureProvider(provider);
     const intent = options.intent === 'signup' ? 'signup' : 'login';
+    const signupRole = options.signupRole === 'professional' ? 'professional' : 'user';
     const frontendOrigin = String(options.frontendOrigin || '').trim();
     if (!frontendOrigin) {
       throw new Error('Missing frontend origin for social login');
@@ -161,6 +145,7 @@ class SocialAuthService {
     const stateEntry = {
       provider,
       intent,
+      signupRole,
       frontendOrigin,
       returnUrl: String(options.returnUrl || '').trim(),
       expiresAt: Date.now() + STATE_TTL_MS
@@ -241,13 +226,28 @@ class SocialAuthService {
     }
 
     if (stateEntry.intent === 'signup') {
+      let user = await this.findUserForSocialProfile(normalizedProfile);
+      if (user && user.role !== stateEntry.signupRole) {
+        throw new Error(`This social account is already linked to a ${user.role === 'professional' ? 'provider' : 'customer'} account`);
+      }
+
+      if (!user) {
+        user = await authService.registerSocialUser(normalizedProfile, {
+          role: stateEntry.signupRole
+        });
+      }
+
+      const session = await authService.buildAuthenticatedSession(user);
+      logger.info(`Social signup successful: ${user._id} via ${provider}`);
+
       return {
         targetOrigin: stateEntry.frontendOrigin,
         payload: {
-          type: 'profile',
+          type: 'authenticated',
           provider,
-          profile: normalizedProfile,
-          message: `${config.label} details fetched. Review them and complete signup.`
+          token: session.token,
+          user: session.user,
+          returnUrl: stateEntry.returnUrl
         }
       };
     }
@@ -265,7 +265,7 @@ class SocialAuthService {
       };
     }
 
-    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const session = await authService.buildAuthenticatedSession(user);
     logger.info(`Social login successful: ${user._id} via ${provider}`);
 
     return {
@@ -273,8 +273,8 @@ class SocialAuthService {
       payload: {
         type: 'authenticated',
         provider,
-        token,
-        user: sanitizeUser(user),
+        token: session.token,
+        user: session.user,
         returnUrl: stateEntry.returnUrl
       }
     };
@@ -384,17 +384,6 @@ class SocialAuthService {
     throw new Error('Unsupported social provider');
   }
 
-  normalizeSocialAccount(account = {}) {
-    return {
-      provider: String(account.provider || '').trim(),
-      providerId: String(account.providerId || '').trim(),
-      email: String(account.email || '').trim().toLowerCase(),
-      displayName: String(account.displayName || '').trim(),
-      avatarUrl: String(account.avatarUrl || '').trim(),
-      profileUrl: String(account.profileUrl || '').trim()
-    };
-  }
-
   async attachSocialAccount(user, socialProfile) {
     const nextAccounts = uniqueSocialAccounts([
       ...(Array.isArray(user.socialAccounts) ? user.socialAccounts.map((account) => ({
@@ -405,7 +394,7 @@ class SocialAuthService {
         avatarUrl: account.avatarUrl,
         profileUrl: account.profileUrl
       })) : []),
-      this.normalizeSocialAccount({
+      normalizeSocialAccount({
         provider: socialProfile.provider,
         providerId: socialProfile.providerId,
         email: socialProfile.email,
@@ -507,6 +496,5 @@ class SocialAuthService {
 }
 
 module.exports = {
-  socialAuthService: new SocialAuthService(),
-  sanitizeUser
+  socialAuthService: new SocialAuthService()
 };

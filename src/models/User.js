@@ -3,9 +3,10 @@ const mongoose = require('mongoose');
 const userSchema = new mongoose.Schema({
   firstName: { type: String, required: true },
   lastName: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
-  mobile: { type: String, required: true, unique: true },
+  email: { type: String, unique: true, sparse: true, default: null },
+  mobile: { type: String, unique: true, sparse: true, default: null },
   password: { type: String, required: true },
+  passwordSetupRequired: { type: Boolean, default: false },
   socialAccounts: [{
     provider: { type: String, enum: ['google', 'facebook', 'linkedin', 'x'], required: true },
     providerId: { type: String, required: true },

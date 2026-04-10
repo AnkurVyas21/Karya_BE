@@ -6,19 +6,12 @@ const OpenAI = require('openai');
 const logger = require('../utils/logger');
 const { buildProfessionalSummary } = require('../utils/professionalPresenter');
 const aiSearchService = require('./aiSearchService');
+const { composeLocation, isProfessionalProfileListable } = require('../utils/accountPresenter');
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
 const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const uniqueStrings = (values = []) => [...new Set(values.filter(Boolean).map((value) => value.trim()).filter(Boolean))];
-const buildStructuredLocation = ({ town = '', area = '', city = '', state = '', location = '' }) => {
-  const computed = [town || area, city, state]
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-    .join(', ');
-
-  return computed || String(location || '').trim();
-};
 const normalizeList = (value) => {
   if (Array.isArray(value)) {
     return uniqueStrings(value);
@@ -61,7 +54,7 @@ class ProfessionalService {
     }
 
     if ('town' in update || 'area' in update || 'city' in update || 'state' in update || 'location' in update) {
-      update.location = buildStructuredLocation(update);
+      update.location = composeLocation(update);
     }
 
     if (update.charges) {
@@ -130,6 +123,7 @@ class ProfessionalService {
       .sort({ createdAt: -1 });
 
     const scoredProfiles = candidates
+      .filter((profile) => isProfessionalProfileListable(profile))
       .map((profile) => ({
         profile,
         ranking: this.scoreProfessionalProfile(profile, normalizedFilters)

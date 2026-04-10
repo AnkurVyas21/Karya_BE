@@ -5,7 +5,8 @@ const OTPVerification = require('../models/OTPVerification');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
-const { socialAuthService, sanitizeUser } = require('./socialAuthService');
+const { buildAuthenticatedUser, composeLocation, sanitizeUser, toCleanString } = require('../utils/accountPresenter');
+const { normalizeSocialAccount } = require('../utils/socialAccountUtils');
 
 const uniqueStrings = (values = []) => [...new Set(
   values
@@ -23,10 +24,6 @@ const normalizeList = (value) => {
   }
 
   return [];
-};
-
-const buildLocation = ({ town = '', area = '', city = '', state = '' }) => {
-  return [town || area, city, state].map((value) => String(value || '').trim()).filter(Boolean).join(', ');
 };
 
 class AuthService {
@@ -50,15 +47,13 @@ class AuthService {
       skills = [],
       socialAccount = null
     } = userData;
-    
-    // Check if user already exists
-    const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
-    if (existingUser) {
-      throw new Error('User with this email or mobile already exists');
-    }
+
+    const normalizedEmail = this.normalizeEmail(email);
+    const normalizedMobile = this.normalizeMobile(mobile);
+    await this.ensureContactUniqueness({ email: normalizedEmail, mobile: normalizedMobile });
 
     const normalizedSocialAccount = socialAccount
-      ? socialAuthService.normalizeSocialAccount(socialAccount)
+      ? normalizeSocialAccount(socialAccount)
       : null;
 
     if (normalizedSocialAccount?.provider && normalizedSocialAccount?.providerId) {
@@ -77,10 +72,10 @@ class AuthService {
     
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new User({
-      firstName,
-      lastName,
-      email,
-      mobile,
+      firstName: toCleanString(firstName),
+      lastName: toCleanString(lastName),
+      email: normalizedEmail,
+      mobile: normalizedMobile,
       password: hashedPassword,
       socialAccounts: normalizedSocialAccount?.provider && normalizedSocialAccount?.providerId
         ? [normalizedSocialAccount]
@@ -99,14 +94,14 @@ class AuthService {
     if (role === 'professional') {
       const normalizedSkills = normalizeList(skills);
       const normalizedServiceAreas = normalizeList(serviceAreas);
-      const location = buildLocation({ town, area, city, state });
+      const location = composeLocation({ town, area, city, state });
 
       await ProfessionalProfile.findOneAndUpdate(
         { user: user._id },
         {
           $setOnInsert: {
             user: user._id,
-            profession: profession || 'Professional',
+            profession: toCleanString(profession),
             description: `${firstName} ${lastName} is available on Karya.`,
             skills: normalizedSkills,
             serviceAreas: normalizedServiceAreas,
@@ -140,21 +135,196 @@ class AuthService {
       });
       // If OTP sending fails, delete the user to prevent partial signup
       await User.findByIdAndDelete(user._id);
+      await ProfessionalProfile.findOneAndDelete({ user: user._id });
       throw error;
     }
     return sanitizeUser(user);
   }
 
   async login(identifier, password) {
-    const user = await User.findOne({
-      $or: [{ email: identifier }, { mobile: identifier }]
-    });
+    const user = await this.findUserByIdentifier(identifier);
     if (!user || !(await bcrypt.compare(password, user.password))) {
       throw new Error('Invalid credentials');
     }
-    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+    const session = await this.buildAuthenticatedSession(user);
     logger.info(`User logged in: ${user._id}`);
-    return { user: sanitizeUser(user), token };
+    return session;
+  }
+
+  async registerSocialUser(socialProfile, options = {}) {
+    const role = options.role === 'professional' ? 'professional' : 'user';
+    const firstName = toCleanString(socialProfile.firstName) || this.extractNameParts(socialProfile.displayName).firstName || 'Karya';
+    const lastName = toCleanString(socialProfile.lastName) || this.extractNameParts(socialProfile.displayName).lastName || 'Member';
+    const email = this.normalizeEmail(socialProfile.email) || this.buildSocialPlaceholderEmail(socialProfile);
+    const mobile = this.normalizeMobile(socialProfile.mobile) || this.buildSocialPlaceholderMobile(socialProfile);
+
+    await this.ensureContactUniqueness({ email, mobile });
+
+    const password = crypto.randomBytes(32).toString('hex');
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = new User({
+      firstName,
+      lastName,
+      email,
+      mobile,
+      password: hashedPassword,
+      passwordSetupRequired: true,
+      role,
+      isVerified: true,
+      socialAccounts: [normalizeSocialAccount({
+        provider: socialProfile.provider,
+        providerId: socialProfile.providerId,
+        email: socialProfile.email,
+        displayName: socialProfile.displayName || [firstName, lastName].filter(Boolean).join(' ').trim(),
+        avatarUrl: socialProfile.avatarUrl,
+        profileUrl: socialProfile.profileUrl
+      })]
+    });
+    await user.save();
+
+    if (role === 'professional') {
+      await ProfessionalProfile.findOneAndUpdate(
+        { user: user._id },
+        {
+          $setOnInsert: {
+            user: user._id,
+            profession: '',
+            skills: [],
+            serviceAreas: [],
+            description: '',
+            country: 'India',
+            state: '',
+            addressLine: '',
+            city: '',
+            town: '',
+            area: '',
+            pincode: '',
+            location: '',
+            allowContactDisplay: true
+          }
+        },
+        { upsert: true, new: true }
+      );
+    }
+
+    logger.info(`Social user registered: ${user._id}`);
+    return user;
+  }
+
+  async buildAuthenticatedSession(user) {
+    const professionalProfile = user.role === 'professional'
+      ? await ProfessionalProfile.findOne({ user: user._id })
+      : null;
+    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+    return {
+      user: buildAuthenticatedUser(user, professionalProfile),
+      token
+    };
+  }
+
+  async getCurrentUserProfile(userId) {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const professionalProfile = user.role === 'professional'
+      ? await ProfessionalProfile.findOne({ user: userId })
+      : null;
+
+    return buildAuthenticatedUser(user, professionalProfile);
+  }
+
+  async updateCurrentUserProfile(userId, payload = {}) {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const userUpdates = {};
+    const nextEmail = 'email' in payload ? this.normalizeEmail(payload.email) : user.email;
+    const nextMobile = 'mobile' in payload ? this.normalizeMobile(payload.mobile) : user.mobile;
+
+    await this.ensureContactUniqueness({
+      email: nextEmail,
+      mobile: nextMobile,
+      excludeUserId: userId
+    });
+
+    if ('firstName' in payload) {
+      userUpdates.firstName = toCleanString(payload.firstName);
+    }
+
+    if ('lastName' in payload) {
+      userUpdates.lastName = toCleanString(payload.lastName);
+    }
+
+    if ('email' in payload) {
+      userUpdates.email = nextEmail;
+    }
+
+    if ('mobile' in payload) {
+      userUpdates.mobile = nextMobile;
+    }
+
+    ['country', 'state', 'city', 'town', 'area', 'addressLine', 'pincode'].forEach((field) => {
+      if (field in payload) {
+        userUpdates[field] = toCleanString(payload[field]);
+      }
+    });
+
+    if ('password' in payload) {
+      const password = String(payload.password || '');
+      if (password.length < 6) {
+        throw new Error('Password must be at least 6 characters long');
+      }
+
+      userUpdates.password = await bcrypt.hash(password, 10);
+      userUpdates.passwordSetupRequired = false;
+    }
+
+    if (Object.keys(userUpdates).length > 0) {
+      await User.findByIdAndUpdate(userId, userUpdates, { runValidators: true });
+    }
+
+    if (user.role === 'professional') {
+      const nextLocationState = {
+        country: 'country' in userUpdates ? userUpdates.country : user.country,
+        state: 'state' in userUpdates ? userUpdates.state : user.state,
+        city: 'city' in userUpdates ? userUpdates.city : user.city,
+        town: 'town' in userUpdates ? userUpdates.town : user.town,
+        area: 'area' in userUpdates ? userUpdates.area : user.area,
+        addressLine: 'addressLine' in userUpdates ? userUpdates.addressLine : user.addressLine,
+        pincode: 'pincode' in userUpdates ? userUpdates.pincode : user.pincode
+      };
+      const professionalUpdates = {
+        ...nextLocationState,
+        location: composeLocation(nextLocationState)
+      };
+
+      if ('profession' in payload) {
+        professionalUpdates.profession = toCleanString(payload.profession);
+      }
+
+      await ProfessionalProfile.findOneAndUpdate(
+        { user: userId },
+        {
+          $set: professionalUpdates,
+          $setOnInsert: {
+            user: userId,
+            skills: [],
+            serviceAreas: [],
+            description: '',
+            allowContactDisplay: true
+          }
+        },
+        { upsert: true, new: true, runValidators: true }
+      );
+    }
+
+    return this.getCurrentUserProfile(userId);
   }
 
   async verifyOTP(identifier, otp, type) {
@@ -283,6 +453,93 @@ class AuthService {
     await OTPVerification.deleteMany({ user: user._id, type });
     await this.sendOTP(user, type);
     return true;
+  }
+
+  normalizeEmail(value) {
+    const email = toCleanString(value).toLowerCase();
+    return email || null;
+  }
+
+  normalizeMobile(value) {
+    const digits = String(value || '').replace(/[^\d]/g, '');
+    return digits || null;
+  }
+
+  extractNameParts(displayName = '') {
+    const parts = String(displayName || '').trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) {
+      return { firstName: '', lastName: '' };
+    }
+
+    return {
+      firstName: parts[0],
+      lastName: parts.slice(1).join(' ')
+    };
+  }
+
+  buildSocialPlaceholderEmail(socialProfile = {}) {
+    const provider = toCleanString(socialProfile.provider || 'social').toLowerCase();
+    const providerId = this.buildSafeSocialId(socialProfile.providerId);
+    return `${provider}-${providerId}@social.karya.local`;
+  }
+
+  buildSocialPlaceholderMobile(socialProfile = {}) {
+    const provider = toCleanString(socialProfile.provider || 'social').toLowerCase();
+    const providerId = this.buildSafeSocialId(socialProfile.providerId);
+    return `social-${provider}-${providerId}`;
+  }
+
+  buildSafeSocialId(value) {
+    const safeValue = toCleanString(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return safeValue || crypto.randomBytes(8).toString('hex');
+  }
+
+  async ensureContactUniqueness({ email = null, mobile = null, excludeUserId = null } = {}) {
+    const checks = [];
+    const normalizedEmail = this.normalizeEmail(email);
+    const normalizedMobile = this.normalizeMobile(mobile);
+
+    if (normalizedEmail) {
+      checks.push({ email: normalizedEmail });
+    }
+
+    if (normalizedMobile) {
+      checks.push({ mobile: normalizedMobile });
+    }
+
+    if (!checks.length) {
+      return;
+    }
+
+    const query = { $or: checks };
+    if (excludeUserId) {
+      query._id = { $ne: excludeUserId };
+    }
+
+    const existingUser = await User.findOne(query);
+    if (existingUser) {
+      throw new Error('User with this email or mobile already exists');
+    }
+  }
+
+  async findUserByIdentifier(identifier) {
+    const normalizedEmail = this.normalizeEmail(identifier);
+    const normalizedMobile = this.normalizeMobile(identifier);
+    const checks = [];
+
+    if (normalizedEmail) {
+      checks.push({ email: normalizedEmail });
+    }
+
+    if (normalizedMobile) {
+      checks.push({ mobile: normalizedMobile });
+    }
+
+    if (!checks.length) {
+      return null;
+    }
+
+    return User.findOne({ $or: checks });
   }
 }
 

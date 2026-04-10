@@ -51,11 +51,37 @@ const resendOTP = async (req, res) => {
   }
 };
 
+const getCurrentUser = async (req, res) => {
+  try {
+    const user = await authService.getCurrentUserProfile(req.user._id);
+    res.json({
+      success: true,
+      data: user
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const updateCurrentUser = async (req, res) => {
+  try {
+    const user = await authService.updateCurrentUserProfile(req.user._id, req.body);
+    res.json({
+      success: true,
+      message: 'Profile updated',
+      data: user
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const startSocialAuth = async (req, res) => {
   const frontendOrigin = String(req.query.frontendOrigin || '').trim();
   try {
     const authorizationUrl = socialAuthService.createAuthorizationUrl(req.params.provider, req, {
       intent: req.query.intent,
+      signupRole: req.query.signupRole,
       frontendOrigin,
       returnUrl: req.query.returnUrl
     });
@@ -86,4 +112,13 @@ const handleSocialCallback = async (req, res) => {
   }
 };
 
-module.exports = { signup, login, verifyOTP, resendOTP, startSocialAuth, handleSocialCallback };
+module.exports = {
+  signup,
+  login,
+  verifyOTP,
+  resendOTP,
+  getCurrentUser,
+  updateCurrentUser,
+  startSocialAuth,
+  handleSocialCallback
+};

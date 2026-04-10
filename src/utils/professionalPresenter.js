@@ -1,10 +1,12 @@
 const toCurrency = (value) => (typeof value === 'number' ? value : 0);
+const { getProfileCompletionState, toVisibleEmail, toVisibleMobile } = require('./accountPresenter');
 
 const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Set() }) => {
   const user = profile.user || {};
   const charges = profile.charges || {};
   const rating = reviewStats.averageRating || 0;
   const reviewCount = reviewStats.reviewCount || 0;
+  const completion = getProfileCompletionState(user, profile);
 
   return {
     id: profile._id.toString(),
@@ -12,8 +14,8 @@ const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Se
     firstName: user.firstName || '',
     lastName: user.lastName || '',
     fullName: [user.firstName, user.lastName].filter(Boolean).join(' ').trim(),
-    email: profile.allowContactDisplay ? user.email : null,
-    mobile: profile.allowContactDisplay ? user.mobile : null,
+    email: profile.allowContactDisplay ? toVisibleEmail(user.email) || null : null,
+    mobile: profile.allowContactDisplay ? toVisibleMobile(user.mobile) || null : null,
     profession: profile.profession || '',
     skills: profile.skills || [],
     serviceAreas: profile.serviceAreas || [],
@@ -37,6 +39,9 @@ const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Se
       emergencyCharge: toCurrency(charges.emergencyCharge)
     },
     allowContactDisplay: Boolean(profile.allowContactDisplay),
+    missingRequiredFields: completion.missingRequiredFields,
+    isProfileComplete: completion.isProfileComplete,
+    isListed: completion.isListed,
     viewCount: profile.viewCount || 0,
     averageRating: Number(rating.toFixed(1)),
     reviewCount,

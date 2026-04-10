@@ -1,5 +1,14 @@
 const express = require('express');
-const { signup, login, verifyOTP, resendOTP, startSocialAuth, handleSocialCallback } = require('../controllers/authController');
+const {
+  signup,
+  login,
+  verifyOTP,
+  resendOTP,
+  getCurrentUser,
+  updateCurrentUser,
+  startSocialAuth,
+  handleSocialCallback
+} = require('../controllers/authController');
 const authMiddleware = require('../middlewares/authMiddleware');
 const validationMiddleware = require('../middlewares/validationMiddleware');
 const Joi = require('joi');
@@ -63,10 +72,28 @@ const otpSchema = Joi.object({
   identifier: Joi.string().required() // email or mobile
 });
 
+const updateCurrentUserSchema = Joi.object({
+  firstName: Joi.string().allow('').optional(),
+  lastName: Joi.string().allow('').optional(),
+  email: Joi.string().email().allow('').optional(),
+  mobile: Joi.string().allow('').optional(),
+  password: Joi.string().min(6).allow('').optional(),
+  profession: Joi.string().allow('').optional(),
+  country: Joi.string().allow('').optional(),
+  state: Joi.string().allow('').optional(),
+  addressLine: Joi.string().allow('').optional(),
+  city: Joi.string().allow('').optional(),
+  town: Joi.string().allow('').optional(),
+  area: Joi.string().allow('').optional(),
+  pincode: Joi.string().allow('').optional()
+});
+
 router.post('/signup', validationMiddleware(signupSchema), signup);
 router.post('/login', loginRateLimiter, validationMiddleware(loginSchema), login);
 router.post('/verify-otp', validationMiddleware(otpSchema), verifyOTP);
 router.post('/resend-otp', resendOTP);
+router.get('/me', authMiddleware, getCurrentUser);
+router.patch('/me', authMiddleware, validationMiddleware(updateCurrentUserSchema), updateCurrentUser);
 router.get('/social/:provider/start', startSocialAuth);
 router.get('/social/:provider/callback', handleSocialCallback);
 
