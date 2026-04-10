@@ -135,7 +135,9 @@ class SocialAuthService {
   }
 
   getRedirectUri(req, provider) {
-    return `${req.protocol}://${req.get('host')}/api/auth/social/${provider}/callback`;
+    const publicBackendUrl = String(process.env.PUBLIC_BACKEND_URL || '').trim().replace(/\/$/, '');
+    const baseUrl = publicBackendUrl || `${req.protocol}://${req.get('host')}`;
+    return `${baseUrl}/api/auth/social/${provider}/callback`;
   }
 
   createAuthorizationUrl(provider, req, options = {}) {

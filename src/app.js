@@ -67,6 +67,8 @@ const detectMimeType = (buffer, filename = '') => {
   return 'application/octet-stream';
 };
 
+app.set('trust proxy', 1);
+
 app.use(cors());
 app.use(express.json());
 app.use(rateLimit({
