@@ -18,6 +18,38 @@ const normalizeOptionalNumber = (value, fallback = 0) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
+const EXPLICIT_ROLE_TERMS = [
+  'teacher',
+  'professor',
+  'lecturer',
+  'tutor',
+  'doctor',
+  'lawyer',
+  'advocate',
+  'architect',
+  'builder',
+  'mason',
+  'electrician',
+  'plumber',
+  'carpenter',
+  'mechanic',
+  'painter',
+  'designer',
+  'developer',
+  'engineer',
+  'photographer',
+  'videographer',
+  'beautician',
+  'consultant',
+  'writer',
+  'marketer',
+  'analyst',
+  'manager',
+  'security guard',
+  'driver',
+  'cleaner'
+];
+const EXPLICIT_ROLE_PATTERN = new RegExp(`\\b(?:${EXPLICIT_ROLE_TERMS.map(escapeRegExp).join('|')})\\b`, 'i');
 
 class ProfessionalService {
   async createProfile(userId, profileData) {
@@ -134,57 +166,96 @@ class ProfessionalService {
     }
 
     const professionCatalog = await professionCatalogService.getAllProfessions();
+    const professionCatalogEntries = await professionCatalogService.getAllProfessionEntries();
+    const explicitCandidates = this.extractExplicitProfessionCandidates(description, professionCatalogEntries);
     const heuristicSuggestion = inferProfessionFromText(description, professionCatalog);
 
-    if (heuristicSuggestion.profession && heuristicSuggestion.score >= 4) {
+    if (explicitCandidates.length > 0) {
       return this.finalizeProfessionSuggestion({
-        profession: heuristicSuggestion.profession,
+        profession: explicitCandidates[0],
+        matchedText: explicitCandidates[0],
+        confidence: 0.97,
+        reason: 'Matched the profession directly from the role stated in the description.',
+        status: 'confirmed',
         specializations: heuristicSuggestion.specializations,
         similarProfessions: heuristicSuggestion.similarProfessions
-      }, description, professionCatalog);
+      }, description, professionCatalog, professionCatalogEntries);
+    }
+
+    if (heuristicSuggestion.profession && heuristicSuggestion.score >= 8 && this.descriptionMentionsProfession(description, heuristicSuggestion.profession, professionCatalogEntries)) {
+      return this.finalizeProfessionSuggestion({
+        profession: heuristicSuggestion.profession,
+        matchedText: heuristicSuggestion.profession,
+        confidence: 0.82,
+        reason: 'Matched a clear profession phrase from the description.',
+        status: 'confirmed',
+        specializations: heuristicSuggestion.specializations,
+        similarProfessions: heuristicSuggestion.similarProfessions
+      }, description, professionCatalog, professionCatalogEntries);
     }
 
     if (!openai) {
       return this.finalizeProfessionSuggestion(
-        this.keywordBasedProfessionDetection(description, professionCatalog),
+        this.keywordBasedProfessionDetection(description, professionCatalog, professionCatalogEntries),
         description,
-        professionCatalog
+        professionCatalog,
+        professionCatalogEntries
       );
     }
 
-    const prompt = [
-      'You analyze a local-service provider profile description.',
-      'Find the best simple standard English profession title for what this provider actually does.',
-      `Prefer one from this existing catalog when it fits: ${professionCatalog.join(', ')}`,
-      'If none fits well, create a concise new profession title in 2 to 4 words.',
-      'Return JSON only with this shape:',
-      '{"profession":"","aliases":[""],"specializations":[""],"tags":[""],"similarProfessions":[""]}',
-      `Description: ${JSON.stringify(description)}`
-    ].join('\n');
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 250
+    let result = await this.classifyProfessionWithAi(description, professionCatalogEntries, {
+      explicitCandidates
     });
-    const rawContent = String(response.choices?.[0]?.message?.content || '{}').trim();
-    const jsonText = rawContent.startsWith('{')
-      ? rawContent
-      : rawContent.match(/\{[\s\S]*\}/)?.[0] || '{}';
-    const result = JSON.parse(jsonText);
+    let validation = this.validateProfessionSuggestion(result, description, professionCatalogEntries, explicitCandidates);
 
-    if ((!result?.profession || /^consultant$/i.test(String(result.profession || '').trim())) && heuristicSuggestion.profession) {
-      result.profession = heuristicSuggestion.profession;
-      result.specializations = normalizeList([
-        ...(result.specializations || result.skills || []),
-        ...heuristicSuggestion.specializations
-      ]);
-      result.similarProfessions = uniqueStrings([
-        ...(result.similarProfessions || []),
-        ...(heuristicSuggestion.similarProfessions || [])
-      ]);
+    if (validation.status !== 'confirmed') {
+      const retryResult = await this.classifyProfessionWithAi(description, professionCatalogEntries, {
+        explicitCandidates,
+        retry: true,
+        previousResult: result
+      });
+      const retryValidation = this.validateProfessionSuggestion(retryResult, description, professionCatalogEntries, explicitCandidates);
+
+      if (retryValidation.status === 'confirmed' || retryValidation.confidence > validation.confidence) {
+        result = retryResult;
+        validation = retryValidation;
+      }
     }
 
-    return this.finalizeProfessionSuggestion(result, description, professionCatalog);
+    if (validation.status !== 'confirmed' && heuristicSuggestion.profession && this.descriptionMentionsProfession(description, heuristicSuggestion.profession, professionCatalogEntries)) {
+      validation = this.validateProfessionSuggestion({
+        profession: heuristicSuggestion.profession,
+        confidence: 0.72,
+        matchedText: heuristicSuggestion.profession,
+        specializations: normalizeList([
+          ...(result.specializations || result.skills || []),
+          ...heuristicSuggestion.specializations
+        ]),
+        tags: result.tags || [],
+        aliases: result.aliases || [],
+        similarProfessions: uniqueStrings([
+          ...(result.similarProfessions || []),
+          ...(heuristicSuggestion.similarProfessions || [])
+        ])
+      }, description, professionCatalogEntries, explicitCandidates);
+      result = {
+        ...result,
+        profession: validation.suggestedProfession || heuristicSuggestion.profession,
+        specializations: normalizeList([
+          ...(result.specializations || result.skills || []),
+          ...heuristicSuggestion.specializations
+        ]),
+        similarProfessions: uniqueStrings([
+          ...(result.similarProfessions || []),
+          ...(heuristicSuggestion.similarProfessions || [])
+        ])
+      };
+    }
+
+    return this.finalizeProfessionSuggestion({
+      ...result,
+      ...validation
+    }, description, professionCatalog, professionCatalogEntries);
   }
 
   async getProfessionCatalog() {
@@ -298,6 +369,21 @@ class ProfessionalService {
     });
     logger.info(`AI search for problem: ${options.problem} using ${result.providerUsed}`);
     return result;
+  }
+
+  async classifyProfessionWithAi(description, professionCatalogEntries = [], options = {}) {
+    const prompt = this.buildProfessionClassifierPrompt(description, professionCatalogEntries, options);
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 300
+    });
+    const rawContent = String(response.choices?.[0]?.message?.content || '{}').trim();
+    const jsonText = rawContent.startsWith('{')
+      ? rawContent
+      : rawContent.match(/\{[\s\S]*\}/)?.[0] || '{}';
+
+    return JSON.parse(jsonText);
   }
 
   async getProfile(id, viewerId = null) {
@@ -650,8 +736,241 @@ class ProfessionalService {
       .reduce((total, token) => total + (text.includes(token) ? 3 : 0), 0);
   }
 
-  async finalizeProfessionSuggestion(rawResult, description, professionCatalog = []) {
-    const suggestedProfession = rawResult?.profession || this.extractCustomProfessionFromDescription(description) || 'Consultant';
+  buildProfessionClassifierPrompt(description, professionCatalogEntries = [], options = {}) {
+    const catalogSummary = professionCatalogEntries
+      .slice(0, 120)
+      .map((entry) => {
+        const aliases = uniqueStrings(entry.aliases || []).slice(0, 4).join(', ');
+        const tags = uniqueStrings(entry.tags || []).slice(0, 4).join(', ');
+        return `${entry.name}${aliases ? ` | aliases: ${aliases}` : ''}${tags ? ` | tags: ${tags}` : ''}`;
+      })
+      .join('\n');
+    const retryContext = options.retry
+      ? [
+          'Your previous answer was considered weak or incorrect.',
+          `Previous answer: ${JSON.stringify(options.previousResult || {})}`,
+          `Explicit role phrases seen in the description: ${(options.explicitCandidates || []).join(', ') || 'none'}`
+        ].join('\n')
+      : '';
+
+    return [
+      'You are a profession classifier.',
+      'Your job is to classify the user\'s own profession from their self-description.',
+      'Do not act like a creative assistant.',
+      'Rules:',
+      '1. Extract only the primary profession explicitly mentioned by the user.',
+      '2. Do not guess from tools, materials, actions, customers, or loosely related keywords.',
+      '3. Prefer explicit role words such as teacher, professor, doctor, lawyer, engineer, developer, plumber, electrician, etc.',
+      '4. If the profession is unclear or confidence is low, return "unknown".',
+      '5. If the text says "I am a chemistry professor", the profession must stay close to that explicit role, such as "Chemistry Professor".',
+      '6. Do not replace an explicit academic role with a service trade.',
+      'Use the catalog only when it truly matches the explicit role. If no catalog item fits, produce a short standard English profession title.',
+      'Return JSON only in this exact shape:',
+      '{"profession":"", "aliases":[""], "specializations":[""], "tags":[""], "similarProfessions":[""], "matchedText":"", "confidence":0, "reason":"", "status":"confirmed|unknown"}',
+      retryContext,
+      'Profession catalog:',
+      catalogSummary,
+      `Description: ${JSON.stringify(description)}`
+    ].filter(Boolean).join('\n');
+  }
+
+  extractExplicitProfessionCandidates(description = '', professionCatalogEntries = []) {
+    const text = String(description || '').trim();
+    if (!text) {
+      return [];
+    }
+
+    const patterns = [
+      /\b(?:i am|i'm|i am working as|i work as|working as|my profession is|my role is|currently working as)\s+(?:an?\s+)?([a-z][a-z/&+\s-]{2,80})/ig,
+      new RegExp(`\\b([a-z][a-z/&+\\s-]{0,48}\\s(?:${EXPLICIT_ROLE_TERMS.map(escapeRegExp).join('|')}))\\b`, 'ig')
+    ];
+
+    const cleanedCandidates = patterns.flatMap((pattern) => {
+      const matches = [];
+      let match = pattern.exec(text);
+
+      while (match) {
+        const cleaned = String(match[1] || '')
+          .replace(/^(?:i am|i'm|i am working as|i work as|working as|my profession is|my role is|currently working as)\s+(?:an?\s+)?/i, '')
+          .replace(/\b(?:who|that|where|because|and|but)\b.*$/i, '')
+          .replace(/\b(?:for|with|at|in)\b.*$/i, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (cleaned) {
+          matches.push(cleaned);
+        }
+        match = pattern.exec(text);
+      }
+
+      return matches;
+    });
+
+    return uniqueStrings(
+      cleanedCandidates
+        .filter((candidate) => EXPLICIT_ROLE_PATTERN.test(candidate))
+        .map((candidate) => this.resolveExplicitProfessionCandidate(candidate, professionCatalogEntries))
+    );
+  }
+
+  resolveExplicitProfessionCandidate(candidate = '', professionCatalogEntries = []) {
+    const formattedCandidate = professionCatalogService.formatProfessionName(candidate);
+    const matchedEntry = professionCatalogService.findBestProfessionMatchSync(candidate, professionCatalogEntries);
+    const hasQualifier = formattedCandidate.split(/\s+/).filter(Boolean).length > 1 && EXPLICIT_ROLE_PATTERN.test(formattedCandidate);
+
+    if (hasQualifier) {
+      return formattedCandidate;
+    }
+
+    return matchedEntry?.name || formattedCandidate;
+  }
+
+  descriptionMentionsProfession(description = '', profession = '', professionCatalogEntries = []) {
+    const normalizedDescription = this.normalizeSearchText(description);
+    const matchedEntry = professionCatalogService.findBestProfessionMatchSync(profession, professionCatalogEntries);
+    const terms = matchedEntry
+      ? professionCatalogService.getSearchTerms(matchedEntry)
+      : [profession];
+
+    return terms.some((term) => {
+      const normalizedTerm = this.normalizeSearchText(term);
+      if (!normalizedTerm) {
+        return false;
+      }
+
+      if (normalizedDescription.includes(normalizedTerm)) {
+        return true;
+      }
+
+      const tokens = normalizedTerm.split(' ').filter(Boolean);
+      return tokens.length > 1 && tokens.every((token) => normalizedDescription.includes(token));
+    });
+  }
+
+  shareSameRoleFamily(left = '', right = '') {
+    const leftNormalized = this.normalizeSearchText(left);
+    const rightNormalized = this.normalizeSearchText(right);
+    if (!leftNormalized || !rightNormalized) {
+      return false;
+    }
+
+    if (leftNormalized === rightNormalized || leftNormalized.includes(rightNormalized) || rightNormalized.includes(leftNormalized)) {
+      return true;
+    }
+
+    const leftRole = EXPLICIT_ROLE_TERMS.find((role) => leftNormalized.includes(role));
+    const rightRole = EXPLICIT_ROLE_TERMS.find((role) => rightNormalized.includes(role));
+    return Boolean(leftRole && rightRole && leftRole === rightRole);
+  }
+
+  validateProfessionSuggestion(rawResult = {}, description = '', professionCatalogEntries = [], explicitCandidates = []) {
+    const rawProfession = String(rawResult?.profession || '').trim();
+    const suggestedProfession = rawProfession && !/^unknown$/i.test(rawProfession)
+      ? this.resolveExplicitProfessionCandidate(rawProfession, professionCatalogEntries)
+      : '';
+    const matchedText = String(rawResult?.matchedText || '').trim();
+    const specializations = normalizeList(rawResult?.specializations || rawResult?.skills || []);
+    const tags = normalizeList(rawResult?.tags || []);
+    const aliases = normalizeList(rawResult?.aliases || rawResult?.localNames || []);
+    const similarProfessions = normalizeList(rawResult?.similarProfessions || []);
+    const baseConfidence = Number.isFinite(Number(rawResult?.confidence)) ? Number(rawResult.confidence) : 0;
+    const explicitMatch = explicitCandidates.find((candidate) => this.shareSameRoleFamily(candidate, suggestedProfession));
+    const strongContextMatch = suggestedProfession
+      ? this.descriptionMentionsProfession(description, suggestedProfession, professionCatalogEntries)
+      : false;
+
+    if (explicitCandidates.length > 0 && !explicitMatch) {
+      return {
+        profession: 'unknown',
+        suggestedProfession: explicitCandidates[0],
+        status: 'needs_confirmation',
+        requiresConfirmation: true,
+        confidence: Math.min(baseConfidence || 0.35, 0.45),
+        matchedText: explicitCandidates[0],
+        reason: 'The description explicitly names a different role than the detected profession.',
+        specializations,
+        tags,
+        aliases,
+        similarProfessions: uniqueStrings([explicitCandidates[0], ...similarProfessions])
+      };
+    }
+
+    if (explicitMatch && explicitMatch !== suggestedProfession) {
+      return {
+        profession: explicitMatch,
+        suggestedProfession: explicitMatch,
+        status: 'confirmed',
+        requiresConfirmation: false,
+        confidence: Math.max(baseConfidence, 0.94),
+        matchedText: matchedText || explicitMatch,
+        reason: rawResult?.reason || 'Used the explicit role stated in the description.',
+        specializations,
+        tags,
+        aliases,
+        similarProfessions
+      };
+    }
+
+    if (!suggestedProfession || !strongContextMatch || baseConfidence < 0.55) {
+      return {
+        profession: 'unknown',
+        suggestedProfession: suggestedProfession || explicitCandidates[0] || '',
+        status: suggestedProfession || explicitCandidates[0] ? 'needs_confirmation' : 'unknown',
+        requiresConfirmation: Boolean(suggestedProfession || explicitCandidates[0]),
+        confidence: Math.min(baseConfidence || 0.32, 0.54),
+        matchedText,
+        reason: rawResult?.reason || 'The profession could not be matched strongly enough to the description.',
+        specializations,
+        tags,
+        aliases,
+        similarProfessions: uniqueStrings([suggestedProfession, ...similarProfessions])
+      };
+    }
+
+    return {
+      profession: suggestedProfession,
+      suggestedProfession,
+      status: 'confirmed',
+      requiresConfirmation: false,
+      confidence: Math.max(baseConfidence, explicitMatch ? 0.9 : 0.72),
+      matchedText: matchedText || suggestedProfession,
+      reason: rawResult?.reason || 'Matched the profession strongly to the description.',
+      specializations,
+      tags,
+      aliases,
+      similarProfessions
+    };
+  }
+
+  async finalizeProfessionSuggestion(rawResult, description, professionCatalog = [], professionCatalogEntries = []) {
+    const updatedCatalog = await professionCatalogService.getAllProfessions();
+    const specializations = normalizeList(rawResult?.specializations || rawResult?.skills || []);
+    const status = rawResult?.status || 'unknown';
+    const requiresConfirmation = Boolean(rawResult?.requiresConfirmation);
+    const suggestedProfession = String(rawResult?.suggestedProfession || rawResult?.profession || '').trim();
+
+    if (status !== 'confirmed' || !suggestedProfession || /^unknown$/i.test(suggestedProfession)) {
+      const fallbackSuggestions = uniqueStrings([
+        suggestedProfession,
+        ...(rawResult?.similarProfessions || [])
+      ]).filter((item) => String(item || '').trim() && !/^unknown$/i.test(String(item || '').trim())).slice(0, 5);
+
+      logger.info(`Profession detection requires confirmation or is unknown for description: ${description}`);
+      return {
+        profession: 'unknown',
+        suggestedProfession: suggestedProfession || '',
+        status: requiresConfirmation ? 'needs_confirmation' : 'unknown',
+        requiresConfirmation,
+        confidence: Number(rawResult?.confidence || 0),
+        matchedText: rawResult?.matchedText || '',
+        reason: rawResult?.reason || 'The profession could not be confirmed from the description.',
+        aliases: normalizeList(rawResult?.aliases || []),
+        specializations,
+        tags: normalizeList(rawResult?.tags || []),
+        similarProfessions: fallbackSuggestions,
+        professions: updatedCatalog
+      };
+    }
+
     const ensuredProfession = await professionCatalogService.ensureProfession(suggestedProfession, {
       aliases: rawResult?.aliases || rawResult?.localNames || [],
       tags: [
@@ -660,14 +979,14 @@ class ProfessionalService {
       ],
       source: 'ai-detect'
     });
-    const catalogEntries = await professionCatalogService.getAllProfessionEntries();
+    const catalogEntries = professionCatalogEntries.length > 0
+      ? await professionCatalogService.getAllProfessionEntries()
+      : await professionCatalogService.getAllProfessionEntries();
     const ensuredEntry = professionCatalogService.findBestProfessionMatchSync(ensuredProfession, catalogEntries) || {
       name: ensuredProfession,
       aliases: [],
       tags: []
     };
-    const updatedCatalog = await professionCatalogService.getAllProfessions();
-    const specializations = normalizeList(rawResult?.specializations || rawResult?.skills || []);
     const similarProfessions = uniqueStrings([
       ...(rawResult?.similarProfessions || []),
       ...deriveRelatedProfessionTags(ensuredProfession, updatedCatalog)
@@ -685,6 +1004,12 @@ class ProfessionalService {
     logger.info(`Profession detected: ${ensuredProfession}`);
     return {
       profession: ensuredProfession,
+      suggestedProfession: ensuredProfession,
+      status: 'confirmed',
+      requiresConfirmation: false,
+      confidence: Number(rawResult?.confidence || 0.8),
+      matchedText: rawResult?.matchedText || ensuredProfession,
+      reason: rawResult?.reason || 'Profession confirmed from the description.',
       aliases: uniqueStrings([
         ...(rawResult?.aliases || []),
         ...(ensuredEntry.aliases || [])
@@ -700,8 +1025,7 @@ class ProfessionalService {
     const text = String(description || '').trim();
     const patterns = [
       /\b(?:i am|i'm|i work as|my profession is|my job is)\s+(?:an?\s+)?([a-z/&+\s-]{3,40})/i,
-      /\b(?:we are|we work as)\s+(?:an?\s+)?([a-z/&+\s-]{3,40})/i,
-      /\b(?:looking for|need)\s+(?:an?\s+)?([a-z/&+\s-]{3,40})/i
+      /\b(?:we are|we work as)\s+(?:an?\s+)?([a-z/&+\s-]{3,40})/i
     ];
 
     for (const pattern of patterns) {
@@ -719,22 +1043,30 @@ class ProfessionalService {
   }
 
   keywordBasedProfessionDetection(description) {
-    const inferred = inferProfessionFromText(description);
-    if (inferred.profession) {
+    const explicitCandidates = this.extractExplicitProfessionCandidates(description);
+    if (explicitCandidates.length > 0) {
       return {
-        profession: inferred.profession,
+        profession: explicitCandidates[0],
         aliases: [],
-        specializations: inferred.specializations,
-        tags: inferred.specializations,
-        similarProfessions: inferred.similarProfessions
+        confidence: 0.92,
+        matchedText: explicitCandidates[0],
+        reason: 'Matched the explicit role written in the description.',
+        status: 'confirmed',
+        specializations: [],
+        tags: [],
+        similarProfessions: []
       };
     }
 
     return {
-      profession: this.extractCustomProfessionFromDescription(description) || 'Consultant',
+      profession: 'unknown',
       aliases: [],
-      specializations: ['Customer service', 'Problem solving', 'Professional support'],
-      tags: ['Customer service', 'Problem solving', 'Professional support']
+      confidence: 0.2,
+      matchedText: '',
+      reason: 'No explicit profession could be confirmed from the description.',
+      status: 'unknown',
+      specializations: [],
+      tags: []
     };
   }
 
