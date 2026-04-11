@@ -2,6 +2,7 @@ module.exports = [
   'AC Repair Technician',
   'Architect',
   'Auto Mechanic',
+  'Barber',
   'Beautician',
   'Builder',
   'Carpenter',

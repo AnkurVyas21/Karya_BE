@@ -182,12 +182,12 @@ class ProfessionalService {
       }, description, professionCatalog, professionCatalogEntries);
     }
 
-    if (heuristicSuggestion.profession && heuristicSuggestion.score >= 8 && this.descriptionMentionsProfession(description, heuristicSuggestion.profession, professionCatalogEntries)) {
+    if (heuristicSuggestion.profession && heuristicSuggestion.score >= 6 && this.descriptionSupportsProfessionIntent(description, heuristicSuggestion.profession, professionCatalog, professionCatalogEntries)) {
       return this.finalizeProfessionSuggestion({
         profession: heuristicSuggestion.profession,
         matchedText: heuristicSuggestion.profession,
         confidence: 0.82,
-        reason: 'Matched a clear profession phrase from the description.',
+        reason: 'Mapped the described work to a standard profession.',
         status: 'confirmed',
         specializations: heuristicSuggestion.specializations,
         similarProfessions: heuristicSuggestion.similarProfessions
@@ -222,7 +222,7 @@ class ProfessionalService {
       }
     }
 
-    if (validation.status !== 'confirmed' && heuristicSuggestion.profession && this.descriptionMentionsProfession(description, heuristicSuggestion.profession, professionCatalogEntries)) {
+    if (validation.status !== 'confirmed' && heuristicSuggestion.profession && this.descriptionSupportsProfessionIntent(description, heuristicSuggestion.profession, professionCatalog, professionCatalogEntries)) {
       validation = this.validateProfessionSuggestion({
         profession: heuristicSuggestion.profession,
         confidence: 0.72,
@@ -758,13 +758,20 @@ class ProfessionalService {
       'Your job is to classify the user\'s own profession from their self-description.',
       'Do not act like a creative assistant.',
       'Rules:',
-      '1. Extract only the primary profession explicitly mentioned by the user.',
-      '2. Do not guess from tools, materials, actions, customers, or loosely related keywords.',
-      '3. Prefer explicit role words such as teacher, professor, doctor, lawyer, engineer, developer, plumber, electrician, etc.',
-      '4. If the profession is unclear or confidence is low, return "unknown".',
-      '5. If the text says "I am a chemistry professor", the profession must stay close to that explicit role, such as "Chemistry Professor".',
-      '6. Do not replace an explicit academic role with a service trade.',
-      'Use the catalog only when it truly matches the explicit role. If no catalog item fits, produce a short standard English profession title.',
+      '1. Extract only the primary profession mentioned or clearly implied by the user\'s work.',
+      '2. Convert user actions into a standard profession name when the action is clear.',
+      '3. Prefer explicit role words such as teacher, professor, doctor, lawyer, engineer, developer, plumber, electrician, etc. over weaker inferences.',
+      '4. Recognize common work descriptions, not just exact job titles.',
+      '5. Do not guess from weak, indirect, or loosely related hints.',
+      '6. Return "unknown" only when the profession is truly unclear or confidence is low.',
+      '7. If the text says "I am a chemistry professor", keep the result close to that explicit role, such as "Chemistry Professor".',
+      '8. Do not replace an explicit academic role with a service trade.',
+      'Examples:',
+      '- "I repair cars" -> "Auto Mechanic"',
+      '- "I fix vehicles" -> "Auto Mechanic"',
+      '- "I teach students chemistry" -> "Chemistry Teacher"',
+      '- "I cut hair" -> "Barber"',
+      'Use the catalog when it fits. If no catalog item fits, produce a short standard English profession title.',
       'Return JSON only in this exact shape:',
       '{"profession":"", "aliases":[""], "specializations":[""], "tags":[""], "similarProfessions":[""], "matchedText":"", "confidence":0, "reason":"", "status":"confirmed|unknown"}',
       retryContext,
@@ -846,6 +853,25 @@ class ProfessionalService {
     });
   }
 
+  descriptionSupportsProfessionIntent(description = '', profession = '', professionCatalog = [], professionCatalogEntries = []) {
+    if (this.descriptionMentionsProfession(description, profession, professionCatalogEntries)) {
+      return true;
+    }
+
+    const availableProfessions = professionCatalog.length > 0
+      ? professionCatalog
+      : professionCatalogEntries.map((entry) => entry.name);
+    const heuristicSuggestion = inferProfessionFromText(description, availableProfessions);
+    if (!heuristicSuggestion.profession || heuristicSuggestion.score < 6) {
+      return false;
+    }
+
+    const resolvedHeuristicProfession = this.resolveExplicitProfessionCandidate(heuristicSuggestion.profession, professionCatalogEntries);
+    const resolvedProfession = this.resolveExplicitProfessionCandidate(profession, professionCatalogEntries);
+
+    return this.shareSameRoleFamily(resolvedHeuristicProfession, resolvedProfession);
+  }
+
   shareSameRoleFamily(left = '', right = '') {
     const leftNormalized = this.normalizeSearchText(left);
     const rightNormalized = this.normalizeSearchText(right);
@@ -875,7 +901,7 @@ class ProfessionalService {
     const baseConfidence = Number.isFinite(Number(rawResult?.confidence)) ? Number(rawResult.confidence) : 0;
     const explicitMatch = explicitCandidates.find((candidate) => this.shareSameRoleFamily(candidate, suggestedProfession));
     const strongContextMatch = suggestedProfession
-      ? this.descriptionMentionsProfession(description, suggestedProfession, professionCatalogEntries)
+      ? this.descriptionSupportsProfessionIntent(description, suggestedProfession, professionCatalogEntries.map((entry) => entry.name), professionCatalogEntries)
       : false;
 
     if (explicitCandidates.length > 0 && !explicitMatch) {
@@ -910,7 +936,7 @@ class ProfessionalService {
       };
     }
 
-    if (!suggestedProfession || !strongContextMatch || baseConfidence < 0.55) {
+    if (!suggestedProfession || !strongContextMatch || baseConfidence < 0.45) {
       return {
         profession: 'unknown',
         suggestedProfession: suggestedProfession || explicitCandidates[0] || '',
@@ -1055,6 +1081,21 @@ class ProfessionalService {
         specializations: [],
         tags: [],
         similarProfessions: []
+      };
+    }
+
+    const inferred = inferProfessionFromText(description);
+    if (inferred.profession && inferred.score >= 6) {
+      return {
+        profession: inferred.profession,
+        aliases: [],
+        confidence: Math.min(0.84, 0.52 + (inferred.score / 40)),
+        matchedText: inferred.profession,
+        reason: 'Mapped the described work to the closest standard profession.',
+        status: 'confirmed',
+        specializations: inferred.specializations || [],
+        tags: inferred.specializations || [],
+        similarProfessions: inferred.similarProfessions || []
       };
     }
 

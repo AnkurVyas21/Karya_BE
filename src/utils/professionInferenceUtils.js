@@ -41,8 +41,18 @@ const PROFESSION_RULES = [
   },
   {
     profession: 'Auto Mechanic',
-    keywords: ['auto mechanic', 'mechanic', 'car repair', 'bike repair', 'vehicle repair', 'vehicle service', 'garage', 'engine', 'engine noise', 'cylinder', 'clutch', 'gear', 'brake', 'silencer', 'gaadi', 'gaadi mechanic', 'bike mechanic', 'मेकैनिक', 'गाड़ी', 'इंजन', 'सिलेंडर', 'ब्रेक', 'क्लच'],
+    keywords: ['auto mechanic', 'mechanic', 'car repair', 'bike repair', 'vehicle repair', 'vehicle service', 'fix vehicle', 'fix vehicles', 'fix car', 'fix cars', 'repair car', 'repair cars', 'repair bike', 'repair bikes', 'garage', 'engine', 'engine noise', 'cylinder', 'clutch', 'gear', 'brake', 'silencer', 'gaadi', 'gaadi mechanic', 'bike mechanic', 'मैकेनिक', 'गाड़ी', 'इंजन', 'सिलेंडर', 'ब्रेक', 'क्लच'],
     specializations: ['Engine repair', 'Vehicle diagnostics', 'Bike repair', 'Car servicing']
+  },
+  {
+    profession: 'Teacher',
+    keywords: ['teacher', 'teaching', 'teach', 'teach students', 'teaches students', 'school teacher', 'subject teacher', 'faculty', 'professor', 'lecturer', 'chemistry teacher', 'physics teacher', 'math teacher', 'mathematics teacher', 'science teacher', 'biology teacher', 'english teacher', 'teach chemistry', 'teach physics', 'teach maths', 'teach math', 'teach biology', 'teach english', 'शिक्षक', 'अध्यापक', 'प्रोफेसर', 'लेक्चरर'],
+    specializations: ['Teaching', 'Subject instruction', 'Student mentoring', 'Classroom teaching']
+  },
+  {
+    profession: 'Home Tutor',
+    keywords: ['home tutor', 'private tutor', 'tuition teacher', 'tuition', 'home tuition', 'personal tutor', 'coach students', 'ट्यूशन', 'ट्यूटर', 'घर पर पढ़ाना'],
+    specializations: ['Home tuition', 'One-to-one teaching', 'Exam preparation', 'Student coaching']
   },
   {
     profession: 'Painter',
@@ -61,7 +71,7 @@ const PROFESSION_RULES = [
   },
   {
     profession: 'Software Engineer',
-    keywords: ['software engineer', 'software developer', 'software development', 'app development', 'application development', 'backend', 'api development', 'mobile app', 'android app', 'ios app', 'coding', 'software', 'डेवलपर', 'सॉफ्टवेयर', 'एप डेवलपमेंट', 'एंड्रॉइड ऐप'],
+    keywords: ['software engineer', 'software developer', 'software development', 'app development', 'application development', 'backend', 'api development', 'mobile app', 'android app', 'ios app', 'coding', 'software', 'डेवलपर', 'सॉफ्टवेयर', 'ऐप डेवलपमेंट', 'एंड्रॉइड ऐप'],
     specializations: ['Software development', 'Backend development', 'App development', 'API development']
   },
   {
@@ -73,6 +83,11 @@ const PROFESSION_RULES = [
     profession: 'Beautician',
     keywords: ['beautician', 'beauty parlour', 'parlour', 'makeup', 'bridal makeup', 'facial', 'threading', 'waxing', 'pedicure', 'manicure', 'ब्यूटी पार्लर', 'मेकअप', 'फेशियल'],
     specializations: ['Makeup', 'Facial', 'Salon services', 'Bridal work']
+  },
+  {
+    profession: 'Barber',
+    keywords: ['barber', 'hair cut', 'haircut', 'cut hair', 'trim beard', 'beard trim', 'shaving', 'mens salon', 'men salon', 'hair styling', 'नाई', 'बाल काटना', 'दाढ़ी बनाना'],
+    specializations: ['Hair cutting', 'Beard trimming', 'Shaving', 'Men grooming']
   }
 ];
 
