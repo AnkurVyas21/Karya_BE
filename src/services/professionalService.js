@@ -83,6 +83,11 @@ class ProfessionalService {
 
     if ('profession' in mergedProfile) {
       mergedProfile.profession = await professionCatalogService.ensureProfession(mergedProfile.profession, {
+        aliases: mergedProfile.aliases || [],
+        tags: [
+          ...(mergedProfile.tags || []),
+          ...(mergedProfile.skills || [])
+        ],
         source: 'provider-profile'
       });
       update.profession = mergedProfile.profession;
@@ -149,11 +154,11 @@ class ProfessionalService {
 
     const prompt = [
       'You analyze a local-service provider profile description.',
-      'Find the best profession title for what this provider actually does.',
+      'Find the best simple standard English profession title for what this provider actually does.',
       `Prefer one from this existing catalog when it fits: ${professionCatalog.join(', ')}`,
       'If none fits well, create a concise new profession title in 2 to 4 words.',
       'Return JSON only with this shape:',
-      '{"profession":"","specializations":[""],"tags":[""],"similarProfessions":[""]}',
+      '{"profession":"","aliases":[""],"specializations":[""],"tags":[""],"similarProfessions":[""]}',
       `Description: ${JSON.stringify(description)}`
     ].join('\n');
     const response = await openai.chat.completions.create({
@@ -198,7 +203,26 @@ class ProfessionalService {
       skills: normalizeList(filters?.skills || [])
     };
 
-    const candidateQuery = this.buildSearchCandidateQuery(normalizedFilters);
+    const professionCatalogEntries = await professionCatalogService.getAllProfessionEntries();
+    const explicitProfessionMatch = normalizedFilters.profession
+      ? professionCatalogService.findBestProfessionMatchSync(normalizedFilters.profession, professionCatalogEntries)
+      : null;
+    const queryProfessionMatches = normalizedFilters.query
+      ? professionCatalogService.findProfessionMatchesInTextSync(normalizedFilters.query, professionCatalogEntries, 3)
+      : [];
+    const resolvedProfessionMatches = uniqueStrings([
+      ...(explicitProfessionMatch ? [explicitProfessionMatch.name] : []),
+      ...queryProfessionMatches.map((entry) => entry.name)
+    ]).map((name) => professionCatalogEntries.find((entry) => entry.name === name)).filter(Boolean);
+    const professionTerms = uniqueStrings(resolvedProfessionMatches.flatMap((entry) => professionCatalogService.getSearchTerms(entry)));
+    const searchFilters = {
+      ...normalizedFilters,
+      profession: explicitProfessionMatch?.name || normalizedFilters.profession,
+      professionCandidates: uniqueStrings(resolvedProfessionMatches.map((entry) => entry.name)),
+      professionTerms
+    };
+
+    const candidateQuery = this.buildSearchCandidateQuery(searchFilters);
     const candidates = await ProfessionalProfile.find(candidateQuery)
       .populate('user')
       .sort({ createdAt: -1 });
@@ -207,7 +231,7 @@ class ProfessionalService {
       .filter((profile) => isProfessionalProfileListable(profile))
       .map((profile) => ({
         profile,
-        ranking: this.scoreProfessionalProfile(profile, normalizedFilters)
+        ranking: this.scoreProfessionalProfile(profile, searchFilters)
       }))
       .filter(({ ranking }) => ranking.include);
 
@@ -230,7 +254,7 @@ class ProfessionalService {
     const startIndex = (pageNumber - 1) * pageSize;
     const pagedProfiles = scoredProfiles.slice(startIndex, startIndex + pageSize).map((item) => item.profile);
 
-    logger.info(`Search performed with filters: ${JSON.stringify(normalizedFilters)}`);
+    logger.info(`Search performed with filters: ${JSON.stringify(searchFilters)}`);
 
     const profileIds = pagedProfiles.map((profile) => profile._id.toString());
     const reviewStats = await this.getReviewStatsMap(profileIds);
@@ -263,7 +287,15 @@ class ProfessionalService {
       throw new Error('Problem description is required');
     }
 
-    const result = await aiSearchService.inferSearch(options);
+    const catalogEntries = await professionCatalogService.getAllProfessionEntries();
+    const result = await aiSearchService.inferSearch({
+      ...options,
+      catalogEntries,
+      allowedProfessions: uniqueStrings([
+        ...(options.allowedProfessions || []),
+        ...catalogEntries.map((entry) => entry.name)
+      ])
+    });
     logger.info(`AI search for problem: ${options.problem} using ${result.providerUsed}`);
     return result;
   }
@@ -431,6 +463,7 @@ class ProfessionalService {
     }
 
     pushRegexConditions(['profession', 'skills', 'tags'], filters.profession);
+    (filters.professionTerms || []).forEach((term) => pushRegexConditions(['profession', 'skills', 'tags', 'description'], term));
     pushRegexConditions(['location', 'city', 'town', 'area', 'state', 'serviceAreas'], filters.location);
     pushRegexConditions(['state', 'location', 'serviceAreas'], filters.state);
     pushRegexConditions(['city', 'location', 'serviceAreas'], filters.city);
@@ -489,7 +522,12 @@ class ProfessionalService {
       }
     };
 
-    markSignal('profession', this.matchWeightedText(profileData.profession, filters.profession) > 0, this.matchWeightedText(profileData.profession, filters.profession));
+    const professionScore = Math.max(
+      this.matchWeightedText(profileData.profession, filters.profession),
+      ...(filters.professionCandidates || []).map((candidate) => this.matchWeightedText(profileData.profession, candidate)),
+      ...(filters.professionTerms || []).map((term) => this.matchWeightedText(combinedSearchable, term))
+    );
+    markSignal('profession', professionScore > 0, professionScore);
     markSignal('location', this.matchWeightedText(combinedLocation, filters.location) > 0, this.matchWeightedText(combinedLocation, filters.location));
     markSignal('state', this.matchWeightedText(`${profileData.state} ${combinedLocation}`, filters.state) > 0, this.matchWeightedText(`${profileData.state} ${combinedLocation}`, filters.state));
     markSignal('city', this.matchWeightedText(`${profileData.city} ${combinedLocation}`, filters.city) > 0, this.matchWeightedText(`${profileData.city} ${combinedLocation}`, filters.city));
@@ -615,9 +653,19 @@ class ProfessionalService {
   async finalizeProfessionSuggestion(rawResult, description, professionCatalog = []) {
     const suggestedProfession = rawResult?.profession || this.extractCustomProfessionFromDescription(description) || 'Consultant';
     const ensuredProfession = await professionCatalogService.ensureProfession(suggestedProfession, {
-      aliases: rawResult?.similarProfessions || [],
+      aliases: rawResult?.aliases || rawResult?.localNames || [],
+      tags: [
+        ...(rawResult?.tags || []),
+        ...(rawResult?.specializations || rawResult?.skills || [])
+      ],
       source: 'ai-detect'
     });
+    const catalogEntries = await professionCatalogService.getAllProfessionEntries();
+    const ensuredEntry = professionCatalogService.findBestProfessionMatchSync(ensuredProfession, catalogEntries) || {
+      name: ensuredProfession,
+      aliases: [],
+      tags: []
+    };
     const updatedCatalog = await professionCatalogService.getAllProfessions();
     const specializations = normalizeList(rawResult?.specializations || rawResult?.skills || []);
     const similarProfessions = uniqueStrings([
@@ -637,6 +685,10 @@ class ProfessionalService {
     logger.info(`Profession detected: ${ensuredProfession}`);
     return {
       profession: ensuredProfession,
+      aliases: uniqueStrings([
+        ...(rawResult?.aliases || []),
+        ...(ensuredEntry.aliases || [])
+      ]),
       specializations,
       tags,
       similarProfessions,
@@ -671,14 +723,18 @@ class ProfessionalService {
     if (inferred.profession) {
       return {
         profession: inferred.profession,
+        aliases: [],
         specializations: inferred.specializations,
+        tags: inferred.specializations,
         similarProfessions: inferred.similarProfessions
       };
     }
 
     return {
       profession: this.extractCustomProfessionFromDescription(description) || 'Consultant',
-      specializations: ['Customer service', 'Problem solving', 'Professional support']
+      aliases: [],
+      specializations: ['Customer service', 'Problem solving', 'Professional support'],
+      tags: ['Customer service', 'Problem solving', 'Professional support']
     };
   }
 

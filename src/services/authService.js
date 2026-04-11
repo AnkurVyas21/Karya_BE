@@ -80,15 +80,16 @@ class AuthService {
     await user.save();
 
     if (role === 'professional') {
-      const savedProfession = await professionCatalogService.ensureProfession(profession, {
-        source: 'provider-signup'
-      });
       const normalizedSkills = normalizeList(specializations).length
         ? normalizeList(specializations)
         : normalizeList(skills);
       const normalizedServiceAreas = normalizeList(serviceAreas);
       const location = composeLocation({ town, area, city, state });
       const normalizedDescription = toCleanString(description);
+      const savedProfession = await professionCatalogService.ensureProfession(profession, {
+        tags: [...normalizedSkills, ...normalizeList(providedTags)],
+        source: 'provider-signup'
+      });
       const professionCatalog = await professionCatalogService.getAllProfessions();
       const tags = deriveProfileTags({
         profession: savedProfession,
@@ -317,6 +318,10 @@ class AuthService {
 
       if ('profession' in payload) {
         professionalUpdates.profession = await professionCatalogService.ensureProfession(payload.profession, {
+          tags: [
+            ...(existingProfessionalProfile?.skills || []),
+            ...(existingProfessionalProfile?.tags || [])
+          ],
           source: 'account-profile'
         });
       }

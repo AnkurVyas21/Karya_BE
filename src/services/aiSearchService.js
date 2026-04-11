@@ -1,6 +1,7 @@
 const logger = require('../utils/logger');
 const DEFAULT_PROFESSIONS = require('../constants/professions');
 const { PROFESSION_RULES, inferProfessionFromText } = require('../utils/professionInferenceUtils');
+const professionCatalogService = require('./professionCatalogService');
 
 const AI_PROVIDERS = {
   GEMINI: 'gemini',
@@ -14,13 +15,20 @@ const OLLAMA_BASE_URL = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:8b';
 
 const normalizeText = (value = '') => String(value || '').trim().toLowerCase();
-const normalizeSearchableText = (value = '') => normalizeText(value)
-  .replace(/[^a-z0-9\s]+/g, ' ')
+const normalizeSearchableText = (value = '') => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
   .replace(/\s+/g, ' ')
   .trim();
 const compactObject = (value = {}) => Object.fromEntries(
   Object.entries(value).filter(([, item]) => item !== undefined && item !== null && String(item).trim() !== '')
 );
+const uniqueStrings = (values = []) => [...new Set(
+  values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+)];
 
 const KEYWORD_RULES = PROFESSION_RULES.map((rule) => ({
   profession: rule.profession,
@@ -34,7 +42,7 @@ class AiSearchService {
       throw new Error('Problem description is required');
     }
 
-    const allowedProfessions = this.normalizeProfessions(options.allowedProfessions);
+    const catalogEntries = this.normalizeCatalogEntries(options.catalogEntries, options.allowedProfessions);
     const selectedLocation = this.normalizeLocation(options.selectedLocation, 'selected-filters');
     const currentLocation = this.normalizeLocation(options.currentLocation, 'current-location');
     const requestedProvider = this.normalizeProvider(options.provider);
@@ -45,9 +53,9 @@ class AiSearchService {
 
     try {
       if (requestedProvider === AI_PROVIDERS.GEMINI) {
-        rawSuggestion = await this.askGemini(problem, allowedProfessions, selectedLocation, currentLocation);
+        rawSuggestion = await this.askGemini(problem, catalogEntries, selectedLocation, currentLocation);
       } else if (requestedProvider === AI_PROVIDERS.OLLAMA) {
-        rawSuggestion = await this.askOllama(problem, allowedProfessions, selectedLocation, currentLocation);
+        rawSuggestion = await this.askOllama(problem, catalogEntries, selectedLocation, currentLocation);
       }
     } catch (error) {
       warning = error.message;
@@ -57,7 +65,7 @@ class AiSearchService {
 
     if (!rawSuggestion) {
       providerUsed = AI_PROVIDERS.FALLBACK;
-      rawSuggestion = this.keywordFallback(problem, allowedProfessions, selectedLocation, currentLocation);
+      rawSuggestion = this.keywordFallback(problem, catalogEntries, selectedLocation, currentLocation);
       if (!warning && providerUsed !== requestedProvider) {
         warning = `${requestedProvider} is not configured, so built-in matching was used.`;
       }
@@ -65,7 +73,7 @@ class AiSearchService {
 
     const normalized = this.normalizeSuggestion(rawSuggestion, {
       problem,
-      allowedProfessions,
+      catalogEntries,
       selectedLocation,
       currentLocation
     });
@@ -79,9 +87,27 @@ class AiSearchService {
     };
   }
 
-  normalizeProfessions(values) {
-    const source = Array.isArray(values) && values.length ? values : DEFAULT_PROFESSIONS;
-    return [...new Set(source.map((value) => String(value || '').trim()).filter(Boolean))];
+  normalizeCatalogEntries(catalogEntries, allowedProfessions) {
+    const source = Array.isArray(catalogEntries) && catalogEntries.length
+      ? catalogEntries
+      : (Array.isArray(allowedProfessions) && allowedProfessions.length ? allowedProfessions : DEFAULT_PROFESSIONS)
+        .map((name) => ({ name, aliases: [], tags: [] }));
+
+    return source.map((entry) => {
+      if (typeof entry === 'string') {
+        return {
+          name: String(entry).trim(),
+          aliases: [],
+          tags: []
+        };
+      }
+
+      return {
+        name: String(entry?.name || '').trim(),
+        aliases: uniqueStrings(entry?.aliases || []),
+        tags: uniqueStrings(entry?.tags || [])
+      };
+    }).filter((entry) => entry.name);
   }
 
   normalizeProvider(value) {
@@ -102,32 +128,39 @@ class AiSearchService {
     };
   }
 
-  buildPrompt(problem, allowedProfessions, selectedLocation, currentLocation) {
+  buildPrompt(problem, catalogEntries, selectedLocation, currentLocation) {
     const selectedText = JSON.stringify(compactObject(selectedLocation));
     const currentText = JSON.stringify(compactObject(currentLocation));
-    const professionList = allowedProfessions.join(', ');
+    const catalogSummary = catalogEntries
+      .slice(0, 150)
+      .map((entry) => {
+        const aliases = uniqueStrings(entry.aliases || []).slice(0, 6).join(', ');
+        const tags = uniqueStrings(entry.tags || []).slice(0, 6).join(', ');
+        return `${entry.name}${aliases ? ` | aliases: ${aliases}` : ''}${tags ? ` | tags: ${tags}` : ''}`;
+      })
+      .join('\n');
 
     return [
       'You map a user service request into structured search filters for a local-services marketplace.',
       'The user may write in English, Hindi, Hinglish, or a mix of local-language words. Detect the language automatically and infer intent regardless of script.',
-      'Choose profession values only from this exact allowed list:',
-      professionList,
-      'If the problem mentions a city/state/country/town, use that.',
+      'Choose the closest canonical profession from this catalog. Each line includes the standard English profession plus common aliases and service tags.',
+      catalogSummary,
+      'If the request mentions a city/state/country/town, use that.',
       'Otherwise prefer currentLocation, then selectedLocation, then keep country empty if nothing is known.',
       'Examples:',
       '- "I need to fix my bathroom tap" -> Plumber',
-      '- "I want to get my house design ready" -> Architect',
-      '- "I need facial massage" -> Beautician',
+      '- "bijli wala chahiye for switch repair" -> Electrician',
+      '- "wiring repair in indore" -> Electrician',
       'Return JSON only. No markdown, no explanation.',
       'JSON shape:',
-      '{"profession":"", "professions":[""], "country":"", "state":"", "city":"", "town":"", "skills":[""], "reason":"", "locationSource":"query|current-location|selected-filters|none"}',
+      '{"profession":"", "professions":[""], "skills":[""], "country":"", "state":"", "city":"", "town":"", "reason":"", "locationSource":"query|current-location|selected-filters|none"}',
       `selectedLocation=${selectedText}`,
       `currentLocation=${currentText}`,
       `problem=${JSON.stringify(problem)}`
     ].join('\n');
   }
 
-  async askGemini(problem, allowedProfessions, selectedLocation, currentLocation) {
+  async askGemini(problem, catalogEntries, selectedLocation, currentLocation) {
     if (!GEMINI_API_KEY) {
       throw new Error('Gemini API key is missing');
     }
@@ -138,7 +171,7 @@ class AiSearchService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: this.buildPrompt(problem, allowedProfessions, selectedLocation, currentLocation) }] }],
+          contents: [{ parts: [{ text: this.buildPrompt(problem, catalogEntries, selectedLocation, currentLocation) }] }],
           generationConfig: {
             temperature: 0.2,
             maxOutputTokens: 300,
@@ -157,13 +190,13 @@ class AiSearchService {
     return this.parseModelResponse(text);
   }
 
-  async askOllama(problem, allowedProfessions, selectedLocation, currentLocation) {
+  async askOllama(problem, catalogEntries, selectedLocation, currentLocation) {
     const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: OLLAMA_MODEL,
-        prompt: this.buildPrompt(problem, allowedProfessions, selectedLocation, currentLocation),
+        prompt: this.buildPrompt(problem, catalogEntries, selectedLocation, currentLocation),
         stream: false,
         format: 'json',
         options: {
@@ -198,7 +231,12 @@ class AiSearchService {
   }
 
   normalizeSuggestion(rawSuggestion = {}, context) {
-    const professions = this.normalizeProfessionList(rawSuggestion.professions, rawSuggestion.profession, context.allowedProfessions);
+    const professions = this.normalizeProfessionList(
+      rawSuggestion.professions,
+      rawSuggestion.profession,
+      context.catalogEntries,
+      context.problem
+    );
     const fallbackLocation = this.pickLocationFallback(rawSuggestion.locationSource, context.selectedLocation, context.currentLocation);
     const country = String(rawSuggestion.country || fallbackLocation.country || '').trim();
     const state = String(rawSuggestion.state || fallbackLocation.state || '').trim();
@@ -234,21 +272,26 @@ class AiSearchService {
     };
   }
 
-  normalizeProfessionList(values, singleValue, allowedProfessions) {
+  normalizeProfessionList(values, singleValue, catalogEntries, problem = '') {
     const candidates = this.normalizeStringList(values);
     if (singleValue) {
       candidates.unshift(String(singleValue).trim());
     }
 
     const matched = candidates
-      .map((value) => this.matchProfession(value, allowedProfessions))
+      .map((value) => this.matchProfession(value, catalogEntries))
       .filter(Boolean);
 
     if (matched.length > 0) {
       return [...new Set(matched)];
     }
 
-    return this.keywordProfessionCandidates('', allowedProfessions);
+    const keywordMatches = this.keywordProfessionCandidates(problem, catalogEntries);
+    if (keywordMatches.length > 0) {
+      return keywordMatches;
+    }
+
+    return catalogEntries.length > 0 ? [catalogEntries[0].name] : [];
   }
 
   normalizeStringList(values) {
@@ -263,39 +306,9 @@ class AiSearchService {
     return [];
   }
 
-  matchProfession(candidate, allowedProfessions) {
-    const normalizedCandidate = normalizeText(candidate);
-    if (!normalizedCandidate) {
-      return '';
-    }
-
-    let bestScore = 0;
-    let bestMatch = '';
-
-    allowedProfessions.forEach((profession) => {
-      const normalizedProfession = normalizeText(profession);
-      if (!normalizedProfession) {
-        return;
-      }
-
-      let score = 0;
-      if (normalizedProfession === normalizedCandidate) {
-        score = 100;
-      } else if (normalizedProfession.includes(normalizedCandidate) || normalizedCandidate.includes(normalizedProfession)) {
-        score = 85;
-      } else {
-        const candidateTokens = normalizedCandidate.split(/[^a-z0-9]+/).filter(Boolean);
-        const professionTokens = normalizedProfession.split(/[^a-z0-9]+/).filter(Boolean);
-        score = candidateTokens.reduce((total, token) => total + (professionTokens.includes(token) ? 18 : 0), 0);
-      }
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestMatch = profession;
-      }
-    });
-
-    return bestScore >= 18 ? bestMatch : '';
+  matchProfession(candidate, catalogEntries) {
+    const matchedEntry = professionCatalogService.findBestProfessionMatchSync(candidate, catalogEntries);
+    return matchedEntry?.name || '';
   }
 
   pickLocationFallback(locationSource, selectedLocation, currentLocation) {
@@ -342,11 +355,16 @@ class AiSearchService {
     return 'none';
   }
 
-  keywordFallback(problem, allowedProfessions, selectedLocation, currentLocation) {
-    const inferred = inferProfessionFromText(problem, allowedProfessions);
+  keywordFallback(problem, catalogEntries, selectedLocation, currentLocation) {
+    const catalogNames = catalogEntries.map((entry) => entry.name);
+    const inferred = inferProfessionFromText(problem, catalogNames);
+    const catalogMatches = professionCatalogService.findProfessionMatchesInTextSync(problem, catalogEntries, 3);
     const professionCandidates = inferred.profession
-      ? [inferred.profession, ...(inferred.similarProfessions || [])]
-      : this.keywordProfessionCandidates(problem, allowedProfessions);
+      ? uniqueStrings([inferred.profession, ...(inferred.similarProfessions || [])])
+      : uniqueStrings([
+          ...catalogMatches.map((entry) => entry.name),
+          ...this.keywordProfessionCandidates(problem, catalogEntries)
+        ]);
     const extractedLocation = this.extractLocationFromProblem(problem);
     const location = {
       ...(currentLocation.city || currentLocation.state || currentLocation.country ? currentLocation : selectedLocation),
@@ -354,34 +372,41 @@ class AiSearchService {
     };
 
     return {
-      profession: professionCandidates[0] || allowedProfessions[0] || '',
+      profession: professionCandidates[0] || catalogNames[0] || '',
       professions: professionCandidates,
       country: location.country || '',
       state: location.state || '',
       city: location.city || '',
       town: location.town || '',
       skills: inferred.specializations || [],
-      reason: inferred.profession
-        ? 'Matched the request with built-in profession rules.'
+      reason: inferred.profession || catalogMatches.length > 0
+        ? 'Matched the request with the profession catalog.'
         : 'Matched the request with built-in keyword rules.',
       locationSource: location.city || location.state || location.country ? location.source || 'selected-filters' : 'none'
     };
   }
 
-  keywordProfessionCandidates(problem, allowedProfessions) {
+  keywordProfessionCandidates(problem, catalogEntries) {
     const normalizedProblem = normalizeSearchableText(problem);
+    const catalogMatches = professionCatalogService.findProfessionMatchesInTextSync(problem, catalogEntries, 5)
+      .map((entry) => entry.name);
+    if (!normalizedProblem) {
+      return catalogMatches;
+    }
+
     const rankedMatches = KEYWORD_RULES
       .map((rule) => {
         const score = rule.keywords.reduce((total, keyword) => total + this.scoreKeywordMatch(normalizedProblem, keyword), 0);
         return {
-          profession: this.matchProfession(rule.profession, allowedProfessions),
+          profession: this.matchProfession(rule.profession, catalogEntries),
           score
         };
       })
       .filter((item) => item.profession && item.score > 0)
-      .sort((left, right) => right.score - left.score);
+      .sort((left, right) => right.score - left.score)
+      .map((item) => item.profession);
 
-    return [...new Set(rankedMatches.map((item) => item.profession))];
+    return uniqueStrings([...catalogMatches, ...rankedMatches]);
   }
 
   scoreKeywordMatch(problem, keyword) {
