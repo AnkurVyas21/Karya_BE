@@ -169,6 +169,7 @@ class ProfessionalService {
     const professionCatalogEntries = await professionCatalogService.getAllProfessionEntries();
     const explicitCandidates = this.extractExplicitProfessionCandidates(description, professionCatalogEntries);
     const heuristicSuggestion = inferProfessionFromText(description, professionCatalog);
+    const bestGuessProfessions = this.getBestGuessProfessions(description, professionCatalog, professionCatalogEntries, heuristicSuggestion);
 
     if (explicitCandidates.length > 0) {
       return this.finalizeProfessionSuggestion({
@@ -178,7 +179,10 @@ class ProfessionalService {
         reason: 'Matched the profession directly from the role stated in the description.',
         status: 'confirmed',
         specializations: heuristicSuggestion.specializations,
-        similarProfessions: heuristicSuggestion.similarProfessions
+        similarProfessions: uniqueStrings([
+          ...heuristicSuggestion.similarProfessions,
+          ...bestGuessProfessions
+        ])
       }, description, professionCatalog, professionCatalogEntries);
     }
 
@@ -190,13 +194,19 @@ class ProfessionalService {
         reason: 'Mapped the described work to a standard profession.',
         status: 'confirmed',
         specializations: heuristicSuggestion.specializations,
-        similarProfessions: heuristicSuggestion.similarProfessions
+        similarProfessions: uniqueStrings([
+          ...heuristicSuggestion.similarProfessions,
+          ...bestGuessProfessions
+        ])
       }, description, professionCatalog, professionCatalogEntries);
     }
 
     if (!openai) {
       return this.finalizeProfessionSuggestion(
-        this.keywordBasedProfessionDetection(description, professionCatalog, professionCatalogEntries),
+        {
+          ...this.keywordBasedProfessionDetection(description, professionCatalog, professionCatalogEntries),
+          similarProfessions: bestGuessProfessions
+        },
         description,
         professionCatalog,
         professionCatalogEntries
@@ -247,14 +257,21 @@ class ProfessionalService {
         ]),
         similarProfessions: uniqueStrings([
           ...(result.similarProfessions || []),
-          ...(heuristicSuggestion.similarProfessions || [])
+          ...(heuristicSuggestion.similarProfessions || []),
+          ...bestGuessProfessions
         ])
       };
     }
 
     return this.finalizeProfessionSuggestion({
       ...result,
-      ...validation
+      ...validation,
+      suggestedProfession: validation.suggestedProfession || result.suggestedProfession || bestGuessProfessions[0] || '',
+      similarProfessions: uniqueStrings([
+        ...(result.similarProfessions || []),
+        ...(validation.similarProfessions || []),
+        ...bestGuessProfessions
+      ])
     }, description, professionCatalog, professionCatalogEntries);
   }
 
@@ -870,6 +887,21 @@ class ProfessionalService {
     const resolvedProfession = this.resolveExplicitProfessionCandidate(profession, professionCatalogEntries);
 
     return this.shareSameRoleFamily(resolvedHeuristicProfession, resolvedProfession);
+  }
+
+  getBestGuessProfessions(description = '', professionCatalog = [], professionCatalogEntries = [], heuristicSuggestion = null) {
+    const heuristic = heuristicSuggestion || inferProfessionFromText(description, professionCatalog);
+    const catalogMatches = professionCatalogService.findProfessionMatchesInTextSync(description, professionCatalogEntries, 5)
+      .map((entry) => entry.name);
+    const broaderHeuristic = inferProfessionFromText(description);
+
+    return uniqueStrings([
+      heuristic?.profession || '',
+      ...((heuristic?.similarProfessions) || []),
+      broaderHeuristic?.profession || '',
+      ...((broaderHeuristic?.similarProfessions) || []),
+      ...catalogMatches
+    ]).filter((item) => item && item.toLowerCase() !== 'unknown').slice(0, 5);
   }
 
   shareSameRoleFamily(left = '', right = '') {
