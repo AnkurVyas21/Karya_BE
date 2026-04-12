@@ -152,6 +152,7 @@ const RELATED_PROFESSIONS = {
   'home tutor': ['Teacher', 'Private Tutor', 'Academic Mentor'],
   lawyer: ['Legal Advisor', 'Advocate', 'Legal Consultant'],
   doctor: ['Medical Consultant', 'Physician', 'Health Specialist'],
+  veterinarian: ['Veterinary Surgeon', 'Animal Doctor', 'Livestock Specialist'],
   consultant: ['Advisor', 'Expert Consultant', 'Specialist'],
   developer: ['Software Engineer', 'Web Developer', 'App Developer'],
   'software engineer': ['Developer', 'Backend Developer', 'Application Engineer'],

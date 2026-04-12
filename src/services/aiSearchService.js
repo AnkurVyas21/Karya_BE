@@ -151,6 +151,7 @@ class AiSearchService {
       '- "I need to fix my bathroom tap" -> Plumber',
       '- "bijli wala chahiye for switch repair" -> Electrician',
       '- "wiring repair in indore" -> Electrician',
+      '- "I need an animal doctor for cows and buffaloes" -> Veterinarian',
       'Return JSON only. No markdown, no explanation.',
       'JSON shape:',
       '{"profession":"", "professions":[""], "skills":[""], "country":"", "state":"", "city":"", "town":"", "reason":"", "locationSource":"query|current-location|selected-filters|none"}',

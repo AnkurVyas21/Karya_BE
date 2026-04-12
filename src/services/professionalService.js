@@ -50,6 +50,9 @@ const EXPLICIT_ROLE_TERMS = [
   'cleaner'
 ];
 const EXPLICIT_ROLE_PATTERN = new RegExp(`\\b(?:${EXPLICIT_ROLE_TERMS.map(escapeRegExp).join('|')})\\b`, 'i');
+const SPECIALIZED_GENERIC_ROLE_OVERRIDES = new Map([
+  ['doctor', new Set(['veterinarian'])]
+]);
 
 class ProfessionalService {
   async createProfile(userId, profileData) {
@@ -120,7 +123,8 @@ class ProfessionalService {
           ...(mergedProfile.tags || []),
           ...(mergedProfile.skills || [])
         ],
-        source: 'provider-profile'
+        source: 'provider-profile',
+        preserveInput: true
       });
       update.profession = mergedProfile.profession;
     }
@@ -170,6 +174,31 @@ class ProfessionalService {
     const explicitCandidates = this.extractExplicitProfessionCandidates(description, professionCatalogEntries);
     const heuristicSuggestion = inferProfessionFromText(description, professionCatalog);
     const bestGuessProfessions = this.getBestGuessProfessions(description, professionCatalog, professionCatalogEntries, heuristicSuggestion);
+    const preferredExplicitProfession = explicitCandidates[0];
+    const preferredHeuristicProfession = this.shouldPreferHeuristicProfession(
+      preferredExplicitProfession,
+      heuristicSuggestion,
+      description,
+      professionCatalogEntries
+    )
+      ? heuristicSuggestion.profession
+      : '';
+
+    if (preferredHeuristicProfession) {
+      return this.finalizeProfessionSuggestion({
+        profession: preferredHeuristicProfession,
+        matchedText: preferredHeuristicProfession,
+        confidence: 0.93,
+        reason: 'Used the more specific profession implied by the stated specialty in the description.',
+        status: 'confirmed',
+        specializations: heuristicSuggestion.specializations,
+        similarProfessions: uniqueStrings([
+          preferredExplicitProfession,
+          ...heuristicSuggestion.similarProfessions,
+          ...bestGuessProfessions
+        ])
+      }, description, professionCatalog, professionCatalogEntries);
+    }
 
     if (explicitCandidates.length > 0) {
       return this.finalizeProfessionSuggestion({
@@ -788,6 +817,8 @@ class ProfessionalService {
       '- "I fix vehicles" -> "Auto Mechanic"',
       '- "I teach students chemistry" -> "Chemistry Teacher"',
       '- "I cut hair" -> "Barber"',
+      '- "I am a doctor for cows, buffaloes, and other animals" -> "Veterinarian"',
+      '- "I am an animal doctor" -> "Veterinarian"',
       'Use the catalog when it fits. If no catalog item fits, produce a short standard English profession title.',
       'Return JSON only in this exact shape:',
       '{"profession":"", "aliases":[""], "specializations":[""], "tags":[""], "similarProfessions":[""], "matchedText":"", "confidence":0, "reason":"", "status":"confirmed|unknown"}',
@@ -887,6 +918,19 @@ class ProfessionalService {
     const resolvedProfession = this.resolveExplicitProfessionCandidate(profession, professionCatalogEntries);
 
     return this.shareSameRoleFamily(resolvedHeuristicProfession, resolvedProfession);
+  }
+
+  shouldPreferHeuristicProfession(explicitProfession = '', heuristicSuggestion = {}, description = '', professionCatalogEntries = []) {
+    const normalizedExplicitProfession = this.normalizeSearchText(explicitProfession);
+    const normalizedHeuristicProfession = this.normalizeSearchText(heuristicSuggestion?.profession || '');
+    const allowedOverrides = SPECIALIZED_GENERIC_ROLE_OVERRIDES.get(normalizedExplicitProfession);
+
+    if (!allowedOverrides || !allowedOverrides.has(normalizedHeuristicProfession)) {
+      return false;
+    }
+
+    return Number(heuristicSuggestion?.score || 0) >= 6
+      && this.descriptionMentionsProfession(description, heuristicSuggestion.profession, professionCatalogEntries);
   }
 
   getBestGuessProfessions(description = '', professionCatalog = [], professionCatalogEntries = [], heuristicSuggestion = null) {

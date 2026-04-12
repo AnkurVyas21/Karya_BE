@@ -88,7 +88,8 @@ class AuthService {
       const normalizedDescription = toCleanString(description);
       const savedProfession = await professionCatalogService.ensureProfession(profession, {
         tags: [...normalizedSkills, ...normalizeList(providedTags)],
-        source: 'provider-signup'
+        source: 'provider-signup',
+        preserveInput: true
       });
       const professionCatalog = await professionCatalogService.getAllProfessions();
       const tags = deriveProfileTags({
@@ -322,7 +323,8 @@ class AuthService {
             ...(existingProfessionalProfile?.skills || []),
             ...(existingProfessionalProfile?.tags || [])
           ],
-          source: 'account-profile'
+          source: 'account-profile',
+          preserveInput: true
         });
       }
 

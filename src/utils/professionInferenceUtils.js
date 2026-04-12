@@ -50,6 +50,11 @@ const PROFESSION_RULES = [
     specializations: ['Teaching', 'Subject instruction', 'Student mentoring', 'Classroom teaching']
   },
   {
+    profession: 'Veterinarian',
+    keywords: ['veterinarian', 'veterinary doctor', 'veterinary surgeon', 'vet doctor', 'vet', 'animal doctor', 'animal hospital', 'animal clinic', 'pet doctor', 'livestock doctor', 'cow doctor', 'buffalo doctor', 'cattle doctor', 'farm animal doctor', 'livestock specialist', 'animal specialist', 'veterinary', 'cow buffalo', 'pashu doctor', 'à¤ªà¤¶à¥ à¤šà¤¿à¤•à¤¿à¤¤à¥à¤¸à¤•', 'à¤œà¤¾à¤¨à¤µà¤° à¤•à¤¾ à¤¡à¥‰à¤•à¥à¤Ÿà¤°'],
+    specializations: ['Animal treatment', 'Veterinary consultation', 'Livestock care', 'Farm animal care']
+  },
+  {
     profession: 'Home Tutor',
     keywords: ['home tutor', 'private tutor', 'tuition teacher', 'tuition', 'home tuition', 'personal tutor', 'coach students', 'ट्यूशन', 'ट्यूटर', 'घर पर पढ़ाना'],
     specializations: ['Home tuition', 'One-to-one teaching', 'Exam preparation', 'Student coaching']

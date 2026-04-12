@@ -36,6 +36,7 @@ module.exports = [
   'Software Engineer',
   'Teacher',
   'UI/UX Designer',
+  'Veterinarian',
   'Videographer',
   'Virtual Assistant',
   'Web Designer',

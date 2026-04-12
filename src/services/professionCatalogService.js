@@ -43,6 +43,17 @@ const ACRONYM_TOKENS = new Map([
   ['ai', 'AI']
 ]);
 
+const ROLE_FAMILY_TERMS = [
+  { family: 'education', terms: ['teacher', 'professor', 'lecturer', 'tutor', 'faculty', 'trainer', 'coach'] },
+  { family: 'medical', terms: ['doctor', 'physician', 'surgeon', 'medical', 'veterinarian', 'veterinary', 'vet'] },
+  { family: 'legal', terms: ['lawyer', 'advocate', 'attorney', 'legal'] },
+  { family: 'engineering', terms: ['engineer', 'developer', 'designer', 'architect'] },
+  { family: 'construction', terms: ['builder', 'mason', 'contractor'] },
+  { family: 'repair', terms: ['mechanic', 'technician', 'repair', 'repairer'] },
+  { family: 'beauty', terms: ['beautician', 'barber', 'stylist', 'salon'] },
+  { family: 'care', terms: ['consultant', 'specialist', 'advisor'] }
+];
+
 const formatProfessionName = (value = '') => {
   const cleaned = String(value || '')
     .trim()
@@ -77,6 +88,19 @@ const formatProfessionName = (value = '') => {
     })
     .join(' ')
     .trim();
+};
+
+const extractRoleFamilies = (value = '') => {
+  const normalized = normalizeProfessionKey(value);
+  if (!normalized) {
+    return new Set();
+  }
+
+  const families = ROLE_FAMILY_TERMS
+    .filter(({ terms }) => terms.some((term) => normalized.includes(term)))
+    .map(({ family }) => family);
+
+  return new Set(families);
 };
 
 class ProfessionCatalogService {
@@ -190,6 +214,51 @@ class ProfessionCatalogService {
     return bestScore;
   }
 
+  shouldPreserveSpecificProfession(candidate = '', matchedEntry = {}) {
+    const formattedCandidate = formatProfessionName(candidate);
+    const normalizedCandidate = normalizeProfessionKey(formattedCandidate);
+    const normalizedName = normalizeProfessionKey(matchedEntry?.name);
+
+    if (!normalizedCandidate || !normalizedName || normalizedCandidate === normalizedName) {
+      return false;
+    }
+
+    const exactCatalogTerms = new Set(uniqueStrings([
+      matchedEntry?.name,
+      ...(matchedEntry?.aliases || []),
+      ...(matchedEntry?.tags || [])
+    ]).map((item) => normalizeProfessionKey(item)).filter(Boolean));
+
+    if (exactCatalogTerms.has(normalizedCandidate)) {
+      return false;
+    }
+
+    const candidateTokens = normalizedCandidate.split(/\s+/).filter(Boolean);
+    const matchedTokens = normalizedName.split(/\s+/).filter(Boolean);
+    const candidateContainsMatched = normalizedCandidate.includes(normalizedName);
+    const containsAllMatchedTokens = matchedTokens.length > 0 && matchedTokens.every((token) => candidateTokens.includes(token));
+    const candidateFamilies = extractRoleFamilies(formattedCandidate);
+    const matchedFamilies = new Set(
+      uniqueStrings([
+        matchedEntry?.name,
+        ...(matchedEntry?.aliases || []),
+        ...(matchedEntry?.tags || [])
+      ]).flatMap((term) => [...extractRoleFamilies(term)])
+    );
+    const sharedRoleFamily = [...candidateFamilies].some((family) => matchedFamilies.has(family));
+    const hasMeaningfulDescriptor = candidateTokens.some((token) => token.length > 2 && !matchedTokens.includes(token));
+
+    if (candidateTokens.length > matchedTokens.length && (candidateContainsMatched || containsAllMatchedTokens)) {
+      return true;
+    }
+
+    if (candidateTokens.length > 1 && sharedRoleFamily && hasMeaningfulDescriptor) {
+      return true;
+    }
+
+    return matchedTokens.length === 1 && candidateTokens.length > 1 && hasMeaningfulDescriptor;
+  }
+
   findBestProfessionMatchSync(candidate = '', entries = []) {
     let bestEntry = null;
     let bestScore = 0;
@@ -300,13 +369,21 @@ class ProfessionCatalogService {
   async ensureProfession(value = '', options = {}) {
     const aliases = uniqueStrings(options.aliases || []);
     const tags = uniqueStrings(options.tags || []);
+    const preserveInput = options.preserveInput === true;
     const entries = await this.getAllProfessionEntries();
     const matchedEntry = this.findBestProfessionMatchSync(value, entries)
       || aliases.map((alias) => this.findBestProfessionMatchSync(alias, entries)).find(Boolean)
       || tags.map((tag) => this.findBestProfessionMatchSync(tag, entries)).find(Boolean);
+    const shouldPreserveSpecificProfession = matchedEntry
+      ? this.shouldPreserveSpecificProfession(value, matchedEntry)
+      : false;
 
-    const formatted = matchedEntry?.name || formatProfessionName(value);
-    const normalizedName = matchedEntry?.normalizedName || normalizeProfessionKey(formatted);
+    const formatted = preserveInput || shouldPreserveSpecificProfession
+      ? formatProfessionName(value)
+      : (matchedEntry?.name || formatProfessionName(value));
+    const normalizedName = preserveInput || shouldPreserveSpecificProfession
+      ? normalizeProfessionKey(formatted)
+      : (matchedEntry?.normalizedName || normalizeProfessionKey(formatted));
     if (!formatted || !normalizedName) {
       return '';
     }
@@ -326,6 +403,7 @@ class ProfessionCatalogService {
           aliases: {
             $each: uniqueStrings([
               ...(matchedEntry?.aliases || []),
+              ...(preserveInput || shouldPreserveSpecificProfession ? [matchedEntry?.name || ''] : []),
               ...aliases
             ])
           },
