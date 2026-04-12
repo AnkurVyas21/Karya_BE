@@ -20,6 +20,9 @@ const professionalProfileSchema = new mongoose.Schema({
   area: { type: String },
   pincode: { type: String },
   availability: { type: String },
+  availabilityStart: { type: String },
+  availabilityEnd: { type: String },
+  acceptsNightCalls: { type: Boolean, default: false },
   charges: {
     baseCharge: { type: Number },
     visitingCharge: { type: Number },

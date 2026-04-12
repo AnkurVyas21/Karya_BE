@@ -95,6 +95,17 @@ class ProfessionalService {
         || update.allowContactDisplay === true;
     }
 
+    if ('acceptsNightCalls' in update) {
+      update.acceptsNightCalls = ['true', '1', 'yes', 'on'].includes(String(update.acceptsNightCalls).trim().toLowerCase())
+        || update.acceptsNightCalls === true;
+    }
+
+    ['availability', 'availabilityStart', 'availabilityEnd'].forEach((field) => {
+      if (field in update) {
+        update[field] = String(update[field] || '').trim();
+      }
+    });
+
     if ('town' in update || 'area' in update || 'city' in update || 'state' in update || 'location' in update) {
       update.location = composeLocation({
         ...existingProfileData,
