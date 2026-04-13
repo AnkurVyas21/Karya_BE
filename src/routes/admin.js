@@ -2,10 +2,61 @@ const express = require('express');
 const User = require('../models/User');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
+const adminService = require('../services/adminService');
 
 const router = express.Router();
 
-router.patch('/ban/:id', authMiddleware, roleMiddleware(['admin']), async (req, res) => {
+router.use(authMiddleware, roleMiddleware(['admin']));
+
+router.get('/overview', async (req, res) => {
+  try {
+    const data = await adminService.getOverview({
+      from: req.query.from,
+      to: req.query.to
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/users', async (_req, res) => {
+  try {
+    const data = await adminService.getUsers();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/providers', async (_req, res) => {
+  try {
+    const data = await adminService.getProviders();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/transactions', async (_req, res) => {
+  try {
+    const data = await adminService.getTransactions();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/professions', async (_req, res) => {
+  try {
+    const data = await adminService.getProfessions();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/ban/:id', async (req, res) => {
   try {
     await User.findByIdAndUpdate(req.params.id, { isBanned: true });
     res.json({ success: true, message: 'User banned' });
@@ -14,7 +65,7 @@ router.patch('/ban/:id', authMiddleware, roleMiddleware(['admin']), async (req, 
   }
 });
 
-router.patch('/unban/:id', authMiddleware, roleMiddleware(['admin']), async (req, res) => {
+router.patch('/unban/:id', async (req, res) => {
   try {
     await User.findByIdAndUpdate(req.params.id, { isBanned: false });
     res.json({ success: true, message: 'User unbanned' });
