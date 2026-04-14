@@ -60,6 +60,7 @@ const ADVERTISEMENT_LEVELS = [
 const addDays = (date, days) => new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 
 const cleanString = (value) => String(value || '').trim();
+const pickWebsiteAudio = (website = {}) => cleanString(website.backgroundAudioFile) || cleanString(website.backgroundAudioUrl);
 
 const slugify = (value = '') => cleanString(value)
   .toLowerCase()
@@ -195,6 +196,7 @@ class ProviderGrowthService {
         websiteUrlPath: websiteSlug ? `/provider/site/${websiteSlug}` : '',
         headline: cleanString(state.website?.headline),
         description: cleanString(state.website?.description) || cleanString(profile?.description),
+        backgroundAudioUrl: pickWebsiteAudio(state.website),
         bookingEnabled: state.website?.bookingEnabled !== false,
         appointmentNote: cleanString(state.website?.appointmentNote),
         imageCount: Array.isArray(state.website?.galleryImages) ? state.website.galleryImages.length : 0,
@@ -225,6 +227,8 @@ class ProviderGrowthService {
         ...VERIFICATION_PLAN,
         status: this.getVerificationStatus(state),
         badgeActive: Boolean(state.verification?.badgeActive),
+        feePaid: Boolean(state.verification?.feePaid),
+        paidAt: state.verification?.paidAt || null,
         rejectionReason: cleanString(state.verification?.rejectionReason),
         reviewerNotes: cleanString(state.verification?.reviewerNotes),
         submittedAt: state.verification?.submittedAt || null,
@@ -299,6 +303,17 @@ class ProviderGrowthService {
       return this.getDashboard(userId);
     }
 
+    if (feature === 'verification') {
+      state.verification.feePaid = true;
+      state.verification.paidAt = now;
+      if (state.verification.status === 'not_started') {
+        state.verification.reviewerNotes = 'Payment received. Upload documents to start verification.';
+      }
+      await state.save();
+      logger.info(`Verification fee marked paid for provider ${userId}`);
+      return this.getDashboard(userId);
+    }
+
     if (feature === 'advertisement') {
       const level = cleanString(payload.level).toLowerCase();
       const planId = cleanString(payload.planId).toLowerCase();
@@ -337,14 +352,21 @@ class ProviderGrowthService {
     state.website.description = cleanString(payload.description || state.website.description);
     state.website.bookingEnabled = !['false', '0', 'off'].includes(String(payload.bookingEnabled ?? state.website.bookingEnabled).toLowerCase());
     state.website.appointmentNote = cleanString(payload.appointmentNote || state.website.appointmentNote);
+    if ('backgroundAudioUrl' in payload) {
+      state.website.backgroundAudioUrl = cleanString(payload.backgroundAudioUrl || '');
+    }
 
     const imageFiles = Array.isArray(files.websiteImages) ? files.websiteImages.map((item) => item.path) : [];
     const videoFiles = Array.isArray(files.websiteVideos) ? files.websiteVideos.map((item) => item.path) : [];
+    const audioFile = Array.isArray(files.backgroundAudio) ? files.backgroundAudio[0]?.path : '';
     if (imageFiles.length > 0) {
       state.website.galleryImages = [...(state.website.galleryImages || []), ...imageFiles];
     }
     if (videoFiles.length > 0) {
       state.website.galleryVideos = [...(state.website.galleryVideos || []), ...videoFiles];
+    }
+    if (audioFile) {
+      state.website.backgroundAudioFile = audioFile;
     }
 
     await state.save();
@@ -359,6 +381,10 @@ class ProviderGrowthService {
     const profile = await ProfessionalProfile.findOne({ user: userId }).lean();
     const aadhaarFile = Array.isArray(files.aadhaarDocument) ? files.aadhaarDocument[0]?.path : '';
     const panFile = Array.isArray(files.panDocument) ? files.panDocument[0]?.path : '';
+
+    if (!state.verification?.feePaid) {
+      throw new Error('Pay the verification fee before submitting documents');
+    }
 
     if (!aadhaarFile && !state.verification?.aadhaarDocument) {
       throw new Error('Aadhar Card is required for verification');
@@ -484,6 +510,7 @@ class ProviderGrowthService {
         description: cleanString(state.website?.description),
         galleryImages: Array.isArray(state.website?.galleryImages) ? state.website.galleryImages : [],
         galleryVideos: Array.isArray(state.website?.galleryVideos) ? state.website.galleryVideos : [],
+        backgroundAudioUrl: pickWebsiteAudio(state.website),
         bookingEnabled: state.website?.bookingEnabled !== false,
         appointmentNote: cleanString(state.website?.appointmentNote)
       },
@@ -574,6 +601,7 @@ class ProviderGrowthService {
         description: cleanString(normalized.website?.description) || profile.description || '',
         galleryImages: Array.isArray(normalized.website?.galleryImages) ? normalized.website.galleryImages : [],
         galleryVideos: Array.isArray(normalized.website?.galleryVideos) ? normalized.website.galleryVideos : [],
+        backgroundAudioUrl: pickWebsiteAudio(normalized.website),
         bookingEnabled: normalized.website?.bookingEnabled !== false,
         appointmentNote: cleanString(normalized.website?.appointmentNote),
         active: true

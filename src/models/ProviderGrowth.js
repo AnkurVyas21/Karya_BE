@@ -30,6 +30,8 @@ const providerGrowthSchema = new mongoose.Schema({
     description: { type: String, default: '' },
     galleryImages: [{ type: String }],
     galleryVideos: [{ type: String }],
+    backgroundAudioUrl: { type: String, default: '' },
+    backgroundAudioFile: { type: String, default: '' },
     bookingEnabled: { type: Boolean, default: true },
     appointmentNote: { type: String, default: '' }
   },
@@ -41,6 +43,8 @@ const providerGrowthSchema = new mongoose.Schema({
       default: 'not_started'
     },
     fee: { type: Number, default: 99 },
+    feePaid: { type: Boolean, default: false },
+    paidAt: { type: Date, default: null },
     aadhaarDocument: { type: String, default: '' },
     panDocument: { type: String, default: '' },
     rejectionReason: { type: String, default: '' },

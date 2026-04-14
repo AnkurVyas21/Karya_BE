@@ -40,7 +40,7 @@ router.put(
   '/growth/website',
   authMiddleware,
   roleMiddleware(['professional']),
-  upload.fields([{ name: 'websiteImages', maxCount: 8 }, { name: 'websiteVideos', maxCount: 3 }]),
+  upload.fields([{ name: 'websiteImages', maxCount: 8 }, { name: 'websiteVideos', maxCount: 3 }, { name: 'backgroundAudio', maxCount: 1 }]),
   updateWebsiteProfile
 );
 router.post(

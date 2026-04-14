@@ -258,10 +258,6 @@ class AdminService {
     ]);
 
     return {
-      adminCredentials: {
-        email: DEFAULT_ADMIN_EMAIL,
-        password: DEFAULT_ADMIN_PASSWORD
-      },
       totals: {
         totalAccounts,
         totalUsers,
