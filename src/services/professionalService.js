@@ -9,6 +9,7 @@ const aiSearchService = require('./aiSearchService');
 const { composeLocation, isProfessionalProfileListable } = require('../utils/accountPresenter');
 const { deriveProfileTags, deriveRelatedProfessionTags, normalizeList, uniqueStrings } = require('../utils/profileTagUtils');
 const professionCatalogService = require('./professionCatalogService');
+const providerGrowthService = require('./providerGrowthService');
 const { inferProfessionFromText } = require('../utils/professionInferenceUtils');
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -354,12 +355,20 @@ class ProfessionalService {
     const candidates = await ProfessionalProfile.find(candidateQuery)
       .populate('user')
       .sort({ createdAt: -1 });
+    const growthStateMap = await providerGrowthService.getGrowthStatesForUsers(
+      candidates.map((profile) => profile.user?._id?.toString()).filter(Boolean)
+    );
 
     const scoredProfiles = candidates
       .filter((profile) => isProfessionalProfileListable(profile))
       .map((profile) => ({
         profile,
-        ranking: this.scoreProfessionalProfile(profile, searchFilters)
+        growthState: growthStateMap.get(profile.user?._id?.toString() || '') || {},
+        ranking: this.scoreProfessionalProfile(
+          profile,
+          searchFilters,
+          growthStateMap.get(profile.user?._id?.toString() || '') || {}
+        )
       }))
       .filter(({ ranking }) => ranking.include);
 
@@ -387,13 +396,19 @@ class ProfessionalService {
     const profileIds = pagedProfiles.map((profile) => profile._id.toString());
     const reviewStats = await this.getReviewStatsMap(profileIds);
     const bookmarkedIds = await this.getBookmarkedProfileIds(viewerId, profileIds);
+    const shownUserIds = pagedProfiles.map((profile) => profile.user?._id?.toString()).filter(Boolean);
+    await providerGrowthService.recordAdImpressions(shownUserIds);
 
     return {
-      docs: pagedProfiles.map((profile) => buildProfessionalSummary({
-        profile,
-        reviewStats: reviewStats[profile._id.toString()] || {},
-        bookmarkedIds
-      })),
+      docs: pagedProfiles.map((profile) => {
+        const growthState = growthStateMap.get(profile.user?._id?.toString() || '') || {};
+        return buildProfessionalSummary({
+          profile,
+          reviewStats: reviewStats[profile._id.toString()] || {},
+          bookmarkedIds,
+          growthState
+        });
+      }),
       totalDocs,
       limit: pageSize,
       page: pageNumber,
@@ -503,6 +518,9 @@ class ProfessionalService {
     const profileIds = bookmarks
       .map((bookmark) => bookmark.professional?._id?.toString())
       .filter(Boolean);
+    const growthStateMap = await providerGrowthService.getGrowthStatesForUsers(
+      bookmarks.map((bookmark) => bookmark.professional?.user?._id?.toString()).filter(Boolean)
+    );
     const reviewStats = await this.getReviewStatsMap(profileIds);
     const bookmarkedIds = new Set(profileIds);
 
@@ -514,7 +532,8 @@ class ProfessionalService {
         professional: buildProfessionalSummary({
           profile: bookmark.professional,
           reviewStats: reviewStats[bookmark.professional._id.toString()] || {},
-          bookmarkedIds
+          bookmarkedIds,
+          growthState: growthStateMap.get(bookmark.professional?.user?._id?.toString() || '') || {}
         })
       }));
   }
@@ -567,11 +586,16 @@ class ProfessionalService {
     const profileId = profile._id.toString();
     const reviewStats = await this.getReviewStatsMap([profileId]);
     const bookmarkedIds = await this.getBookmarkedProfileIds(viewerId, [profileId]);
+    const growthStateMap = await providerGrowthService.getGrowthStatesForUsers(
+      [profile.user?._id?.toString?.() || profile.user?.toString?.() || ''].filter(Boolean)
+    );
+    const userId = profile.user?._id?.toString?.() || profile.user?.toString?.() || '';
 
     return buildProfessionalSummary({
       profile,
       reviewStats: reviewStats[profileId] || {},
-      bookmarkedIds
+      bookmarkedIds,
+      growthState: growthStateMap.get(userId) || {}
     });
   }
 
@@ -621,7 +645,7 @@ class ProfessionalService {
     return query;
   }
 
-  scoreProfessionalProfile(profile, filters = {}) {
+  scoreProfessionalProfile(profile, filters = {}, growthState = {}) {
     const signals = {};
     let score = 0;
 
@@ -710,6 +734,7 @@ class ProfessionalService {
     }).filter(([, value]) => String(value || '').trim()).length;
 
     const matchedSignals = Object.values(signals).filter(Boolean).length;
+    score += providerGrowthService.getRankingBoost(growthState);
 
     return {
       include: activeFilters === 0 || matchedSignals > 0,

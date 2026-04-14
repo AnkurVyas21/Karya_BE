@@ -129,7 +129,7 @@ const buildCallStatus = ({ profile = {}, mobile = '' }) => {
   };
 };
 
-const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Set() }) => {
+const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Set(), growthState = {} }) => {
   const user = profile.user || {};
   const charges = profile.charges || {};
   const rating = reviewStats.averageRating || 0;
@@ -178,6 +178,13 @@ const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Se
     missingRequiredFields: completion.missingRequiredFields,
     isProfileComplete: completion.isProfileComplete,
     isListed: completion.isListed,
+    isVerifiedProvider: Boolean(growthState.verifiedBadge),
+    verificationStatus: growthState.verificationStatus || 'not_started',
+    boostActive: Boolean(growthState.boostActive),
+    websiteActive: Boolean(growthState.websiteActive),
+    websiteSlug: growthState.websiteSlug || '',
+    website: growthState.website || null,
+    activeAdvertisements: Array.isArray(growthState.activeAdvertisements) ? growthState.activeAdvertisements : [],
     viewCount: profile.viewCount || 0,
     averageRating: Number(rating.toFixed(1)),
     reviewCount,

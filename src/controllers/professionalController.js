@@ -1,5 +1,6 @@
 const professionalService = require('../services/professionalService');
 const paymentService = require('../services/paymentService');
+const providerGrowthService = require('../services/providerGrowthService');
 const Review = require('../models/Review');
 const Bookmark = require('../models/Bookmark');
 const User = require('../models/User');
@@ -132,6 +133,64 @@ const detectProfession = async (req, res) => {
   }
 };
 
+const getGrowthDashboard = async (req, res) => {
+  try {
+    const data = await providerGrowthService.getDashboard(req.user._id);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const activateGrowthFeature = async (req, res) => {
+  try {
+    const data = await providerGrowthService.activateFeature(req.user._id, req.body);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const updateWebsiteProfile = async (req, res) => {
+  try {
+    const data = await providerGrowthService.updateWebsiteProfile(req.user._id, req.body, req.files || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const submitVerification = async (req, res) => {
+  try {
+    const data = await providerGrowthService.submitVerification(req.user._id, req.body, req.files || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const getGrowthActivity = async (req, res) => {
+  try {
+    const data = await providerGrowthService.getActivity(req.user._id);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const getWebsiteBySlug = async (req, res) => {
+  try {
+    const data = await providerGrowthService.getWebsiteBySlug(req.params.slug, req.user?._id, professionalService);
+    if (!data) {
+      return res.status(404).json({ success: false, message: 'Website not found' });
+    }
+
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const getProfessions = async (_req, res) => {
   try {
     const professions = await professionalService.getProfessionCatalog();
@@ -251,6 +310,12 @@ module.exports = {
   createReview,
   createBookmark,
   createSubscription,
+  getGrowthDashboard,
+  activateGrowthFeature,
+  updateWebsiteProfile,
+  submitVerification,
+  getGrowthActivity,
+  getWebsiteBySlug,
   detectProfession,
   getProfessions,
   getMyProfile,
