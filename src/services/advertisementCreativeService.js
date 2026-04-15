@@ -14,6 +14,10 @@ class AdvertisementCreativeService {
     return cleanString(value).slice(0, 1200);
   }
 
+  cleanPauseNote(value = '') {
+    return cleanString(value).slice(0, 500);
+  }
+
   getLastAdminMessage(creative) {
     const items = Array.isArray(creative?.adminMessages) ? creative.adminMessages : [];
     if (items.length === 0) {
@@ -92,6 +96,56 @@ class AdvertisementCreativeService {
     return creative.toObject();
   }
 
+  async getCampaignMapForAdvertisementIds(advertisementIds = []) {
+    const ids = (advertisementIds || []).map((id) => String(id)).filter(Boolean);
+    if (ids.length === 0) {
+      return new Map();
+    }
+
+    const idSet = new Set(ids);
+
+    const growthDocs = await ProviderGrowth.find({ 'advertisements._id': { $in: ids } })
+      .populate('user')
+      .lean();
+
+    const map = new Map();
+    for (const doc of growthDocs) {
+      for (const pack of doc.advertisements || []) {
+        const key = String(pack._id);
+        if (!idSet.has(key)) {
+          continue;
+        }
+        map.set(key, {
+          id: key,
+          level: pack.level,
+          planId: pack.planId,
+          planName: pack.planName,
+          amount: Number(pack.amount || 0),
+          impressionsTotal: Number(pack.impressionsTotal || 0),
+          impressionsUsed: Number(pack.impressionsUsed || 0),
+          status: pack.status,
+          createdAt: pack.createdAt || null,
+          completedAt: pack.completedAt || null,
+          paused: Boolean(pack.paused),
+          pausedAt: pack.pausedAt || null,
+          pauseNote: pack.pauseNote || '',
+          pausedBy: pack.pausedBy || null,
+          providerUserId: doc.user?._id ? doc.user._id.toString() : (doc.user ? String(doc.user) : ''),
+          provider: doc.user
+            ? {
+                userId: doc.user._id.toString(),
+                fullName: [doc.user.firstName, doc.user.lastName].filter(Boolean).join(' ').trim(),
+                email: doc.user.email || '',
+                mobile: doc.user.mobile || ''
+              }
+            : null
+        });
+      }
+    }
+
+    return map;
+  }
+
   async listForAdmin({ status = '' } = {}) {
     const normalizedStatus = cleanString(status).toLowerCase();
     const match = {};
@@ -104,6 +158,8 @@ class AdvertisementCreativeService {
       .populate('professionalProfile')
       .sort({ createdAt: -1 })
       .lean();
+
+    const campaignMap = await this.getCampaignMapForAdvertisementIds(items.map((item) => item.advertisementId));
 
     return items.map((item) => ({
       id: item._id.toString(),
@@ -121,6 +177,7 @@ class AdvertisementCreativeService {
       imagePath: item.imagePath,
       imageWidth: Number(item.imageWidth || 0),
       imageHeight: Number(item.imageHeight || 0),
+      campaign: campaignMap.get(String(item.advertisementId)) || null,
       provider: item.user
         ? {
             userId: item.user._id.toString(),
@@ -131,6 +188,95 @@ class AdvertisementCreativeService {
         : null,
       profession: item.professionalProfile?.profession || ''
     }));
+  }
+
+  async getForAdmin({ creativeId }) {
+    const creative = await AdvertisementCreative.findById(creativeId)
+      .populate('user')
+      .populate('professionalProfile')
+      .lean();
+
+    if (!creative) {
+      throw new Error('Ad creative not found');
+    }
+
+    const campaignMap = await this.getCampaignMapForAdvertisementIds([creative.advertisementId]);
+    const campaign = campaignMap.get(String(creative.advertisementId)) || null;
+
+    return {
+      id: creative._id.toString(),
+      advertisementId: creative.advertisementId,
+      level: creative.level,
+      city: creative.city || '',
+      state: creative.state || '',
+      status: creative.status,
+      rejectionReason: creative.rejectionReason || '',
+      approvedAt: creative.approvedAt || null,
+      createdAt: creative.createdAt,
+      updatedAt: creative.updatedAt,
+      views: Number(creative.views || 0),
+      clicks: Number(creative.clicks || 0),
+      adminMessages: Array.isArray(creative.adminMessages) ? creative.adminMessages.map((msg) => ({
+        adminId: msg?.adminId || null,
+        message: cleanString(msg?.message || ''),
+        createdAt: msg?.createdAt || null
+      })) : [],
+      lastAdminMessage: this.getLastAdminMessage(creative),
+      imagePath: creative.imagePath,
+      imageWidth: Number(creative.imageWidth || 0),
+      imageHeight: Number(creative.imageHeight || 0),
+      campaign,
+      provider: creative.user
+        ? {
+            userId: creative.user._id.toString(),
+            fullName: [creative.user.firstName, creative.user.lastName].filter(Boolean).join(' ').trim(),
+            email: creative.user.email || '',
+            mobile: creative.user.mobile || ''
+          }
+        : null,
+      profession: creative.professionalProfile?.profession || ''
+    };
+  }
+
+  async setCampaignPaused({ creativeId, paused, adminId, note = '' }) {
+    const shouldPause = Boolean(paused);
+    const pauseNote = shouldPause ? this.cleanPauseNote(note) : '';
+
+    const creative = await AdvertisementCreative.findById(creativeId);
+    if (!creative) {
+      throw new Error('Ad creative not found');
+    }
+
+    const growth = await ProviderGrowth.findOne({ user: creative.user });
+    if (!growth) {
+      throw new Error('Provider campaign not found');
+    }
+
+    const pack = (growth.advertisements || []).find((item) => String(item._id) === String(creative.advertisementId));
+    if (!pack) {
+      throw new Error('Advertisement pack not found for this creative');
+    }
+
+    if (pack.status !== 'active') {
+      throw new Error('Only active campaigns can be paused/resumed');
+    }
+
+    if (shouldPause) {
+      pack.paused = true;
+      pack.pausedAt = new Date();
+      pack.pausedBy = adminId || null;
+      pack.pauseNote = pauseNote;
+    } else {
+      pack.paused = false;
+      pack.pausedAt = null;
+      pack.pausedBy = null;
+      pack.pauseNote = '';
+    }
+
+    await growth.save();
+
+    const campaignMap = await this.getCampaignMapForAdvertisementIds([creative.advertisementId]);
+    return campaignMap.get(String(creative.advertisementId)) || null;
   }
 
   async addAdminMessage({ creativeId, adminId, message }) {
@@ -209,7 +355,7 @@ class AdvertisementCreativeService {
 
     for (const doc of growthDocs) {
       for (const ad of doc.advertisements || []) {
-        if (ad.status === 'active' && Number(ad.impressionsUsed || 0) < Number(ad.impressionsTotal || 0)) {
+        if (ad.status === 'active' && !ad.paused && Number(ad.impressionsUsed || 0) < Number(ad.impressionsTotal || 0)) {
           activePackIds.add(String(ad._id));
         }
       }
@@ -269,6 +415,9 @@ class AdvertisementCreativeService {
 
     const pack = (growth.advertisements || []).find((item) => String(item._id) === String(creative.advertisementId));
     if (!pack || pack.status !== 'active') {
+      return null;
+    }
+    if (pack.paused) {
       return null;
     }
 

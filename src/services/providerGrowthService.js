@@ -166,6 +166,7 @@ class ProviderGrowthService {
 
     const websiteSlug = state.websiteSlug || (state.website?.active ? await this.ensureWebsiteSlug(state, userId) : '');
     const activeAds = (state.advertisements || []).filter((item) => item.status === 'active');
+    const runningAds = activeAds.filter((item) => !item.paused);
     const usedImpressions = activeAds.reduce((sum, item) => sum + Number(item.impressionsUsed || 0), 0);
     const totalImpressions = activeAds.reduce((sum, item) => sum + Number(item.impressionsTotal || 0), 0);
 
@@ -207,11 +208,12 @@ class ProviderGrowthService {
       advertisements: {
         levels: ADVERTISEMENT_LEVELS,
         plans: ADVERTISEMENT_PLANS,
-        activeCount: activeAds.length,
+        activeCount: runningAds.length,
+        pausedCount: activeAds.length - runningAds.length,
         totalImpressions,
         usedImpressions,
         remainingImpressions: Math.max(totalImpressions - usedImpressions, 0),
-        status: activeAds.length > 0 ? 'Running' : 'Not active',
+        status: runningAds.length > 0 ? 'Running' : activeAds.length > 0 ? 'Paused' : 'Not active',
         items: activeAds.map((item) => ({
           id: item._id.toString(),
           level: item.level,
@@ -222,6 +224,9 @@ class ProviderGrowthService {
           impressionsUsed: item.impressionsUsed,
           impressionsRemaining: Math.max(Number(item.impressionsTotal || 0) - Number(item.impressionsUsed || 0), 0),
           status: item.status,
+          paused: Boolean(item.paused),
+          pausedAt: item.pausedAt || null,
+          pauseNote: cleanString(item.pauseNote),
           creative: creativeMap.get(String(item._id)) || null,
           createdAt: item.createdAt
         }))
@@ -501,7 +506,7 @@ class ProviderGrowthService {
   }
 
   buildPublicState(state) {
-    const activeAds = (state.advertisements || []).filter((item) => item.status === 'active');
+    const activeAds = (state.advertisements || []).filter((item) => item.status === 'active' && !item.paused);
     return {
       boostActive: this.hasActiveBoost(state),
       websiteActive: this.hasActiveWebsite(state),

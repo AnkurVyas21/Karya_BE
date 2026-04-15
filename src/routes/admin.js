@@ -66,12 +66,36 @@ router.get('/ads', async (req, res) => {
   }
 });
 
+router.get('/ads/:id', async (req, res) => {
+  try {
+    const data = await advertisementCreativeService.getForAdmin({ creativeId: req.params.id });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 router.patch('/ads/:id/status', async (req, res) => {
   try {
     const data = await advertisementCreativeService.setStatus({
       creativeId: req.params.id,
       status: req.body.status,
       rejectionReason: req.body.rejectionReason || ''
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/ads/:id/pause', async (req, res) => {
+  try {
+    const paused = Boolean(req.body.paused);
+    const data = await advertisementCreativeService.setCampaignPaused({
+      creativeId: req.params.id,
+      paused,
+      adminId: req.user?._id,
+      note: req.body.note || ''
     });
     res.json({ success: true, data });
   } catch (error) {

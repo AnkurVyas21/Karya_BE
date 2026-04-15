@@ -19,6 +19,15 @@ const advertisementCreativeSchema = new mongoose.Schema({
   rejectionReason: { type: String, default: '' },
   approvedAt: { type: Date, default: null },
 
+  versions: [{
+    imagePath: { type: String, default: '' },
+    imageWidth: { type: Number, default: 0 },
+    imageHeight: { type: Number, default: 0 },
+    status: { type: String, default: 'pending' },
+    rejectionReason: { type: String, default: '' },
+    submittedAt: { type: Date, default: Date.now }
+  }],
+
   adminMessages: [{
     adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     message: { type: String, default: '' },

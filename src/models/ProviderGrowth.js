@@ -8,6 +8,10 @@ const advertisementSchema = new mongoose.Schema({
   impressionsTotal: { type: Number, default: 0 },
   impressionsUsed: { type: Number, default: 0 },
   status: { type: String, enum: ['active', 'completed'], default: 'active' },
+  paused: { type: Boolean, default: false },
+  pausedAt: { type: Date, default: null },
+  pausedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  pauseNote: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now },
   completedAt: { type: Date, default: null }
 }, { _id: true });
