@@ -19,6 +19,12 @@ const advertisementCreativeSchema = new mongoose.Schema({
   rejectionReason: { type: String, default: '' },
   approvedAt: { type: Date, default: null },
 
+  adminMessages: [{
+    adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    message: { type: String, default: '' },
+    createdAt: { type: Date, default: Date.now }
+  }],
+
   views: { type: Number, default: 0 },
   clicks: { type: Number, default: 0 }
 }, {
@@ -29,4 +35,3 @@ advertisementCreativeSchema.index({ level: 1, city: 1, status: 1, createdAt: -1 
 advertisementCreativeSchema.index({ user: 1, advertisementId: 1 }, { unique: true });
 
 module.exports = mongoose.model('AdvertisementCreative', advertisementCreativeSchema);
-

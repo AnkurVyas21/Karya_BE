@@ -79,6 +79,19 @@ router.patch('/ads/:id/status', async (req, res) => {
   }
 });
 
+router.post('/ads/:id/message', async (req, res) => {
+  try {
+    const data = await advertisementCreativeService.addAdminMessage({
+      creativeId: req.params.id,
+      adminId: req.user?._id,
+      message: req.body.message || ''
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 router.patch('/ban/:id', async (req, res) => {
   try {
     await User.findByIdAndUpdate(req.params.id, { isBanned: true });

@@ -10,6 +10,20 @@ const normalizeState = (value) => cleanString(value).replace(/\s+/g, ' ');
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 class AdvertisementCreativeService {
+  cleanAdminMessage(value = '') {
+    return cleanString(value).slice(0, 1200);
+  }
+
+  getLastAdminMessage(creative) {
+    const items = Array.isArray(creative?.adminMessages) ? creative.adminMessages : [];
+    if (items.length === 0) {
+      return null;
+    }
+    const last = items[items.length - 1];
+    const message = cleanString(last?.message);
+    return message ? { message, createdAt: last?.createdAt || null } : null;
+  }
+
   async createOrReplaceCreative({ userId, advertisementId, level, city = '', state = '', imagePath, imageWidth = 0, imageHeight = 0 }) {
     const stateDoc = await ProviderGrowth.findOne({ user: userId });
     if (!stateDoc) {
@@ -103,6 +117,7 @@ class AdvertisementCreativeService {
       createdAt: item.createdAt,
       views: Number(item.views || 0),
       clicks: Number(item.clicks || 0),
+      lastAdminMessage: this.getLastAdminMessage(item),
       imagePath: item.imagePath,
       imageWidth: Number(item.imageWidth || 0),
       imageHeight: Number(item.imageHeight || 0),
@@ -116,6 +131,29 @@ class AdvertisementCreativeService {
         : null,
       profession: item.professionalProfile?.profession || ''
     }));
+  }
+
+  async addAdminMessage({ creativeId, adminId, message }) {
+    const text = this.cleanAdminMessage(message);
+    if (!text) {
+      throw new Error('Message is required');
+    }
+
+    const creative = await AdvertisementCreative.findById(creativeId);
+    if (!creative) {
+      throw new Error('Ad creative not found');
+    }
+
+    creative.adminMessages = Array.isArray(creative.adminMessages) ? creative.adminMessages : [];
+    creative.adminMessages.push({
+      adminId: adminId || null,
+      message: text,
+      createdAt: new Date()
+    });
+
+    await creative.save();
+    logger.info(`Admin message added for ad creative ${creativeId}`);
+    return creative.toObject();
   }
 
   async setStatus({ creativeId, status, rejectionReason = '' }) {
@@ -268,7 +306,8 @@ class AdvertisementCreativeService {
         views: Number(row.views || 0),
         clicks: Number(row.clicks || 0),
         imagePath: row.imagePath,
-        rejectionReason: row.rejectionReason || ''
+        rejectionReason: row.rejectionReason || '',
+        lastAdminMessage: this.getLastAdminMessage(row)
       });
     }
     return map;
