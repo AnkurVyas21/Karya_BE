@@ -3,6 +3,7 @@ const User = require('../models/User');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
 const adminService = require('../services/adminService');
+const advertisementCreativeService = require('../services/advertisementCreativeService');
 
 const router = express.Router();
 
@@ -50,6 +51,28 @@ router.get('/transactions', async (_req, res) => {
 router.get('/professions', async (_req, res) => {
   try {
     const data = await adminService.getProfessions();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/ads', async (req, res) => {
+  try {
+    const data = await advertisementCreativeService.listForAdmin({ status: req.query.status || '' });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/ads/:id/status', async (req, res) => {
+  try {
+    const data = await advertisementCreativeService.setStatus({
+      creativeId: req.params.id,
+      status: req.body.status,
+      rejectionReason: req.body.rejectionReason || ''
+    });
     res.json({ success: true, data });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });

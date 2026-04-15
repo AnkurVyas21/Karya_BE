@@ -2,6 +2,7 @@ const ProviderGrowth = require('../models/ProviderGrowth');
 const User = require('../models/User');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
 const logger = require('../utils/logger');
+const advertisementCreativeService = require('./advertisementCreativeService');
 
 const BOOST_PLAN = {
   id: 'boost',
@@ -156,10 +157,11 @@ class ProviderGrowthService {
   }
 
   async getDashboard(userId) {
-    const [state, profile, user] = await Promise.all([
+    const [state, profile, user, creativeMap] = await Promise.all([
       this.getOrCreateState(userId),
       ProfessionalProfile.findOne({ user: userId }).lean(),
-      User.findById(userId).lean()
+      User.findById(userId).lean(),
+      advertisementCreativeService.getCreativeMapForUser(userId)
     ]);
 
     const websiteSlug = state.websiteSlug || (state.website?.active ? await this.ensureWebsiteSlug(state, userId) : '');
@@ -220,6 +222,7 @@ class ProviderGrowthService {
           impressionsUsed: item.impressionsUsed,
           impressionsRemaining: Math.max(Number(item.impressionsTotal || 0) - Number(item.impressionsUsed || 0), 0),
           status: item.status,
+          creative: creativeMap.get(String(item._id)) || null,
           createdAt: item.createdAt
         }))
       },

@@ -3,6 +3,7 @@ const User = require('../models/User');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
 const Subscription = require('../models/Subscription');
 const SiteVisit = require('../models/SiteVisit');
+const AdvertisementCreative = require('../models/AdvertisementCreative');
 const professionCatalogService = require('./professionCatalogService');
 const paymentService = require('./paymentService');
 const logger = require('../utils/logger');
@@ -257,6 +258,15 @@ class AdminService {
       this.getProfessionsSummary()
     ]);
 
+    const [pendingAds, approvedAds, rejectedAds, totalAdViews] = await Promise.all([
+      AdvertisementCreative.countDocuments({ status: 'pending' }),
+      AdvertisementCreative.countDocuments({ status: 'approved' }),
+      AdvertisementCreative.countDocuments({ status: 'rejected' }),
+      AdvertisementCreative.aggregate([
+        { $group: { _id: null, total: { $sum: { $ifNull: ['$views', 0] } } } }
+      ]).then((rows) => Number(rows?.[0]?.total || 0))
+    ]);
+
     return {
       totals: {
         totalAccounts,
@@ -279,7 +289,11 @@ class AdminService {
         visitorsToday,
         visitorsThisMonth,
         pageViewsToday,
-        totalProfileViews
+        totalProfileViews,
+        pendingAds,
+        approvedAds,
+        rejectedAds,
+        totalAdViews
       },
       registrations: {
         today: todayRegistrations,
