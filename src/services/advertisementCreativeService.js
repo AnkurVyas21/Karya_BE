@@ -7,6 +7,7 @@ const cleanString = (value) => String(value || '').trim();
 
 const normalizeCity = (value) => cleanString(value).replace(/\s+/g, ' ');
 const normalizeState = (value) => cleanString(value).replace(/\s+/g, ' ');
+const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 class AdvertisementCreativeService {
   async createOrReplaceCreative({ userId, advertisementId, level, city = '', state = '', imagePath, imageWidth = 0, imageHeight = 0 }) {
@@ -145,7 +146,10 @@ class AdvertisementCreativeService {
     const normalizedCity = normalizeCity(city);
     const match = { status: 'approved' };
     if (normalizedCity) {
-      match.$or = [{ level: 'city', city: normalizedCity }, { level: 'national' }];
+      match.$or = [
+        { level: 'city', city: { $regex: `^${escapeRegex(normalizedCity)}$`, $options: 'i' } },
+        { level: 'national' }
+      ];
     } else {
       // Without a city context, only show national ads.
       match.level = 'national';
