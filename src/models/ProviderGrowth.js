@@ -14,7 +14,9 @@ const advertisementSchema = new mongoose.Schema({
 
 const providerGrowthSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
-  websiteSlug: { type: String, unique: true, sparse: true, default: null },
+  // Important: don't default to null. A unique index treats null as a value and will throw duplicates.
+  // We'll enforce uniqueness only when the slug is a real non-empty string via a partial index below.
+  websiteSlug: { type: String },
   boost: {
     active: { type: Boolean, default: false },
     startDate: { type: Date, default: null },
@@ -58,5 +60,11 @@ const providerGrowthSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+// Unique only when websiteSlug is a real string (ignores missing/null).
+providerGrowthSchema.index(
+  { websiteSlug: 1 },
+  { unique: true, partialFilterExpression: { websiteSlug: { $type: 'string', $ne: '' } } }
+);
 
 module.exports = mongoose.model('ProviderGrowth', providerGrowthSchema);
