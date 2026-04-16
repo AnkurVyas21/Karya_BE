@@ -47,15 +47,54 @@ const VERIFICATION_PLAN = {
 };
 
 const ADVERTISEMENT_PLANS = [
-  { id: 'ads-50k', name: 'Starter Reach', price: 299, impressions: 50000 },
-  { id: 'ads-100k', name: 'Growth Reach', price: 499, impressions: 100000 },
-  { id: 'ads-250k', name: 'Scale Reach', price: 999, impressions: 250000 }
+  {
+    id: 'ads-50k',
+    name: 'Stadium Reach',
+    price: 299,
+    impressions: 50000,
+    durationDays: 30,
+    comparison: 'About the size of a full cricket stadium crowd.',
+    tagline: '50,000 impressions over 30 days, whichever comes first.',
+    benefits: [
+      'Good for a strong local awareness push',
+      'Tracked impressions with auto-stop at limit or 30 days',
+      'Comparable to reaching one packed cricket stadium audience'
+    ]
+  },
+  {
+    id: 'ads-100k',
+    name: 'Office Reach',
+    price: 499,
+    impressions: 100000,
+    durationDays: 30,
+    comparison: 'Comparable to reaching people across about 1,000 mid-sized offices of 100 employees each.',
+    tagline: '100,000 impressions over 30 days, whichever comes first.',
+    benefits: [
+      'Designed for stronger repeat visibility',
+      'Tracked impressions with auto-stop at limit or 30 days',
+      'Comparable to visibility across around 1,000 offices'
+    ]
+  },
+  {
+    id: 'ads-250k',
+    name: 'Town Reach',
+    price: 999,
+    impressions: 250000,
+    durationDays: 30,
+    comparison: 'Comparable to the population reach of a small city or town.',
+    tagline: '250,000 impressions over 30 days, whichever comes first.',
+    benefits: [
+      'Best for wide-area brand recall',
+      'Tracked impressions with auto-stop at limit or 30 days',
+      'Comparable to reaching a small city or town population'
+    ]
+  }
 ];
 
 const ADVERTISEMENT_LEVELS = [
   { id: 'city', label: 'City' },
   { id: 'state', label: 'State' },
-  { id: 'national', label: 'National' }
+  { id: 'national', label: 'Global' }
 ];
 
 const addDays = (date, days) => new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
@@ -120,6 +159,11 @@ class ProviderGrowthService {
     }
 
     const nextAdvertisements = (state.advertisements || []).map((ad) => {
+      if (ad.status === 'active' && ad.createdAt && addDays(new Date(ad.createdAt), 30) < now) {
+        ad.status = 'completed';
+        ad.completedAt = ad.completedAt || now;
+        changed = true;
+      }
       if (ad.status === 'active' && Number(ad.impressionsUsed || 0) >= Number(ad.impressionsTotal || 0)) {
         ad.status = 'completed';
         ad.completedAt = ad.completedAt || new Date();
@@ -223,6 +267,7 @@ class ProviderGrowthService {
           impressionsTotal: item.impressionsTotal,
           impressionsUsed: item.impressionsUsed,
           impressionsRemaining: Math.max(Number(item.impressionsTotal || 0) - Number(item.impressionsUsed || 0), 0),
+          expiresAt: item.createdAt ? addDays(new Date(item.createdAt), 30) : null,
           status: item.status,
           paused: Boolean(item.paused),
           pausedAt: item.pausedAt || null,
@@ -332,16 +377,16 @@ class ProviderGrowthService {
         throw new Error('Invalid advertisement level or plan');
       }
 
-      state.advertisements.push({
-        level,
-        planId: plan.id,
-        planName: `${validLevel.label} - ${plan.name}`,
-        amount: plan.price,
-        impressionsTotal: plan.impressions,
-        impressionsUsed: 0,
-        status: 'active',
-        createdAt: now
-      });
+        state.advertisements.push({
+          level,
+          planId: plan.id,
+          planName: `${validLevel.label} - ${plan.name}`,
+          amount: plan.price,
+          impressionsTotal: plan.impressions,
+          impressionsUsed: 0,
+          status: 'active',
+          createdAt: now
+        });
       await state.save();
       logger.info(`Advertisement activated for provider ${userId} with ${plan.id} / ${level}`);
       return this.getDashboard(userId);

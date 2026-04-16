@@ -18,6 +18,25 @@ class AdvertisementCreativeService {
     return cleanString(value).slice(0, 500);
   }
 
+  getLevelPriority(level = '', { city = '', state = '', placement = 'home', globalOnly = false } = {}) {
+    const normalizedLevel = cleanString(level).toLowerCase();
+    if (globalOnly) {
+      return normalizedLevel === 'national' ? 100 : 0;
+    }
+
+    if (placement === 'home') {
+      if (normalizedLevel === 'national') return 300;
+      if (normalizedLevel === 'city' && city) return 220;
+      if (normalizedLevel === 'state' && state) return 180;
+      return 0;
+    }
+
+    if (normalizedLevel === 'city' && city) return 300;
+    if (normalizedLevel === 'state' && state) return 220;
+    if (normalizedLevel === 'national') return 180;
+    return 0;
+  }
+
   getLastAdminMessage(creative) {
     const items = Array.isArray(creative?.adminMessages) ? creative.adminMessages : [];
     if (items.length === 0) {
@@ -326,22 +345,27 @@ class AdvertisementCreativeService {
     return creative.toObject();
   }
 
-  async getActiveCreatives({ city = '', limit = 5 } = {}) {
+  async getActiveCreatives({ city = '', state = '', placement = 'home', globalOnly = false, limit = 5 } = {}) {
     const normalizedCity = normalizeCity(city);
+    const normalizedState = normalizeState(state);
+    const shouldShowGlobalOnly = Boolean(globalOnly);
+    const now = new Date();
     const match = { status: 'approved' };
-    if (normalizedCity) {
-      match.$or = [
-        { level: 'city', city: { $regex: `^${escapeRegex(normalizedCity)}$`, $options: 'i' } },
-        { level: 'national' }
-      ];
-    } else {
-      // Without a city context, only show national ads.
+    if (shouldShowGlobalOnly) {
       match.level = 'national';
+    } else {
+      const locationClauses = [{ level: 'national' }];
+      if (normalizedCity) {
+        locationClauses.push({ level: 'city', city: { $regex: `^${escapeRegex(normalizedCity)}$`, $options: 'i' } });
+      }
+      if (normalizedState) {
+        locationClauses.push({ level: 'state', state: { $regex: `^${escapeRegex(normalizedState)}$`, $options: 'i' } });
+      }
+      match.$or = locationClauses;
     }
 
     const creatives = await AdvertisementCreative.find(match)
       .sort({ updatedAt: -1, createdAt: -1 })
-      .limit(Math.max(1, Math.min(Number(limit || 5), 8)))
       .lean();
 
     if (creatives.length === 0) {
@@ -355,13 +379,32 @@ class AdvertisementCreativeService {
 
     for (const doc of growthDocs) {
       for (const ad of doc.advertisements || []) {
-        if (ad.status === 'active' && !ad.paused && Number(ad.impressionsUsed || 0) < Number(ad.impressionsTotal || 0)) {
+        const expired = ad.createdAt ? new Date(ad.createdAt).getTime() + (30 * 24 * 60 * 60 * 1000) <= now.getTime() : false;
+        if (ad.status === 'active' && !ad.paused && !expired && Number(ad.impressionsUsed || 0) < Number(ad.impressionsTotal || 0)) {
           activePackIds.add(String(ad._id));
         }
       }
     }
 
-    const filtered = creatives.filter((item) => activePackIds.has(String(item.advertisementId)));
+    const filtered = creatives
+      .filter((item) => activePackIds.has(String(item.advertisementId)))
+      .map((item) => ({
+        ...item,
+        _priority: this.getLevelPriority(item.level, {
+          city: normalizedCity,
+          state: normalizedState,
+          placement: cleanString(placement).toLowerCase() || 'home',
+          globalOnly: shouldShowGlobalOnly
+        })
+      }))
+      .filter((item) => item._priority > 0)
+      .sort((left, right) => {
+        if (right._priority !== left._priority) {
+          return right._priority - left._priority;
+        }
+        return new Date(right.updatedAt || right.createdAt || 0).getTime() - new Date(left.updatedAt || left.createdAt || 0).getTime();
+      })
+      .slice(0, Math.max(1, Math.min(Number(limit || 5), 8)));
     if (filtered.length === 0) {
       return [];
     }
@@ -397,7 +440,10 @@ class AdvertisementCreativeService {
         imageHeight: Number(item.imageHeight || 0),
         providerName: '',
         profession: cleanString(profile?.profession || ''),
-        targetPath
+        targetPath,
+        ctaMessage: hasWebsite
+          ? 'Clicking this ad opens the provider website.'
+          : 'Clicking this ad opens the provider profile where customers can call or message.'
       };
     });
   }
@@ -418,6 +464,12 @@ class AdvertisementCreativeService {
       return null;
     }
     if (pack.paused) {
+      return null;
+    }
+    if (pack.createdAt && new Date(pack.createdAt).getTime() + (30 * 24 * 60 * 60 * 1000) <= Date.now()) {
+      pack.status = 'completed';
+      pack.completedAt = pack.completedAt || new Date();
+      await growth.save();
       return null;
     }
 

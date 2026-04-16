@@ -11,6 +11,9 @@ const upload = multer({ dest: 'uploads/' });
 
 const activeAdsSchema = Joi.object({
   city: Joi.string().trim().allow('').max(80).optional(),
+  state: Joi.string().trim().allow('').max(80).optional(),
+  placement: Joi.string().trim().valid('home', 'messages').optional(),
+  globalOnly: Joi.boolean().truthy('true').truthy('1').falsy('false').falsy('0').optional(),
   limit: Joi.number().integer().min(1).max(8).optional()
 });
 
@@ -35,6 +38,9 @@ router.get('/active', validationMiddleware(activeAdsSchema, 'query'), async (req
   try {
     const data = await advertisementCreativeService.getActiveCreatives({
       city: req.query.city,
+      state: req.query.state,
+      placement: req.query.placement,
+      globalOnly: req.query.globalOnly,
       limit: req.query.limit
     });
     res.json({ success: true, data });
@@ -94,4 +100,3 @@ router.post(
 );
 
 module.exports = router;
-
