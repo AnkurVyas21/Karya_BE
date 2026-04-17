@@ -9,6 +9,20 @@ const advertisementCreativeService = require('../services/advertisementCreativeS
 const router = express.Router();
 const upload = multer({ dest: 'uploads/' });
 
+const toBoolean = (value, fallback = false) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['false', '0', 'no', 'off', ''].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+};
+
 const activeAdsSchema = Joi.object({
   city: Joi.string().trim().allow('').max(80).optional(),
   state: Joi.string().trim().allow('').max(80).optional(),
@@ -41,8 +55,8 @@ router.get('/active', validationMiddleware(activeAdsSchema, 'query'), async (req
       city: req.query.city,
       state: req.query.state,
       placement: req.query.placement,
-      globalOnly: req.query.globalOnly,
-      debug: req.query.debug,
+      globalOnly: toBoolean(req.query.globalOnly, false),
+      debug: toBoolean(req.query.debug, false),
       limit: req.query.limit
     });
     res.json({ success: true, data });
