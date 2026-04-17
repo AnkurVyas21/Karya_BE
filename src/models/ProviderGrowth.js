@@ -2,6 +2,8 @@ const mongoose = require('mongoose');
 
 const advertisementSchema = new mongoose.Schema({
   level: { type: String, enum: ['city', 'state', 'national'], required: true },
+  city: { type: String, default: '' },
+  state: { type: String, default: '' },
   planId: { type: String, required: true },
   planName: { type: String, required: true },
   amount: { type: Number, default: 0 },

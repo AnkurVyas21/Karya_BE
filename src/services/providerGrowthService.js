@@ -234,6 +234,8 @@ class ProviderGrowthService {
         fullName: [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim(),
         profession: profile?.profession || '',
         location: profile?.location || '',
+        city: cleanString(profile?.city),
+        state: cleanString(profile?.state),
         profileViews: Number(profile?.viewCount || 0),
         websiteUrlPath: websiteSlug ? `/provider/site/${websiteSlug}` : '',
         isProfileComplete: Boolean(profile?.profession && (profile?.location || profile?.city || profile?.state))
@@ -271,6 +273,8 @@ class ProviderGrowthService {
         items: visibleAds.map((item) => ({
           id: item._id.toString(),
           level: item.level,
+          city: cleanString(item.city),
+          state: cleanString(item.state),
           planId: item.planId,
           planName: item.planName,
           amount: item.amount,
@@ -414,6 +418,8 @@ class ProviderGrowthService {
 
       state.advertisements.push({
         level,
+        city: level === 'city' ? city : '',
+        state: level === 'city' || level === 'state' ? stateName : '',
         planId: plan.id,
         planName: `${validLevel.label} - ${plan.name}`,
         amount: plan.price,
