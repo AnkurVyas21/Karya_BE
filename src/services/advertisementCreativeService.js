@@ -37,6 +37,50 @@ class AdvertisementCreativeService {
     return 0;
   }
 
+  buildActiveCreativeDebugRow(item, context = {}) {
+    const pack = context.pack || null;
+    const normalizedPlacement = cleanString(context.placement).toLowerCase() || 'home';
+    const priority = this.getLevelPriority(item.level, {
+      city: context.city || '',
+      state: context.state || '',
+      placement: normalizedPlacement,
+      globalOnly: Boolean(context.globalOnly)
+    });
+
+    const reason = !pack
+      ? 'no_matching_campaign_pack'
+      : pack.status !== 'active'
+        ? `campaign_not_active:${pack.status}`
+        : pack.paused
+          ? 'campaign_paused'
+          : pack.expired
+            ? 'campaign_expired'
+            : !pack.hasRemainingImpressions
+              ? 'impressions_exhausted'
+              : priority <= 0
+                ? 'location_priority_zero'
+                : 'included';
+
+    return {
+      creativeId: item._id?.toString?.() || String(item._id || ''),
+      advertisementId: String(item.advertisementId || ''),
+      level: String(item.level || ''),
+      city: item.city || '',
+      state: item.state || '',
+      status: item.status || '',
+      matchedByQuery: true,
+      campaignFound: Boolean(pack),
+      campaignStatus: pack?.status || '',
+      campaignPaused: Boolean(pack?.paused),
+      campaignExpired: Boolean(pack?.expired),
+      hasRemainingImpressions: Boolean(pack?.hasRemainingImpressions),
+      impressionsUsed: Number(pack?.impressionsUsed || 0),
+      impressionsTotal: Number(pack?.impressionsTotal || 0),
+      priority,
+      reason
+    };
+  }
+
   getLastAdminMessage(creative) {
     const items = Array.isArray(creative?.adminMessages) ? creative.adminMessages : [];
     if (items.length === 0) {
@@ -345,11 +389,12 @@ class AdvertisementCreativeService {
     return creative.toObject();
   }
 
-  async getActiveCreatives({ city = '', state = '', placement = 'home', globalOnly = false, limit = 5 } = {}) {
+  async getActiveCreatives({ city = '', state = '', placement = 'home', globalOnly = false, debug = false, limit = 5 } = {}) {
     const normalizedCity = normalizeCity(city);
     const normalizedState = normalizeState(state);
     const shouldShowGlobalOnly = Boolean(globalOnly);
     const now = new Date();
+    const shouldDebug = Boolean(debug);
     const match = { status: 'approved' };
     if (shouldShowGlobalOnly) {
       match.level = 'national';
@@ -369,34 +414,62 @@ class AdvertisementCreativeService {
       .lean();
 
     if (creatives.length === 0) {
-      return [];
+      return shouldDebug ? {
+        items: [],
+        debug: {
+          query: {
+            city: normalizedCity,
+            state: normalizedState,
+            placement: cleanString(placement).toLowerCase() || 'home',
+            globalOnly: shouldShowGlobalOnly,
+            limit: Math.max(1, Math.min(Number(limit || 5), 8))
+          },
+          matchedCreatives: 0,
+          rows: []
+        }
+      } : [];
     }
 
     // Filter out creatives whose packs have completed or are no longer active.
     const advertisementIds = creatives.map((item) => String(item.advertisementId));
     const growthDocs = await ProviderGrowth.find({ 'advertisements._id': { $in: advertisementIds } }).lean();
     const activePackIds = new Set();
+    const packById = new Map();
 
     for (const doc of growthDocs) {
       for (const ad of doc.advertisements || []) {
         const expired = ad.createdAt ? new Date(ad.createdAt).getTime() + (30 * 24 * 60 * 60 * 1000) <= now.getTime() : false;
+        const hasRemainingImpressions = Number(ad.impressionsUsed || 0) < Number(ad.impressionsTotal || 0);
+        const packState = {
+          id: String(ad._id),
+          status: String(ad.status || ''),
+          paused: Boolean(ad.paused),
+          expired,
+          hasRemainingImpressions,
+          impressionsUsed: Number(ad.impressionsUsed || 0),
+          impressionsTotal: Number(ad.impressionsTotal || 0)
+        };
+        packById.set(String(ad._id), packState);
         if (ad.status === 'active' && !ad.paused && !expired && Number(ad.impressionsUsed || 0) < Number(ad.impressionsTotal || 0)) {
           activePackIds.add(String(ad._id));
         }
       }
     }
 
-    const filtered = creatives
-      .filter((item) => activePackIds.has(String(item.advertisementId)))
+    const prioritized = creatives
       .map((item) => ({
         ...item,
+        _pack: packById.get(String(item.advertisementId)) || null,
         _priority: this.getLevelPriority(item.level, {
           city: normalizedCity,
           state: normalizedState,
           placement: cleanString(placement).toLowerCase() || 'home',
           globalOnly: shouldShowGlobalOnly
         })
-      }))
+      }));
+
+    const filtered = prioritized
+      .filter((item) => activePackIds.has(String(item.advertisementId)))
       .filter((item) => item._priority > 0)
       .sort((left, right) => {
         if (right._priority !== left._priority) {
@@ -406,7 +479,26 @@ class AdvertisementCreativeService {
       })
       .slice(0, Math.max(1, Math.min(Number(limit || 5), 8)));
     if (filtered.length === 0) {
-      return [];
+      return shouldDebug ? {
+        items: [],
+        debug: {
+          query: {
+            city: normalizedCity,
+            state: normalizedState,
+            placement: cleanString(placement).toLowerCase() || 'home',
+            globalOnly: shouldShowGlobalOnly,
+            limit: Math.max(1, Math.min(Number(limit || 5), 8))
+          },
+          matchedCreatives: creatives.length,
+          rows: prioritized.map((item) => this.buildActiveCreativeDebugRow(item, {
+            city: normalizedCity,
+            state: normalizedState,
+            placement,
+            globalOnly: shouldShowGlobalOnly,
+            pack: item._pack
+          }))
+        }
+      } : [];
     }
 
     // Fetch provider profiles for click-through + ProviderGrowth for website slugs.
@@ -418,7 +510,7 @@ class AdvertisementCreativeService {
     const profileByUser = new Map(profiles.map((p) => [String(p.user), p]));
     const growthByUser = new Map(growthStates.map((g) => [String(g.user), g]));
 
-    return filtered.map((item) => {
+    const items = filtered.map((item) => {
       const profile = profileByUser.get(String(item.user));
       const growth = growthByUser.get(String(item.user));
       const websiteSlug = cleanString(growth?.websiteSlug) || '';
@@ -446,6 +538,31 @@ class AdvertisementCreativeService {
           : 'Clicking this ad opens the provider profile where customers can call or message.'
       };
     });
+
+    if (shouldDebug) {
+      return {
+        items,
+        debug: {
+          query: {
+            city: normalizedCity,
+            state: normalizedState,
+            placement: cleanString(placement).toLowerCase() || 'home',
+            globalOnly: shouldShowGlobalOnly,
+            limit: Math.max(1, Math.min(Number(limit || 5), 8))
+          },
+          matchedCreatives: creatives.length,
+          rows: prioritized.map((item) => this.buildActiveCreativeDebugRow(item, {
+            city: normalizedCity,
+            state: normalizedState,
+            placement,
+            globalOnly: shouldShowGlobalOnly,
+            pack: item._pack
+          }))
+        }
+      };
+    }
+
+    return items;
   }
 
   async recordView({ creativeId } = {}) {
