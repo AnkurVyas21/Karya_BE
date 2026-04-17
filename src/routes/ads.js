@@ -28,6 +28,7 @@ const activeAdsSchema = Joi.object({
   state: Joi.string().trim().allow('').max(80).optional(),
   placement: Joi.string().trim().valid('home', 'messages').optional(),
   globalOnly: Joi.boolean().truthy('true').truthy('1').falsy('false').falsy('0').optional(),
+  localOnly: Joi.boolean().truthy('true').truthy('1').falsy('false').falsy('0').optional(),
   debug: Joi.boolean().truthy('true').truthy('1').falsy('false').falsy('0').optional(),
   limit: Joi.number().integer().min(1).max(8).optional()
 });
@@ -56,6 +57,7 @@ router.get('/active', validationMiddleware(activeAdsSchema, 'query'), async (req
       state: req.query.state,
       placement: req.query.placement,
       globalOnly: toBoolean(req.query.globalOnly, false),
+      localOnly: toBoolean(req.query.localOnly, false),
       debug: toBoolean(req.query.debug, false),
       limit: req.query.limit
     });

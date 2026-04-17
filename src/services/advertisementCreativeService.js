@@ -18,10 +18,15 @@ class AdvertisementCreativeService {
     return cleanString(value).slice(0, 500);
   }
 
-  getLevelPriority(level = '', { city = '', state = '', placement = 'home', globalOnly = false } = {}) {
+  getLevelPriority(level = '', { city = '', state = '', placement = 'home', globalOnly = false, localOnly = false } = {}) {
     const normalizedLevel = cleanString(level).toLowerCase();
     if (globalOnly) {
       return normalizedLevel === 'national' ? 100 : 0;
+    }
+    if (localOnly) {
+      if (normalizedLevel === 'city' && city) return placement === 'home' ? 300 : 320;
+      if (normalizedLevel === 'state' && state) return placement === 'home' ? 240 : 260;
+      return 0;
     }
 
     if (placement === 'home') {
@@ -44,7 +49,8 @@ class AdvertisementCreativeService {
       city: context.city || '',
       state: context.state || '',
       placement: normalizedPlacement,
-      globalOnly: Boolean(context.globalOnly)
+      globalOnly: Boolean(context.globalOnly),
+      localOnly: Boolean(context.localOnly)
     });
 
     const reason = !pack
@@ -389,22 +395,40 @@ class AdvertisementCreativeService {
     return creative.toObject();
   }
 
-  async getActiveCreatives({ city = '', state = '', placement = 'home', globalOnly = false, debug = false, limit = 5 } = {}) {
+  async getActiveCreatives({ city = '', state = '', placement = 'home', globalOnly = false, localOnly = false, debug = false, limit = 5 } = {}) {
     const normalizedCity = normalizeCity(city);
     const normalizedState = normalizeState(state);
     const shouldShowGlobalOnly = Boolean(globalOnly);
+    const shouldShowLocalOnly = Boolean(localOnly) && !shouldShowGlobalOnly;
     const now = new Date();
     const shouldDebug = Boolean(debug);
     const match = { status: 'approved' };
     if (shouldShowGlobalOnly) {
       match.level = 'national';
     } else {
-      const locationClauses = [{ level: 'national' }];
+      const locationClauses = shouldShowLocalOnly ? [] : [{ level: 'national' }];
       if (normalizedCity) {
         locationClauses.push({ level: 'city', city: { $regex: `^${escapeRegex(normalizedCity)}$`, $options: 'i' } });
       }
       if (normalizedState) {
         locationClauses.push({ level: 'state', state: { $regex: `^${escapeRegex(normalizedState)}$`, $options: 'i' } });
+      }
+      if (locationClauses.length === 0) {
+        return shouldDebug ? {
+          items: [],
+          debug: {
+            query: {
+              city: normalizedCity,
+              state: normalizedState,
+              placement: cleanString(placement).toLowerCase() || 'home',
+              globalOnly: shouldShowGlobalOnly,
+              localOnly: shouldShowLocalOnly,
+              limit: Math.max(1, Math.min(Number(limit || 5), 8))
+            },
+            matchedCreatives: 0,
+            rows: []
+          }
+        } : [];
       }
       match.$or = locationClauses;
     }
@@ -422,6 +446,7 @@ class AdvertisementCreativeService {
             state: normalizedState,
             placement: cleanString(placement).toLowerCase() || 'home',
             globalOnly: shouldShowGlobalOnly,
+            localOnly: shouldShowLocalOnly,
             limit: Math.max(1, Math.min(Number(limit || 5), 8))
           },
           matchedCreatives: 0,
@@ -464,7 +489,8 @@ class AdvertisementCreativeService {
           city: normalizedCity,
           state: normalizedState,
           placement: cleanString(placement).toLowerCase() || 'home',
-          globalOnly: shouldShowGlobalOnly
+          globalOnly: shouldShowGlobalOnly,
+          localOnly: shouldShowLocalOnly
         })
       }));
 
@@ -487,6 +513,7 @@ class AdvertisementCreativeService {
             state: normalizedState,
             placement: cleanString(placement).toLowerCase() || 'home',
             globalOnly: shouldShowGlobalOnly,
+            localOnly: shouldShowLocalOnly,
             limit: Math.max(1, Math.min(Number(limit || 5), 8))
           },
           matchedCreatives: creatives.length,
@@ -495,6 +522,7 @@ class AdvertisementCreativeService {
             state: normalizedState,
             placement,
             globalOnly: shouldShowGlobalOnly,
+            localOnly: shouldShowLocalOnly,
             pack: item._pack
           }))
         }
@@ -548,6 +576,7 @@ class AdvertisementCreativeService {
             state: normalizedState,
             placement: cleanString(placement).toLowerCase() || 'home',
             globalOnly: shouldShowGlobalOnly,
+            localOnly: shouldShowLocalOnly,
             limit: Math.max(1, Math.min(Number(limit || 5), 8))
           },
           matchedCreatives: creatives.length,
@@ -556,6 +585,7 @@ class AdvertisementCreativeService {
             state: normalizedState,
             placement,
             globalOnly: shouldShowGlobalOnly,
+            localOnly: shouldShowLocalOnly,
             pack: item._pack
           }))
         }
