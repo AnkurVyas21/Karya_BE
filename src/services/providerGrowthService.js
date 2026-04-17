@@ -463,7 +463,12 @@ class ProviderGrowthService {
         }
       }
       logger.info(`Advertisement activated for provider ${userId} with ${plan.id} / ${level} / ${status}`);
-      return this.getDashboard(userId);
+      const dashboard = await this.getDashboard(userId);
+      return {
+        ...dashboard,
+        createdAdvertisementId: createdAd?._id ? String(createdAd._id) : '',
+        createdAdvertisementPath: createdAd?._id ? `/provider/ads/create/${createdAd._id}` : ''
+      };
     }
 
     throw new Error('Invalid feature selection');
