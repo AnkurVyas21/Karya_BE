@@ -98,6 +98,7 @@ const ADVERTISEMENT_LEVELS = [
 ];
 
 const addDays = (date, days) => new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+const getAdRunStart = (ad = {}) => ad?.startsAt || ad?.createdAt || null;
 
 const cleanString = (value) => String(value || '').trim();
 const pickWebsiteAudio = (website = {}) => cleanString(website.backgroundAudioFile) || cleanString(website.backgroundAudioUrl);
@@ -159,7 +160,12 @@ class ProviderGrowthService {
     }
 
     const nextAdvertisements = (state.advertisements || []).map((ad) => {
-      if (ad.status === 'active' && ad.createdAt && addDays(new Date(ad.createdAt), 30) < now) {
+      if (ad.status === 'scheduled' && ad.startsAt && ad.startsAt <= now) {
+        ad.status = 'active';
+        changed = true;
+      }
+      const runStart = getAdRunStart(ad);
+      if (ad.status === 'active' && runStart && addDays(new Date(runStart), 30) < now) {
         ad.status = 'completed';
         ad.completedAt = ad.completedAt || now;
         changed = true;
@@ -209,7 +215,8 @@ class ProviderGrowthService {
     ]);
 
     const websiteSlug = state.websiteSlug || (state.website?.active ? await this.ensureWebsiteSlug(state, userId) : '');
-    const activeAds = (state.advertisements || []).filter((item) => item.status === 'active');
+    const visibleAds = (state.advertisements || []).filter((item) => item.status === 'active' || item.status === 'scheduled');
+    const activeAds = visibleAds.filter((item) => item.status === 'active');
     const runningAds = activeAds.filter((item) => !item.paused);
     const usedImpressions = activeAds.reduce((sum, item) => sum + Number(item.impressionsUsed || 0), 0);
     const totalImpressions = activeAds.reduce((sum, item) => sum + Number(item.impressionsTotal || 0), 0);
@@ -258,7 +265,7 @@ class ProviderGrowthService {
         usedImpressions,
         remainingImpressions: Math.max(totalImpressions - usedImpressions, 0),
         status: runningAds.length > 0 ? 'Running' : activeAds.length > 0 ? 'Paused' : 'Not active',
-        items: activeAds.map((item) => ({
+        items: visibleAds.map((item) => ({
           id: item._id.toString(),
           level: item.level,
           planId: item.planId,
@@ -267,7 +274,8 @@ class ProviderGrowthService {
           impressionsTotal: item.impressionsTotal,
           impressionsUsed: item.impressionsUsed,
           impressionsRemaining: Math.max(Number(item.impressionsTotal || 0) - Number(item.impressionsUsed || 0), 0),
-          expiresAt: item.createdAt ? addDays(new Date(item.createdAt), 30) : null,
+          expiresAt: getAdRunStart(item) ? addDays(new Date(getAdRunStart(item)), 30) : null,
+          startsAt: getAdRunStart(item),
           status: item.status,
           paused: Boolean(item.paused),
           pausedAt: item.pausedAt || null,
@@ -370,6 +378,8 @@ class ProviderGrowthService {
     if (feature === 'advertisement') {
       const level = cleanString(payload.level).toLowerCase();
       const planId = cleanString(payload.planId).toLowerCase();
+      const scheduleMode = cleanString(payload.scheduleMode).toLowerCase();
+      const extendFromAdId = cleanString(payload.extendFromAdId);
       const plan = ADVERTISEMENT_PLANS.find((item) => item.id === planId);
       const validLevel = ADVERTISEMENT_LEVELS.find((item) => item.id === level);
 
@@ -377,18 +387,33 @@ class ProviderGrowthService {
         throw new Error('Invalid advertisement level or plan');
       }
 
-        state.advertisements.push({
-          level,
-          planId: plan.id,
-          planName: `${validLevel.label} - ${plan.name}`,
-          amount: plan.price,
-          impressionsTotal: plan.impressions,
-          impressionsUsed: 0,
-          status: 'active',
-          createdAt: now
-        });
+      let startsAt = now;
+      let status = 'active';
+      if (scheduleMode === 'after-current' && extendFromAdId) {
+        const baseAd = (state.advertisements || []).find((item) => String(item._id) === extendFromAdId);
+        if (!baseAd) {
+          throw new Error('Could not find the running advertisement to extend from');
+        }
+        const baseRunStart = getAdRunStart(baseAd);
+        startsAt = baseRunStart ? addDays(new Date(baseRunStart), 30) : addDays(now, 30);
+        if (startsAt > now) {
+          status = 'scheduled';
+        }
+      }
+
+      state.advertisements.push({
+        level,
+        planId: plan.id,
+        planName: `${validLevel.label} - ${plan.name}`,
+        amount: plan.price,
+        impressionsTotal: plan.impressions,
+        impressionsUsed: 0,
+        status,
+        startsAt,
+        createdAt: now
+      });
       await state.save();
-      logger.info(`Advertisement activated for provider ${userId} with ${plan.id} / ${level}`);
+      logger.info(`Advertisement activated for provider ${userId} with ${plan.id} / ${level} / ${status}`);
       return this.getDashboard(userId);
     }
 

@@ -8,6 +8,7 @@ const cleanString = (value) => String(value || '').trim();
 const normalizeCity = (value) => cleanString(value).replace(/\s+/g, ' ');
 const normalizeState = (value) => cleanString(value).replace(/\s+/g, ' ');
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const getAdRunStart = (ad = {}) => ad?.startsAt || ad?.createdAt || null;
 
 class AdvertisementCreativeService {
   cleanAdminMessage(value = '') {
@@ -104,8 +105,8 @@ class AdvertisementCreativeService {
     }
 
     const pack = (stateDoc.advertisements || []).find((item) => String(item._id) === String(advertisementId));
-    if (!pack || pack.status !== 'active') {
-      throw new Error('No active advertisement pack found for this campaign');
+    if (!pack || !['active', 'scheduled'].includes(String(pack.status || '').toLowerCase())) {
+      throw new Error('No active or scheduled advertisement pack found for this campaign');
     }
 
     if (cleanString(pack.level).toLowerCase() !== cleanString(level).toLowerCase()) {
@@ -463,7 +464,8 @@ class AdvertisementCreativeService {
 
     for (const doc of growthDocs) {
       for (const ad of doc.advertisements || []) {
-        const expired = ad.createdAt ? new Date(ad.createdAt).getTime() + (30 * 24 * 60 * 60 * 1000) <= now.getTime() : false;
+        const runStart = getAdRunStart(ad);
+        const expired = runStart ? new Date(runStart).getTime() + (30 * 24 * 60 * 60 * 1000) <= now.getTime() : false;
         const hasRemainingImpressions = Number(ad.impressionsUsed || 0) < Number(ad.impressionsTotal || 0);
         const packState = {
           id: String(ad._id),
@@ -613,7 +615,8 @@ class AdvertisementCreativeService {
     if (pack.paused) {
       return null;
     }
-    if (pack.createdAt && new Date(pack.createdAt).getTime() + (30 * 24 * 60 * 60 * 1000) <= Date.now()) {
+    const packRunStart = getAdRunStart(pack);
+    if (packRunStart && new Date(packRunStart).getTime() + (30 * 24 * 60 * 60 * 1000) <= Date.now()) {
       pack.status = 'completed';
       pack.completedAt = pack.completedAt || new Date();
       await growth.save();
@@ -650,6 +653,9 @@ class AdvertisementCreativeService {
     for (const row of rows) {
       map.set(String(row.advertisementId), {
         id: row._id.toString(),
+        level: row.level,
+        city: row.city || '',
+        state: row.state || '',
         status: row.status,
         views: Number(row.views || 0),
         clicks: Number(row.clicks || 0),
