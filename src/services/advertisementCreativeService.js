@@ -133,7 +133,8 @@ class AdvertisementCreativeService {
     }
 
     const existing = await AdvertisementCreative.findOne({ user: userId, advertisementId: String(advertisementId) });
-    if (existing && existing.status === 'approved') {
+    const packStatus = String(pack.status || '').toLowerCase();
+    if (existing && existing.status === 'approved' && packStatus !== 'scheduled') {
       throw new Error('This ad is already approved and cannot be changed');
     }
 

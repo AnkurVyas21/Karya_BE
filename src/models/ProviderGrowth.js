@@ -9,6 +9,7 @@ const advertisementSchema = new mongoose.Schema({
   impressionsUsed: { type: Number, default: 0 },
   status: { type: String, enum: ['active', 'scheduled', 'completed'], default: 'active' },
   startsAt: { type: Date, default: null },
+  extendFromAdId: { type: String, default: '' },
   paused: { type: Boolean, default: false },
   pausedAt: { type: Date, default: null },
   pausedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },

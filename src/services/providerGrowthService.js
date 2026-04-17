@@ -1,6 +1,7 @@
 const ProviderGrowth = require('../models/ProviderGrowth');
 const User = require('../models/User');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
+const AdvertisementCreative = require('../models/AdvertisementCreative');
 const logger = require('../utils/logger');
 const advertisementCreativeService = require('./advertisementCreativeService');
 
@@ -101,6 +102,8 @@ const addDays = (date, days) => new Date(date.getTime() + days * 24 * 60 * 60 * 
 const getAdRunStart = (ad = {}) => ad?.startsAt || ad?.createdAt || null;
 
 const cleanString = (value) => String(value || '').trim();
+const normalizeCity = (value) => cleanString(value).replace(/\s+/g, ' ');
+const normalizeState = (value) => cleanString(value).replace(/\s+/g, ' ');
 const pickWebsiteAudio = (website = {}) => cleanString(website.backgroundAudioFile) || cleanString(website.backgroundAudioUrl);
 
 const slugify = (value = '') => cleanString(value)
@@ -380,11 +383,19 @@ class ProviderGrowthService {
       const planId = cleanString(payload.planId).toLowerCase();
       const scheduleMode = cleanString(payload.scheduleMode).toLowerCase();
       const extendFromAdId = cleanString(payload.extendFromAdId);
+      const city = normalizeCity(payload.city);
+      const stateName = normalizeState(payload.state);
       const plan = ADVERTISEMENT_PLANS.find((item) => item.id === planId);
       const validLevel = ADVERTISEMENT_LEVELS.find((item) => item.id === level);
 
       if (!plan || !validLevel) {
         throw new Error('Invalid advertisement level or plan');
+      }
+      if (level === 'city' && !city) {
+        throw new Error('City is required for city-level advertisements');
+      }
+      if (level === 'state' && !stateName) {
+        throw new Error('State is required for state-level advertisements');
       }
 
       let startsAt = now;
@@ -410,9 +421,41 @@ class ProviderGrowthService {
         impressionsUsed: 0,
         status,
         startsAt,
+        extendFromAdId,
         createdAt: now
       });
       await state.save();
+      const createdAd = state.advertisements[state.advertisements.length - 1];
+
+      if (extendFromAdId && createdAd?._id) {
+        const sourceCreative = await AdvertisementCreative.findOne({ user: userId, advertisementId: extendFromAdId });
+        if (sourceCreative) {
+          await AdvertisementCreative.findOneAndUpdate(
+            { user: userId, advertisementId: String(createdAd._id) },
+            {
+              $set: {
+                user: sourceCreative.user,
+                professionalProfile: sourceCreative.professionalProfile || null,
+                advertisementId: String(createdAd._id),
+                level,
+                city: level === 'city' ? city : '',
+                state: level === 'city' || level === 'state' ? stateName : '',
+                imagePath: sourceCreative.imagePath,
+                imageWidth: Number(sourceCreative.imageWidth || 0),
+                imageHeight: Number(sourceCreative.imageHeight || 0),
+                status: sourceCreative.status,
+                rejectionReason: sourceCreative.rejectionReason || '',
+                approvedAt: sourceCreative.approvedAt || null,
+                versions: Array.isArray(sourceCreative.versions) ? sourceCreative.versions : [],
+                adminMessages: Array.isArray(sourceCreative.adminMessages) ? sourceCreative.adminMessages : [],
+                views: 0,
+                clicks: 0
+              }
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+          );
+        }
+      }
       logger.info(`Advertisement activated for provider ${userId} with ${plan.id} / ${level} / ${status}`);
       return this.getDashboard(userId);
     }
