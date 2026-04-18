@@ -74,6 +74,9 @@ class ProfessionalService {
       update.skills = update.specializations;
     }
     delete update.specializations;
+    const professionAliases = normalizeList(update.professionAliases || update.aliases || []);
+    delete update.professionAliases;
+    delete update.aliases;
 
     if ('skills' in update) {
       update.skills = normalizeList(update.skills);
@@ -130,7 +133,7 @@ class ProfessionalService {
 
     if ('profession' in mergedProfile) {
       mergedProfile.profession = await professionCatalogService.ensureProfession(mergedProfile.profession, {
-        aliases: mergedProfile.aliases || [],
+        aliases: professionAliases,
         tags: [
           ...(mergedProfile.tags || []),
           ...(mergedProfile.skills || [])

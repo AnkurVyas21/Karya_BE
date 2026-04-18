@@ -35,6 +35,10 @@ const signupSchema = Joi.object({
   password: Joi.string().min(6).required(),
   role: Joi.string().valid('user', 'professional').default('user'),
   profession: Joi.string().allow('').optional(),
+  professionAliases: Joi.alternatives().try(
+    Joi.array().items(Joi.string()),
+    Joi.string().allow('')
+  ).optional(),
   country: Joi.string().allow('').optional(),
   state: Joi.string().allow('').optional(),
   addressLine: Joi.string().allow('').optional(),
@@ -89,6 +93,28 @@ const updateCurrentUserSchema = Joi.object({
   mobile: Joi.string().allow('').optional(),
   password: Joi.string().min(6).allow('').optional(),
   profession: Joi.string().allow('').optional(),
+  professionAliases: Joi.alternatives().try(
+    Joi.array().items(Joi.string()),
+    Joi.string().allow('')
+  ).optional(),
+  description: Joi.string().allow('').optional(),
+  serviceAreas: Joi.alternatives().try(
+    Joi.array().items(Joi.string()),
+    Joi.string().allow('')
+  ).optional(),
+  skills: Joi.alternatives().try(
+    Joi.array().items(Joi.string()),
+    Joi.string().allow('')
+  ).optional(),
+  specializations: Joi.alternatives().try(
+    Joi.array().items(Joi.string()),
+    Joi.string().allow('')
+  ).optional(),
+  tags: Joi.alternatives().try(
+    Joi.array().items(Joi.string()),
+    Joi.string().allow('')
+  ).optional(),
+  allowContactDisplay: Joi.boolean().optional(),
   country: Joi.string().allow('').optional(),
   state: Joi.string().allow('').optional(),
   addressLine: Joi.string().allow('').optional(),

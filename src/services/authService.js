@@ -20,6 +20,7 @@ class AuthService {
       password,
       role = 'user',
       profession = '',
+      professionAliases = [],
       country = 'India',
       state = '',
       addressLine = '',
@@ -87,6 +88,7 @@ class AuthService {
       const location = composeLocation({ town, area, city, state });
       const normalizedDescription = toCleanString(description);
       const savedProfession = await professionCatalogService.ensureProfession(profession, {
+        aliases: normalizeList(professionAliases),
         tags: [...normalizedSkills, ...normalizeList(providedTags)],
         source: 'provider-signup',
         preserveInput: true
@@ -317,10 +319,42 @@ class AuthService {
         location: composeLocation(nextLocationState)
       };
 
+      const providedAliases = normalizeList(payload.professionAliases || []);
+      const providedServiceAreas = 'serviceAreas' in payload
+        ? normalizeList(payload.serviceAreas)
+        : (existingProfessionalProfile?.serviceAreas || []);
+      const providedSkills = 'specializations' in payload
+        ? normalizeList(payload.specializations)
+        : ('skills' in payload ? normalizeList(payload.skills) : (existingProfessionalProfile?.skills || []));
+      const providedDescription = 'description' in payload
+        ? toCleanString(payload.description)
+        : (existingProfessionalProfile?.description || '');
+      const manualTags = 'tags' in payload
+        ? normalizeList(payload.tags)
+        : [];
+
+      if ('description' in payload) {
+        professionalUpdates.description = providedDescription;
+      }
+
+      if ('serviceAreas' in payload) {
+        professionalUpdates.serviceAreas = providedServiceAreas;
+      }
+
+      if ('specializations' in payload || 'skills' in payload) {
+        professionalUpdates.skills = providedSkills;
+      }
+
+      if ('allowContactDisplay' in payload) {
+        professionalUpdates.allowContactDisplay = Boolean(payload.allowContactDisplay);
+      }
+
       if ('profession' in payload) {
         professionalUpdates.profession = await professionCatalogService.ensureProfession(payload.profession, {
+          aliases: providedAliases,
           tags: [
-            ...(existingProfessionalProfile?.skills || []),
+            ...providedSkills,
+            ...manualTags,
             ...(existingProfessionalProfile?.tags || [])
           ],
           source: 'account-profile',
@@ -331,19 +365,28 @@ class AuthService {
       const nextProfession = 'profession' in professionalUpdates
         ? professionalUpdates.profession
         : existingProfessionalProfile?.profession || '';
-      const nextSkills = existingProfessionalProfile?.skills || [];
-      const nextDescription = existingProfessionalProfile?.description || '';
-      const nextServiceAreas = existingProfessionalProfile?.serviceAreas || [];
+      const nextSkills = 'skills' in professionalUpdates
+        ? professionalUpdates.skills
+        : (existingProfessionalProfile?.skills || []);
+      const nextDescription = 'description' in professionalUpdates
+        ? professionalUpdates.description
+        : (existingProfessionalProfile?.description || '');
+      const nextServiceAreas = 'serviceAreas' in professionalUpdates
+        ? professionalUpdates.serviceAreas
+        : (existingProfessionalProfile?.serviceAreas || []);
 
       const professionCatalog = await professionCatalogService.getAllProfessions();
-      professionalUpdates.tags = deriveProfileTags({
+      professionalUpdates.tags = normalizeList([
+        ...manualTags,
+        ...deriveProfileTags({
         profession: nextProfession,
         specializations: nextSkills,
         description: nextDescription,
         serviceAreas: nextServiceAreas,
         ...nextLocationState,
         professionCatalog
-      });
+      })
+      ]);
 
       await ProfessionalProfile.findOneAndUpdate(
         { user: userId },
@@ -352,7 +395,6 @@ class AuthService {
           $setOnInsert: {
             user: userId,
             skills: [],
-            tags: [],
             serviceAreas: [],
             description: '',
             allowContactDisplay: false
