@@ -393,11 +393,7 @@ class AuthService {
         {
           $set: professionalUpdates,
           $setOnInsert: {
-            user: userId,
-            skills: [],
-            serviceAreas: [],
-            description: '',
-            allowContactDisplay: false
+            user: userId
           }
         },
         { upsert: true, new: true, runValidators: true }
