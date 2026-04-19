@@ -44,8 +44,6 @@ class ProfessionCatalogService {
             canonicalName,
             normalizedKey,
             normalizedName: normalizedKey,
-            aliases: [],
-            tags: [],
             source: 'system'
           },
           $set: {
