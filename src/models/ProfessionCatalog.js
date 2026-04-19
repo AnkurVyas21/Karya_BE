@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const professionCatalogSchema = new mongoose.Schema({
   canonicalName: { type: String, required: true, trim: true },
   normalizedKey: { type: String, required: true, trim: true, unique: true, index: true },
+  normalizedName: { type: String, trim: true, default: null },
   aliases: [{ type: String }],
   tags: [{ type: String }],
   source: { type: String, default: 'learned' },

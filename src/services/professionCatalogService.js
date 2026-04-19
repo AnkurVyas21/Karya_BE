@@ -32,6 +32,7 @@ class ProfessionCatalogService {
           $setOnInsert: {
             canonicalName,
             normalizedKey,
+            normalizedName: normalizedKey,
             aliases: [],
             tags: [],
             source: 'system'
@@ -248,11 +249,13 @@ class ProfessionCatalogService {
       $setOnInsert: {
         canonicalName: matchedEntry?.canonicalName || canonicalName,
         normalizedKey: matchedEntry?.normalizedKey || normalizedKey,
+        normalizedName: matchedEntry?.normalizedKey || normalizedKey,
         source: payload.source || matchedEntry?.source || 'learned'
       },
       $set: matchedEntry ? {} : {
         canonicalName,
-        normalizedKey
+        normalizedKey,
+        normalizedName: normalizedKey
       },
       $addToSet: {
         aliases: {
