@@ -21,6 +21,8 @@ const KEYWORD_BOOSTS = {
   caterer: ['khana', 'khane', 'bhojan', 'halwai', 'catering', 'caterer', 'cook', 'cooking', 'order', 'food', 'rasoi', 'shaadi', 'shadi', 'wedding'],
   'mehendi artist': ['mehndi', 'mehendi', 'henna', 'bridal mehndi', 'bridal mehendi', 'shaadi', 'shadi', 'wedding'],
   beautician: ['makeup', 'bridal makeup', 'parlour', 'beauty', 'salon'],
+  barber: ['hair', 'haircut', 'cut', 'cutting', 'cut hair', 'shave', 'shaved', 'shaving', 'beard', 'trim', 'salon', 'nai'],
+  'hair stylist': ['hair', 'haircut', 'hairstyle', 'stylist', 'salon', 'cut hair', 'hair styling'],
   photographer: ['photo', 'photography', 'camera', 'wedding shoot', 'photoshoot'],
   videographer: ['video', 'videography', 'reel', 'shoot'],
   'event planner': ['event', 'wedding', 'shaadi', 'shadi', 'planner', 'arrangement'],
@@ -81,13 +83,14 @@ class ProfessionInferenceService {
       .filter((item) => item.confidence >= CANDIDATE_THRESHOLD)
       .filter((item) => item.lexicalScore >= MIN_LEXICAL_SCORE || item.semanticScore >= MATCH_THRESHOLD)
       .slice(0, Math.max(topN, MAX_CANDIDATES));
+    const prefilterCandidates = broadRanked.slice(0, Math.max(MAX_CANDIDATES, 10));
 
     const top = ranked[0] || null;
     const relaxedCandidates = broadRanked
       .filter((item) => item.confidence >= SUGGESTION_THRESHOLD)
       .slice(0, Math.max(3, topN));
     const llmFallback = (!top || top.confidence < MATCH_THRESHOLD)
-      ? await this.suggestWithLlm(preprocessed, (ranked.length > 0 ? ranked : broadRanked).slice(0, MAX_CANDIDATES), entries)
+      ? await this.suggestWithLlm(preprocessed, (ranked.length > 0 ? ranked : prefilterCandidates).slice(0, MAX_CANDIDATES), entries)
       : null;
 
     let createdFallback = null;
@@ -152,6 +155,19 @@ class ProfessionInferenceService {
         aliases: item.entry.aliases || [],
         tags: item.entry.tags || []
       }))),
+      ...((ranked.length === 0 && relaxedCandidates.length === 0 && !createdFallback)
+        ? prefilterCandidates.slice(0, 3).map((item) => ({
+            professionId: item.entry.id,
+            profession: item.entry.canonicalName,
+            canonicalName: item.entry.canonicalName,
+            normalizedKey: item.entry.normalizedKey,
+            confidence: Math.max(item.confidence, 0.26),
+            similarity: item.semanticScore,
+            source: 'last-resort-catalog',
+            aliases: item.entry.aliases || [],
+            tags: item.entry.tags || []
+          }))
+        : []),
       ...(createdFallback ? [createdFallback] : [])
     ].sort((left, right) => right.confidence - left.confidence);
 
@@ -173,6 +189,8 @@ class ProfessionInferenceService {
         ? 'needs_confirmation'
         : bestSuggestion && bestSuggestion.confidence >= SUGGESTION_THRESHOLD
           ? 'needs_confirmation'
+          : bestSuggestion && ['llm-created', 'llm-matched', 'last-resort-catalog', 'relaxed-catalog'].includes(bestSuggestion.source)
+            ? 'needs_confirmation'
         : 'unknown';
 
     const debugMatches = ranked.slice(0, MAX_CANDIDATES).map((item) => ({
@@ -197,6 +215,14 @@ class ProfessionInferenceService {
       context: options.context || 'profession-inference',
       input: preprocessed.raw,
       normalizedInput: preprocessed.normalized,
+      candidatesBeforeFiltering: prefilterCandidates.slice(0, MAX_CANDIDATES).map((item) => ({
+        profession: item.entry.canonicalName,
+        semanticScore: Number(item.semanticScore.toFixed(4)),
+        lexicalScore: Number(item.lexicalScore.toFixed(4)),
+        keywordBoost: Number(item.keywordBoost.toFixed(4)),
+        popularityScore: Number(item.popularityScore.toFixed(4)),
+        confidence: item.confidence
+      })),
       topMatches: debugMatches,
       fallbackTopMatches: fallbackDebugMatches,
       llmFallback: llmFallback?.canonicalName || '',
@@ -328,15 +354,15 @@ class ProfessionInferenceService {
   }
 
   async suggestWithLlm(preprocessed, rankedSuggestions = [], entries = []) {
-    const provider = this.getLlmProvider();
-    if (!provider) {
-      return null;
-    }
-
     const topCandidates = rankedSuggestions.slice(0, MAX_CANDIDATES).map((item) => ({
       profession: item.entry.canonicalName,
       confidence: item.confidence
     }));
+
+    const provider = this.getLlmProvider();
+    if (!provider) {
+      return this.keywordLlmFallback(preprocessed, topCandidates);
+    }
 
     const prompt = [
       'You are validating profession inference for a local-services marketplace.',
@@ -364,6 +390,41 @@ class ProfessionInferenceService {
     }
 
     return null;
+  }
+
+  keywordLlmFallback(preprocessed, topCandidates = []) {
+    const text = String(preprocessed.embeddingText || preprocessed.raw || '').toLowerCase();
+    const candidates = [];
+
+    const maybeAdd = (profession, confidence) => {
+      if (!profession) {
+        return;
+      }
+      candidates.push({ profession, confidence });
+    };
+
+    if (/\b(hair|haircut|shave|shaved|shaving|beard|trim|salon|nai)\b/.test(text)) {
+      maybeAdd('Barber', 0.72);
+      maybeAdd('Hair Stylist', 0.64);
+    }
+    if (/\b(khana|khane|halwai|catering|caterer|cook|cooking|food|rasoi|order)\b/.test(text)) {
+      maybeAdd('Caterer', 0.74);
+    }
+    if (/\b(mehndi|mehendi|henna)\b/.test(text)) {
+      maybeAdd('Mehendi Artist', 0.74);
+    }
+
+    const best = candidates[0] || topCandidates[0] || null;
+    if (!best) {
+      return null;
+    }
+
+    return {
+      canonicalName: best.profession,
+      aliases: [],
+      tags: [],
+      confidence: best.confidence
+    };
   }
 
   getLlmProvider() {

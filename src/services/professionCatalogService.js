@@ -23,11 +23,6 @@ const uniqueStrings = (values = []) => {
 
 class ProfessionCatalogService {
   async ensureSystemCatalog() {
-    const count = await ProfessionCatalog.countDocuments({});
-    if (count > 0) {
-      return;
-    }
-
     for (const profession of DEFAULT_PROFESSIONS) {
       const canonicalName = this.formatProfessionName(profession);
       const normalizedKey = this.normalizeProfessionKey(canonicalName);
