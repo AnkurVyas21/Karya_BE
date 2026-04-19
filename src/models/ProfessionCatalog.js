@@ -6,6 +6,7 @@ const professionCatalogSchema = new mongoose.Schema({
   normalizedName: { type: String, trim: true, default: null },
   aliases: [{ type: String }],
   tags: [{ type: String }],
+  relatedProfessions: [{ type: String }],
   source: { type: String, default: 'learned' },
   embedding: {
     provider: { type: String, default: '' },

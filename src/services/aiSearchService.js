@@ -199,6 +199,7 @@ class AiSearchService {
       context.professionInference?.suggestedProfession || '',
       ...(context.professionInference?.similarProfessions || [])
     ]);
+    const contextSuggestions = uniqueStrings(context.professionInference?.contextSuggestions || []);
     const fallbackLocation = this.pickLocationFallback(rawSuggestion.locationSource, context.selectedLocation, context.currentLocation);
     const country = String(rawSuggestion.country || fallbackLocation.country || '').trim();
     const state = String(rawSuggestion.state || fallbackLocation.state || '').trim();
@@ -209,6 +210,7 @@ class AiSearchService {
     return {
       profession: matchedProfession,
       professions: inferredProfessions,
+      contextSuggestions,
       skills: context.professionInference?.specializations || [],
       country,
       state,
@@ -223,6 +225,7 @@ class AiSearchService {
         town
       }),
       reason: String(rawSuggestion.reason || 'Applied semantic profession inference and location extraction.').trim(),
+      intent: context.professionInference?.intent || null,
       appliedFilters: compactObject({
         profession: matchedProfession,
         country,

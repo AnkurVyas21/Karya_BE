@@ -1,47 +1,36 @@
 const ProfessionInferenceLog = require('../models/ProfessionInferenceLog');
+const logger = require('../utils/logger');
 const embeddingService = require('./embeddingService');
 const professionCatalogService = require('./professionCatalogService');
 const textNormalizationService = require('./textNormalizationService');
-const logger = require('../utils/logger');
+const intentExtractionService = require('./intentExtractionService');
+const contextSuggestionService = require('./contextSuggestionService');
 
 const MATCH_THRESHOLD = Number(process.env.PROFESSION_MATCH_THRESHOLD || 0.78);
 const CONFIRM_THRESHOLD = Number(process.env.PROFESSION_CONFIRM_THRESHOLD || 0.86);
-const CREATE_THRESHOLD = Number(process.env.PROFESSION_CREATE_THRESHOLD || 0.82);
-const CANDIDATE_THRESHOLD = Number(process.env.PROFESSION_CANDIDATE_THRESHOLD || 0.44);
-const MIN_LEXICAL_SCORE = Number(process.env.PROFESSION_MIN_LEXICAL_SCORE || 0.04);
-const SUGGESTION_THRESHOLD = Number(process.env.PROFESSION_SUGGESTION_THRESHOLD || 0.5);
-const SEMANTIC_ONLY_THRESHOLD = Number(process.env.PROFESSION_SEMANTIC_ONLY_THRESHOLD || 0.42);
-const SEMANTIC_CANDIDATE_THRESHOLD = Number(process.env.PROFESSION_SEMANTIC_CANDIDATE_THRESHOLD || 0.52);
+const SUGGESTION_THRESHOLD = Number(process.env.PROFESSION_SUGGESTION_THRESHOLD || 0.56);
+const SEMANTIC_CANDIDATE_THRESHOLD = Number(process.env.PROFESSION_SEMANTIC_CANDIDATE_THRESHOLD || 0.5);
 const LEXICAL_CANDIDATE_THRESHOLD = Number(process.env.PROFESSION_LEXICAL_CANDIDATE_THRESHOLD || 0.2);
 const AUTO_SELECT_MARGIN_THRESHOLD = Number(process.env.PROFESSION_AUTO_SELECT_MARGIN_THRESHOLD || 0.08);
 const MAX_CANDIDATES = Math.max(Number(process.env.PROFESSION_TOP_K || 8), 5);
-const LLM_PROVIDER = String(process.env.PROFESSION_LLM_PROVIDER || process.env.PROFESSION_EMBEDDING_PROVIDER || '').trim().toLowerCase();
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const OLLAMA_BASE_URL = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/+$/, '');
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:8b';
 
-const KEYWORD_BOOSTS = {
-  caterer: ['khana', 'khane', 'bhojan', 'halwai', 'catering', 'caterer', 'cook', 'cooking', 'order', 'food', 'rasoi', 'shaadi', 'shadi', 'wedding'],
-  'mehendi artist': ['mehndi', 'mehendi', 'henna', 'bridal mehndi', 'bridal mehendi', 'shaadi', 'shadi', 'wedding'],
-  beautician: ['makeup', 'bridal makeup', 'parlour', 'beauty', 'salon'],
-  barber: ['hair', 'haircut', 'cut', 'cutting', 'cut hair', 'shave', 'shaved', 'shaving', 'beard', 'trim', 'salon', 'nai'],
-  'hair stylist': ['hair', 'haircut', 'hairstyle', 'stylist', 'salon', 'cut hair', 'hair styling'],
-  photographer: ['photo', 'photography', 'camera', 'wedding shoot', 'photoshoot'],
-  videographer: ['video', 'videography', 'reel', 'shoot'],
-  'event planner': ['event', 'wedding', 'shaadi', 'shadi', 'planner', 'arrangement'],
-  driver: ['gaadi', 'car', 'driver', 'driving'],
-  electrician: ['bijli', 'wiring', 'switch', 'light', 'electric'],
-  plumber: ['nal', 'pipe', 'paani', 'leak', 'bathroom', 'tap'],
-  'dhol player': ['dhol', 'baraat', 'band', 'wedding'],
-  'ghodi service': ['ghodi', 'baraat', 'dulha', 'wedding horse']
+const uniqueStrings = (values = []) => {
+  const seen = new Set();
+  const output = [];
+
+  values.forEach((value) => {
+    const cleaned = String(value || '').trim();
+    const normalized = textNormalizationService.normalizeProfessionKey(cleaned);
+    if (!cleaned || !normalized || seen.has(normalized)) {
+      return;
+    }
+
+    seen.add(normalized);
+    output.push(cleaned);
+  });
+
+  return output;
 };
-
-const uniqueStrings = (values = []) => [...new Set(
-  values
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-)];
 
 class ProfessionInferenceService {
   async inferProfession(rawInput = '', options = {}) {
@@ -57,216 +46,72 @@ class ProfessionInferenceService {
       entries = entries.filter((entry) => allowed.has(entry.normalizedKey));
     }
 
-    entries = await professionCatalogService.ensureEmbeddings(entries);
-    const queryVector = await embeddingService.embedText(preprocessed.embeddingText);
-
-    const broadRanked = entries
-      .map((entry) => {
-        const semanticScore = embeddingService.cosineSimilarity(queryVector, entry.embedding?.vector || []);
-        const lexicalScore = Math.max(
-          professionCatalogService.stringSimilarity(preprocessed.raw, entry.canonicalName),
-          ...professionCatalogService.getSearchTerms(entry).map((term) => professionCatalogService.stringSimilarity(preprocessed.embeddingText, term)),
-          0
-        );
-        const keywordBoost = this.getKeywordBoost(preprocessed, entry);
-        const popularityScore = this.toPopularityScore(entry);
-        const confidence = this.toConfidence(semanticScore, lexicalScore, popularityScore, keywordBoost);
-        return {
-          entry,
-          confidence,
-          semanticScore,
-          lexicalScore,
-          keywordBoost,
-          popularityScore,
-          source: 'catalog'
-        };
-      })
-      .sort((left, right) => this.compareCandidates(left, right));
-
-    const semanticPool = broadRanked
-      .filter((item) => this.isSemanticCandidate(item));
-    const ranked = semanticPool
-      .filter((item) => item.confidence >= CANDIDATE_THRESHOLD)
-      .filter((item) => item.lexicalScore >= MIN_LEXICAL_SCORE || item.semanticScore >= MATCH_THRESHOLD)
-      .slice(0, Math.max(topN, MAX_CANDIDATES));
-    const prefilterCandidates = semanticPool.slice(0, Math.max(MAX_CANDIDATES, 10));
-
-    const top = ranked[0] || null;
-    const relaxedCandidates = semanticPool
-      .filter((item) => item.confidence >= SUGGESTION_THRESHOLD || this.isSemanticCandidate(item, { strict: false }))
-      .slice(0, Math.max(3, topN));
-    const hasSemanticCandidates = semanticPool.length > 0;
-    const llmFallback = !hasSemanticCandidates
-      ? await this.suggestWithLlm(preprocessed, (ranked.length > 0 ? ranked : prefilterCandidates).slice(0, MAX_CANDIDATES), entries)
-      : null;
-
-    let createdFallback = null;
-    if (llmFallback?.canonicalName) {
-      const matchedFallback = professionCatalogService.findBestProfessionMatchSync(llmFallback.canonicalName, entries, { minimumScore: MATCH_THRESHOLD });
-      if (matchedFallback) {
-        createdFallback = {
-          professionId: matchedFallback.id,
-          profession: matchedFallback.canonicalName,
-          canonicalName: matchedFallback.canonicalName,
-          normalizedKey: matchedFallback.normalizedKey,
-          confidence: Math.max(llmFallback.confidence, MATCH_THRESHOLD),
-          similarity: llmFallback.confidence,
-          source: 'llm-matched',
-          aliases: matchedFallback.aliases || [],
-          tags: matchedFallback.tags || []
-        };
-      } else if (llmFallback.confidence >= CREATE_THRESHOLD && this.isCanonicalCandidateValid(llmFallback.canonicalName, preprocessed)) {
-        const created = await professionCatalogService.createOrUpdateProfession({
-          canonicalName: llmFallback.canonicalName,
-          aliases: llmFallback.aliases || [],
-          tags: llmFallback.tags || [],
-          source: 'llm-validated',
-          rawInput: preprocessed.raw
-        });
-        if (created) {
-          createdFallback = {
-            professionId: created.id,
-            profession: created.canonicalName,
-            canonicalName: created.canonicalName,
-            normalizedKey: created.normalizedKey,
-            confidence: llmFallback.confidence,
-            similarity: llmFallback.confidence,
-            source: 'llm-created',
-            aliases: created.aliases || [],
-            tags: created.tags || []
-          };
-        }
-      }
-    }
-
-    const rankedSuggestions = ranked.map((item) => ({
-      professionId: item.entry.id,
-      profession: item.entry.canonicalName,
-      canonicalName: item.entry.canonicalName,
-      normalizedKey: item.entry.normalizedKey,
-      confidence: item.confidence,
-      similarity: item.semanticScore,
-      scoreBreakdown: {
-        semanticScore: Number(item.semanticScore.toFixed(4)),
-        lexicalScore: Number(item.lexicalScore.toFixed(4)),
-        keywordBoost: Number(item.keywordBoost.toFixed(4)),
-        popularityScore: Number(item.popularityScore.toFixed(4)),
-        finalScore: item.confidence
-      },
-      source: 'semantic-ranked',
-      aliases: item.entry.aliases || [],
-      tags: item.entry.tags || []
-    }));
-    const relaxedSuggestions = relaxedCandidates.map((item) => ({
-      professionId: item.entry.id,
-      profession: item.entry.canonicalName,
-      canonicalName: item.entry.canonicalName,
-      normalizedKey: item.entry.normalizedKey,
-      confidence: item.confidence,
-      similarity: item.semanticScore,
-      scoreBreakdown: {
-        semanticScore: Number(item.semanticScore.toFixed(4)),
-        lexicalScore: Number(item.lexicalScore.toFixed(4)),
-        keywordBoost: Number(item.keywordBoost.toFixed(4)),
-        popularityScore: Number(item.popularityScore.toFixed(4)),
-        finalScore: item.confidence
-      },
-      source: 'semantic-relaxed',
-      aliases: item.entry.aliases || [],
-      tags: item.entry.tags || []
-    }));
-
-    const semanticSuggestions = rankedSuggestions.length > 0
-      ? rankedSuggestions
-      : relaxedSuggestions;
-    const strongestSemanticSuggestion = semanticSuggestions[0] || null;
-    const useSemanticSuggestions = Boolean(hasSemanticCandidates);
-    const fallbackSuggestions = createdFallback ? [createdFallback] : [];
-
-    const suggestions = (hasSemanticCandidates
-      ? semanticSuggestions
-      : fallbackSuggestions)
-      .sort((left, right) => right.confidence - left.confidence);
-
-    const dedupedSuggestions = [];
-    const seen = new Set();
-    suggestions.forEach((suggestion) => {
-      const key = professionCatalogService.normalizeProfessionKey(suggestion.canonicalName || suggestion.profession);
-      if (!key || seen.has(key)) {
-        return;
-      }
-      seen.add(key);
-      dedupedSuggestions.push(suggestion);
+    const intent = options.intent || await intentExtractionService.extractIntent(preprocessed.raw, {
+      context: options.context || 'profession-inference',
+      allowedProfessionNames: options.allowedProfessionNames || [],
+      professionCatalogEntries: entries
     });
 
-    const bestSuggestion = dedupedSuggestions[0] || null;
-    const runnerUpSuggestion = dedupedSuggestions[1] || null;
+    const candidateEntries = this.buildCandidateEntries(preprocessed, intent, entries, topN);
+    const candidateListBeforeFiltering = candidateEntries.map((entry) => entry.canonicalName);
+    const semanticResult = await this.rankSemanticCandidates(preprocessed, intent, candidateEntries, entries, topN);
+    const hasSemanticCandidates = semanticResult.candidates.length > 0;
+    const fallbackSuggestions = hasSemanticCandidates
+      ? []
+      : this.buildFallbackSuggestions(intent, candidateEntries, entries);
+    const suggestions = hasSemanticCandidates ? semanticResult.candidates : fallbackSuggestions;
+    const bestSuggestion = suggestions[0] || null;
+    const runnerUpSuggestion = suggestions[1] || null;
     const autoSelectMargin = bestSuggestion && runnerUpSuggestion
       ? Number((bestSuggestion.confidence - runnerUpSuggestion.confidence).toFixed(4))
       : Number(bestSuggestion?.confidence || 0);
-    const canAutoSelect = useSemanticSuggestions
+    const canAutoSelect = hasSemanticCandidates
       && bestSuggestion
-      && bestSuggestion.source === 'semantic-ranked'
+      && bestSuggestion.source === 'semantic'
       && bestSuggestion.confidence >= CONFIRM_THRESHOLD
-      && bestSuggestion.confidence >= SEMANTIC_ONLY_THRESHOLD
-      && this.isHighConfidenceSemanticWinner(bestSuggestion)
+      && Number(bestSuggestion.scoreBreakdown?.semanticScore || 0) >= MATCH_THRESHOLD
       && autoSelectMargin >= AUTO_SELECT_MARGIN_THRESHOLD;
-
-    const canSuggestWithConfidence = useSemanticSuggestions
-      && bestSuggestion
+    const canSuggest = bestSuggestion
       && (
-        (bestSuggestion.source === 'semantic-ranked'
-          && bestSuggestion.confidence >= MATCH_THRESHOLD
-          && this.isSemanticCandidate(bestSuggestion, { strict: false }))
-        || (bestSuggestion.source === 'semantic-relaxed' && bestSuggestion.confidence >= SUGGESTION_THRESHOLD)
+        (bestSuggestion.source === 'semantic' && bestSuggestion.confidence >= SUGGESTION_THRESHOLD)
+        || bestSuggestion.source.startsWith('fallback')
       );
-
     const status = canAutoSelect
       ? 'confirmed'
-      : canSuggestWithConfidence
-          ? 'needs_confirmation'
-          : bestSuggestion && ['llm-created', 'llm-matched'].includes(bestSuggestion.source)
-            ? 'needs_confirmation'
-            : 'unknown';
-
-    const debugMatches = ranked.slice(0, MAX_CANDIDATES).map((item) => ({
-      profession: item.entry.canonicalName,
-      semanticScore: Number(item.semanticScore.toFixed(4)),
-      lexicalScore: Number(item.lexicalScore.toFixed(4)),
-      keywordBoost: Number(item.keywordBoost.toFixed(4)),
-      popularityScore: Number(item.popularityScore.toFixed(4)),
-      finalScore: item.confidence
-    }));
-
-    const fallbackDebugMatches = broadRanked.slice(0, MAX_CANDIDATES).map((item) => ({
-      profession: item.entry.canonicalName,
-      semanticScore: Number(item.semanticScore.toFixed(4)),
-      lexicalScore: Number(item.lexicalScore.toFixed(4)),
-      keywordBoost: Number(item.keywordBoost.toFixed(4)),
-      popularityScore: Number(item.popularityScore.toFixed(4)),
-      finalScore: item.confidence
-    }));
+      : canSuggest
+        ? 'needs_confirmation'
+        : 'unknown';
+    const contextSuggestions = await contextSuggestionService.suggest({
+      context: intent.context,
+      keywords: intent.keywords,
+      primaryProfession: bestSuggestion?.canonicalName || '',
+      professionCatalogEntries: entries,
+      limit: 6
+    });
 
     logger.info('Profession inference debug', {
       context: options.context || 'profession-inference',
       input: preprocessed.raw,
       normalizedInput: preprocessed.normalized,
-      candidatesBeforeFiltering: prefilterCandidates.slice(0, MAX_CANDIDATES).map((item) => ({
-        profession: item.entry.canonicalName,
-        semanticScore: Number(item.semanticScore.toFixed(4)),
-        lexicalScore: Number(item.lexicalScore.toFixed(4)),
-        keywordBoost: Number(item.keywordBoost.toFixed(4)),
-        popularityScore: Number(item.popularityScore.toFixed(4)),
-        confidence: item.confidence
-      })),
-      topMatches: debugMatches,
-      fallbackTopMatches: fallbackDebugMatches,
+      intentExtraction: {
+        primary_intent: intent.primary_intent,
+        context: intent.context,
+        keywords: intent.keywords,
+        suggested_professions: intent.suggested_professions
+      },
+      candidateListBeforeFiltering,
       candidateSourceUsed: hasSemanticCandidates ? 'semantic' : (fallbackSuggestions.length > 0 ? 'fallback' : 'none'),
-      llmFallback: llmFallback?.canonicalName || '',
-      selectedMatch: bestSuggestion?.canonicalName || '',
+      topMatches: suggestions.map((item) => ({
+        profession: item.canonicalName,
+        semanticScore: Number(item.scoreBreakdown?.semanticScore || item.similarity || 0),
+        lexicalScore: Number(item.scoreBreakdown?.lexicalScore || 0),
+        keywordBoost: Number(item.scoreBreakdown?.keywordBoost || 0),
+        finalScore: Number(item.scoreBreakdown?.finalScore || item.confidence || 0),
+        source: item.source
+      })),
+      selectedProfession: canAutoSelect ? bestSuggestion?.canonicalName || '' : '',
       selectedScoreBreakdown: bestSuggestion?.scoreBreakdown || null,
-      autoSelectMargin,
-      rejectedMatches: fallbackDebugMatches.filter((item) => item.finalScore < MATCH_THRESHOLD)
+      fallbackUsed: !hasSemanticCandidates || semanticResult.embeddingFailed
     });
 
     const log = options.log === false
@@ -280,7 +125,7 @@ class ProfessionInferenceService {
           variants: preprocessed.variants,
           provider: embeddingService.getProvider(),
           model: embeddingService.getModelName(),
-          suggestions: dedupedSuggestions.map((item) => ({
+          suggestions: suggestions.map((item) => ({
             professionId: item.professionId || null,
             canonicalName: item.canonicalName,
             normalizedKey: item.normalizedKey,
@@ -294,112 +139,235 @@ class ProfessionInferenceService {
             detectedProfession: bestSuggestion?.canonicalName || '',
             status,
             candidateSourceUsed: hasSemanticCandidates ? 'semantic' : (fallbackSuggestions.length > 0 ? 'fallback' : 'none'),
+            fallbackUsed: !hasSemanticCandidates || semanticResult.embeddingFailed,
             selectedScoreBreakdown: bestSuggestion?.scoreBreakdown || null,
-            autoSelectMargin
+            intentExtraction: {
+              primary_intent: intent.primary_intent,
+              context: intent.context,
+              keywords: intent.keywords,
+              suggested_professions: intent.suggested_professions
+            }
           }
         });
 
     return {
       inferenceId: log?._id?.toString?.() || '',
       profession: canAutoSelect ? (bestSuggestion?.canonicalName || '') : 'unknown',
-      suggestedProfession: canSuggestWithConfidence ? (bestSuggestion?.canonicalName || '') : '',
+      suggestedProfession: canSuggest ? (bestSuggestion?.canonicalName || '') : '',
       status,
       requiresConfirmation: status === 'needs_confirmation',
       confidence: Number(bestSuggestion?.confidence || 0),
       matchedText: bestSuggestion?.canonicalName || '',
       reason: status === 'confirmed'
-        ? 'Matched the input to the closest canonical profession using semantic similarity.'
+        ? 'Matched the primary profession from extracted intent and semantic ranking.'
         : status === 'needs_confirmation'
-          ? 'Found likely profession matches, but a confirmation is recommended.'
-          : 'No confident profession match was found.',
+          ? 'Found a likely primary profession, but confirmation is recommended.'
+          : 'No confident primary profession match was found.',
       aliases: bestSuggestion?.aliases || [],
       specializations: bestSuggestion?.tags || [],
       tags: bestSuggestion?.tags || [],
-      similarProfessions: dedupedSuggestions.slice(1).map((item) => item.canonicalName),
-      suggestions: dedupedSuggestions.map((item) => ({
+      similarProfessions: suggestions.slice(1).map((item) => item.canonicalName),
+      contextSuggestions,
+      professions: suggestions.map((item) => item.canonicalName),
+      suggestions: suggestions.map((item) => ({
         profession: item.canonicalName,
         confidence: item.confidence,
         similarity: item.similarity,
         source: item.source,
         scoreBreakdown: item.scoreBreakdown || null
       })),
-      professions: dedupedSuggestions.map((item) => item.canonicalName)
+      intent: {
+        primary_intent: intent.primary_intent,
+        context: intent.context,
+        keywords: intent.keywords,
+        suggested_professions: intent.suggested_professions
+      },
+      debug: {
+        candidateSourceUsed: hasSemanticCandidates ? 'semantic' : (fallbackSuggestions.length > 0 ? 'fallback' : 'none'),
+        embeddingFailed: semanticResult.embeddingFailed,
+        autoSelectMargin
+      }
     };
+  }
+
+  buildCandidateEntries(preprocessed, intent = {}, entries = [], topN = 5) {
+    const explicitEntries = professionCatalogService.findProfessionMatchesInTextSync(preprocessed.raw, entries, Math.max(topN, 5));
+    const intentEntries = uniqueStrings(intent.suggested_professions || [])
+      .map((candidate) => professionCatalogService.findBestProfessionMatchSync(candidate, entries, { minimumScore: 0.58 }))
+      .filter(Boolean);
+    const all = uniqueStrings([
+      ...intentEntries.map((entry) => entry.canonicalName),
+      ...explicitEntries.map((entry) => entry.canonicalName)
+    ]);
+
+    return all
+      .map((profession) => professionCatalogService.findBestProfessionMatchSync(profession, entries, { minimumScore: 0.58 }))
+      .filter(Boolean)
+      .slice(0, Math.max(topN, MAX_CANDIDATES));
+  }
+
+  async rankSemanticCandidates(preprocessed, intent = {}, candidateEntries = [], allEntries = [], topN = 5) {
+    const rankingEntries = candidateEntries.length > 0 ? candidateEntries : [];
+    const embeddingText = this.buildIntentEmbeddingText(preprocessed, intent);
+    let queryVector = null;
+    let embeddingFailed = false;
+
+    try {
+      const entriesWithEmbeddings = await professionCatalogService.ensureEmbeddings(rankingEntries);
+      queryVector = await embeddingService.embedText(embeddingText);
+      const ranked = entriesWithEmbeddings
+        .map((entry) => this.scoreSemanticCandidate(entry, queryVector, intent, preprocessed))
+        .filter((item) => this.isSemanticCandidate(item))
+        .sort((left, right) => this.compareCandidates(left, right))
+        .slice(0, Math.max(topN, MAX_CANDIDATES));
+
+      return {
+        embeddingFailed,
+        candidates: ranked.map((item) => this.toSuggestion(item, 'semantic'))
+      };
+    } catch (error) {
+      embeddingFailed = true;
+      logger.warn(`Profession embedding ranking failed: ${error.message}`);
+    }
+
+    return {
+      embeddingFailed,
+      candidates: []
+    };
+  }
+
+  buildFallbackSuggestions(intent = {}, candidateEntries = [], allEntries = []) {
+    const matchedPool = candidateEntries.length > 0
+      ? candidateEntries
+      : uniqueStrings(intent.suggested_professions || [])
+        .map((candidate) => professionCatalogService.findBestProfessionMatchSync(candidate, allEntries, { minimumScore: 0.58 }))
+        .filter(Boolean);
+    const syntheticPool = matchedPool.length === 0
+      ? uniqueStrings(intent.suggested_professions || []).map((profession) => ({
+          id: null,
+          canonicalName: professionCatalogService.formatProfessionName(profession),
+          normalizedKey: professionCatalogService.normalizeProfessionKey(profession),
+          aliases: [],
+          tags: []
+        }))
+      : [];
+    const pool = matchedPool.length > 0 ? matchedPool : syntheticPool;
+
+    return pool.slice(0, MAX_CANDIDATES).map((entry, index) => ({
+      professionId: entry.id,
+      canonicalName: entry.canonicalName,
+      normalizedKey: entry.normalizedKey,
+      confidence: Number(Math.max(0.45, 0.72 - (index * 0.05)).toFixed(4)),
+      similarity: 0,
+      aliases: entry.aliases || [],
+      tags: entry.tags || [],
+      source: 'fallback-intent',
+      scoreBreakdown: {
+        semanticScore: 0,
+        lexicalScore: Number(index === 0 ? 1 : Math.max(0.4, 0.82 - (index * 0.08)).toFixed(4)),
+        keywordBoost: Number(index === 0 ? 0.15 : 0.08),
+        popularityScore: 0,
+        finalScore: Number(Math.max(0.45, 0.72 - (index * 0.05)).toFixed(4))
+      }
+    }));
+  }
+
+  buildIntentEmbeddingText(preprocessed, intent = {}) {
+    return uniqueStrings([
+      intent.primary_intent || '',
+      intent.context || '',
+      ...(intent.keywords || []),
+      ...(intent.suggested_professions || []),
+      preprocessed.embeddingText
+    ]).join(' | ');
+  }
+
+  scoreSemanticCandidate(entry = {}, queryVector = [], intent = {}, preprocessed = {}) {
+    const semanticScore = embeddingService.cosineSimilarity(queryVector, entry.embedding?.vector || []);
+    const lexicalTerms = uniqueStrings([
+      entry.canonicalName,
+      ...(entry.aliases || []),
+      ...(entry.tags || [])
+    ]);
+    const lexicalScore = Math.max(
+      ...lexicalTerms.map((term) => professionCatalogService.stringSimilarity(
+        uniqueStrings([intent.primary_intent, ...intent.keywords || [], preprocessed.raw]).join(' '),
+        term
+      )),
+      0
+    );
+    const keywordBoost = this.getIntentBoost(entry, intent);
+    const popularityScore = this.toPopularityScore(entry);
+    const finalScore = this.toConfidence(semanticScore, lexicalScore, popularityScore, keywordBoost);
+
+    return {
+      entry,
+      semanticScore,
+      lexicalScore,
+      keywordBoost,
+      popularityScore,
+      confidence: finalScore
+    };
+  }
+
+  getIntentBoost(entry = {}, intent = {}) {
+    const normalizedProfession = professionCatalogService.normalizeProfessionKey(entry.canonicalName);
+    const normalizedSuggestions = new Set((intent.suggested_professions || []).map((item) => professionCatalogService.normalizeProfessionKey(item)));
+    const normalizedKeywords = uniqueStrings(intent.keywords || []).map((item) => item.toLowerCase());
+    let boost = normalizedSuggestions.has(normalizedProfession) ? 0.18 : 0;
+
+    if ((entry.tags || []).some((tag) => normalizedKeywords.includes(String(tag || '').toLowerCase()))) {
+      boost += 0.08;
+    }
+
+    if ((entry.aliases || []).some((alias) => normalizedKeywords.includes(String(alias || '').toLowerCase()))) {
+      boost += 0.06;
+    }
+
+    return Number(Math.min(0.25, boost).toFixed(4));
   }
 
   toConfidence(semanticScore = 0, lexicalScore = 0, popularityScore = 0, keywordBoost = 0) {
     const semantic = Math.max(0, Math.min(1, (semanticScore + 1) / 2));
     const lexical = Math.max(0, Math.min(1, lexicalScore));
     const popularity = Math.max(0, Math.min(1, popularityScore));
-    const keyword = Math.max(0, Math.min(1, keywordBoost));
-    return Number((semantic * 0.82 + lexical * 0.14 + keyword * 0.03 + popularity * 0.01).toFixed(4));
+    const boost = Math.max(0, Math.min(1, keywordBoost));
+    return Number((semantic * 0.84 + lexical * 0.12 + boost * 0.03 + popularity * 0.01).toFixed(4));
+  }
+
+  isSemanticCandidate(item = {}) {
+    return Number(item.semanticScore || 0) >= SEMANTIC_CANDIDATE_THRESHOLD
+      || Number(item.lexicalScore || 0) >= LEXICAL_CANDIDATE_THRESHOLD;
   }
 
   compareCandidates(left = {}, right = {}) {
-    const semanticDelta = Number(right.semanticScore || 0) - Number(left.semanticScore || 0);
-    if (semanticDelta !== 0) {
-      return semanticDelta;
+    if (Number(right.semanticScore || 0) !== Number(left.semanticScore || 0)) {
+      return Number(right.semanticScore || 0) - Number(left.semanticScore || 0);
     }
-
-    const lexicalDelta = Number(right.lexicalScore || 0) - Number(left.lexicalScore || 0);
-    if (lexicalDelta !== 0) {
-      return lexicalDelta;
+    if (Number(right.lexicalScore || 0) !== Number(left.lexicalScore || 0)) {
+      return Number(right.lexicalScore || 0) - Number(left.lexicalScore || 0);
     }
-
-    const confidenceDelta = Number(right.confidence || 0) - Number(left.confidence || 0);
-    if (confidenceDelta !== 0) {
-      return confidenceDelta;
-    }
-
-    return Number(right.keywordBoost || 0) - Number(left.keywordBoost || 0);
+    return Number(right.confidence || 0) - Number(left.confidence || 0);
   }
 
-  isSemanticCandidate(item = {}, options = {}) {
-    const strict = options.strict !== false;
-    const semanticFloor = strict ? SEMANTIC_CANDIDATE_THRESHOLD : SEMANTIC_ONLY_THRESHOLD;
-    const lexicalFloor = strict ? LEXICAL_CANDIDATE_THRESHOLD : Math.max(MIN_LEXICAL_SCORE, 0.08);
-    return Number(item.semanticScore || item.similarity || 0) >= semanticFloor
-      || Number(item.lexicalScore || item?.scoreBreakdown?.lexicalScore || 0) >= lexicalFloor;
-  }
-
-  isHighConfidenceSemanticWinner(suggestion = {}) {
-    const semanticScore = Number(suggestion?.scoreBreakdown?.semanticScore || suggestion?.similarity || 0);
-    const lexicalScore = Number(suggestion?.scoreBreakdown?.lexicalScore || 0);
-    return semanticScore >= MATCH_THRESHOLD || lexicalScore >= 0.9;
-  }
-
-  getKeywordBoost(preprocessed = {}, entry = {}) {
-    const normalizedProfession = professionCatalogService.normalizeProfessionKey(entry.canonicalName || entry.name || '');
-    const boosters = KEYWORD_BOOSTS[normalizedProfession] || [];
-    if (!boosters.length) {
-      return 0;
-    }
-
-    const haystack = new Set(
-      uniqueStrings([
-        ...(preprocessed.variants || []),
-        preprocessed.embeddingText || '',
-        preprocessed.raw || ''
-      ])
-        .flatMap((value) => String(value || '').toLowerCase().split(/[\s|,/&+-]+/))
-        .filter(Boolean)
-    );
-
-    const matches = boosters.filter((term) => {
-      const normalizedTerm = String(term || '').toLowerCase().trim();
-      if (!normalizedTerm) {
-        return false;
+  toSuggestion(item = {}, source = 'semantic') {
+    return {
+      professionId: item.entry.id,
+      canonicalName: item.entry.canonicalName,
+      normalizedKey: item.entry.normalizedKey,
+      confidence: item.confidence,
+      similarity: Number(item.semanticScore.toFixed(4)),
+      aliases: item.entry.aliases || [],
+      tags: item.entry.tags || [],
+      source,
+      scoreBreakdown: {
+        semanticScore: Number(item.semanticScore.toFixed(4)),
+        lexicalScore: Number(item.lexicalScore.toFixed(4)),
+        keywordBoost: Number(item.keywordBoost.toFixed(4)),
+        popularityScore: Number(item.popularityScore.toFixed(4)),
+        finalScore: item.confidence
       }
-
-      const parts = normalizedTerm.split(/\s+/).filter(Boolean);
-      return parts.every((part) => haystack.has(part));
-    }).length;
-
-    if (!matches) {
-      return 0;
-    }
-
-    return Math.min(1, 0.22 + (matches * 0.12));
+    };
   }
 
   toPopularityScore(entry = {}) {
@@ -408,179 +376,6 @@ class ProfessionInferenceService {
       return 0;
     }
     return Math.min(1, Math.log10(usageCount + 1) / 2);
-  }
-
-  isCanonicalCandidateValid(candidate = '', preprocessed = {}) {
-    const cleaned = professionCatalogService.formatProfessionName(candidate);
-    const normalizedCandidate = professionCatalogService.normalizeProfessionKey(cleaned);
-    const normalizedInput = professionCatalogService.normalizeProfessionKey(preprocessed.raw || '');
-    if (!cleaned || !normalizedCandidate) {
-      return false;
-    }
-
-    if (normalizedCandidate === normalizedInput) {
-      return false;
-    }
-
-    const words = cleaned.split(/\s+/).filter(Boolean);
-    if (words.length === 0 || words.length > 4) {
-      return false;
-    }
-
-    return !/\b(main|mein|mera|meri|hun|kaam|karta|karti)\b/i.test(cleaned);
-  }
-
-  async suggestWithLlm(preprocessed, rankedSuggestions = [], entries = []) {
-    const topCandidates = rankedSuggestions.slice(0, MAX_CANDIDATES).map((item) => ({
-      profession: item.entry.canonicalName,
-      confidence: item.confidence
-    }));
-
-    const provider = this.getLlmProvider();
-    if (!provider) {
-      return this.keywordLlmFallback(preprocessed, topCandidates);
-    }
-
-    const prompt = [
-      'You are validating profession inference for a local-services marketplace.',
-      'Input may be Hindi, Hinglish, or English.',
-      'Do not echo the raw sentence back as a profession.',
-      'Choose the closest profession from candidates if one fits strongly.',
-      'If none fits, suggest a short canonical English profession title of at most 4 words.',
-      'Return JSON only in this shape:',
-      '{"canonicalName":"","aliases":[""],"tags":[""],"confidence":0}',
-      `Input: ${JSON.stringify(preprocessed.raw)}`,
-      `Normalized: ${JSON.stringify(preprocessed.embeddingText)}`,
-      `Top candidates: ${JSON.stringify(topCandidates)}`,
-      `Catalog sample: ${JSON.stringify(entries.slice(0, 30).map((entry) => entry.canonicalName))}`
-    ].join('\n');
-
-    try {
-      if (provider === 'gemini') {
-        return await this.askGemini(prompt);
-      }
-      if (provider === 'ollama') {
-        return await this.askOllama(prompt);
-      }
-    } catch (error) {
-      logger.warn(`Profession inference LLM fallback failed: ${error.message}`);
-    }
-
-    return null;
-  }
-
-  keywordLlmFallback(preprocessed, topCandidates = []) {
-    const text = String(preprocessed.embeddingText || preprocessed.raw || '').toLowerCase();
-    const candidates = [];
-
-    const maybeAdd = (profession, confidence) => {
-      if (!profession) {
-        return;
-      }
-      candidates.push({ profession, confidence });
-    };
-
-    if (/\b(hair|haircut|shave|shaved|shaving|beard|trim|salon|nai)\b/.test(text)) {
-      maybeAdd('Barber', 0.72);
-      maybeAdd('Hair Stylist', 0.64);
-    }
-    if (/\b(khana|khane|halwai|catering|caterer|cook|cooking|food|rasoi|order)\b/.test(text)) {
-      maybeAdd('Caterer', 0.74);
-    }
-    if (/\b(mehndi|mehendi|henna)\b/.test(text)) {
-      maybeAdd('Mehendi Artist', 0.74);
-    }
-
-    const best = candidates[0] || topCandidates[0] || null;
-    if (!best) {
-      return null;
-    }
-
-    return {
-      canonicalName: best.profession,
-      aliases: [],
-      tags: [],
-      confidence: best.confidence
-    };
-  }
-
-  getLlmProvider() {
-    if (LLM_PROVIDER === 'gemini' && GEMINI_API_KEY) {
-      return 'gemini';
-    }
-    if (LLM_PROVIDER === 'ollama') {
-      return 'ollama';
-    }
-    if (GEMINI_API_KEY) {
-      return 'gemini';
-    }
-    if (OLLAMA_BASE_URL) {
-      return 'ollama';
-    }
-    return '';
-  }
-
-  async askGemini(prompt) {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 200,
-            responseMimeType: 'application/json'
-          }
-        })
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Gemini request failed with ${response.status}`);
-    }
-
-    const payload = await response.json();
-    const text = payload?.candidates?.[0]?.content?.parts?.map((part) => part?.text || '').join('').trim();
-    return this.parseJsonResponse(text);
-  }
-
-  async askOllama(prompt) {
-    const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        prompt,
-        stream: false,
-        format: 'json',
-        options: {
-          temperature: 0.1
-        }
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Ollama request failed with ${response.status}`);
-    }
-
-    const payload = await response.json();
-    return this.parseJsonResponse(payload?.response);
-  }
-
-  parseJsonResponse(rawText = '') {
-    const text = String(rawText || '').trim();
-    if (!text) {
-      return null;
-    }
-
-    try {
-      return JSON.parse(text);
-    } catch (_error) {
-      const match = text.match(/\{[\s\S]*\}/);
-      return match ? JSON.parse(match[0]) : null;
-    }
   }
 
   async recordSelection(inferenceId = '', selectedProfession = '', options = {}) {

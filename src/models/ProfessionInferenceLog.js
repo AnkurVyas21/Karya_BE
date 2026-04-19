@@ -23,7 +23,11 @@ const professionInferenceLogSchema = new mongoose.Schema({
   metadata: {
     catalogSize: { type: Number, default: 0 },
     detectedProfession: { type: String, default: '' },
-    status: { type: String, default: '' }
+    status: { type: String, default: '' },
+    candidateSourceUsed: { type: String, default: '' },
+    fallbackUsed: { type: Boolean, default: false },
+    selectedScoreBreakdown: { type: mongoose.Schema.Types.Mixed, default: null },
+    intentExtraction: { type: mongoose.Schema.Types.Mixed, default: null }
   }
 }, {
   timestamps: true

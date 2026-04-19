@@ -1,4 +1,5 @@
 const DEFAULT_PROFESSIONS = require('../constants/professions');
+const { PROFESSION_RELATIONS } = require('../constants/professionContextData');
 const ProfessionCatalog = require('../models/ProfessionCatalog');
 const embeddingService = require('./embeddingService');
 const textNormalizationService = require('./textNormalizationService');
@@ -41,6 +42,9 @@ class ProfessionCatalogService {
             aliases: [],
             tags: [],
             source: 'system'
+          },
+          $set: {
+            relatedProfessions: PROFESSION_RELATIONS[canonicalName] || []
           }
         },
         { upsert: true }
@@ -99,6 +103,7 @@ class ProfessionCatalogService {
         aliases: doc.aliases || [],
         tags: doc.tags || []
       }),
+      relatedProfessions: uniqueStrings(doc.relatedProfessions || PROFESSION_RELATIONS[canonicalName] || []),
       source: doc.source || 'learned',
       embedding: doc.embedding || {},
       learning: doc.learning || {}
@@ -236,6 +241,7 @@ class ProfessionCatalogService {
     const normalizedKey = this.normalizeProfessionKey(payload.normalizedKey || canonicalName);
     const aliases = uniqueStrings(payload.aliases || []);
     const tags = uniqueStrings(payload.tags || []);
+    const relatedProfessions = uniqueStrings(payload.relatedProfessions || []);
     const rawInput = String(payload.rawInput || '').trim();
 
     if (!canonicalName || !normalizedKey) {
@@ -274,7 +280,14 @@ class ProfessionCatalogService {
             ...(matchedEntry && matchedEntry.canonicalName !== canonicalName ? [canonicalName] : [])
           ])
         },
-        tags: { $each: tags }
+        tags: { $each: tags },
+        relatedProfessions: {
+          $each: uniqueStrings([
+            ...relatedProfessions,
+            ...(matchedEntry?.relatedProfessions || []),
+            ...(PROFESSION_RELATIONS[matchedEntry?.canonicalName || canonicalName] || [])
+          ])
+        }
       }
     };
 
@@ -297,6 +310,7 @@ class ProfessionCatalogService {
       canonicalName: value,
       aliases: options.aliases || [],
       tags: options.tags || [],
+      relatedProfessions: options.relatedProfessions || [],
       source: options.source || 'learned',
       rawInput: options.rawInput || value
     });
