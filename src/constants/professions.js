@@ -21,13 +21,11 @@ module.exports = [
   'Electrician',
   'Event Planner',
   'Graphic Designer',
-  'Dhol Player',
   'Home Tutor',
   'House Cleaner',
   'Interior Designer',
   'Lawyer',
   'Mason',
-  'Mehendi Artist',
   'Mobile Repair Technician',
   'Painter',
   'Photographer',
@@ -41,8 +39,6 @@ module.exports = [
   'Veterinarian',
   'Videographer',
   'Virtual Assistant',
-  'Wedding Decorator',
   'Web Designer',
-  'Web Developer',
-  'Ghodi Service'
+  'Web Developer'
 ];

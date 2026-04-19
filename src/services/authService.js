@@ -9,6 +9,7 @@ const { buildAuthenticatedUser, composeLocation, sanitizeUser, toCleanString } =
 const { normalizeSocialAccount } = require('../utils/socialAccountUtils');
 const { deriveProfileTags, normalizeList } = require('../utils/profileTagUtils');
 const professionCatalogService = require('./professionCatalogService');
+const professionInferenceService = require('./professionInferenceService');
 
 class AuthService {
   async signup(userData) {
@@ -21,6 +22,7 @@ class AuthService {
       role = 'user',
       profession = '',
       professionAliases = [],
+      professionInferenceId = '',
       country = 'India',
       state = '',
       addressLine = '',
@@ -91,7 +93,8 @@ class AuthService {
         aliases: normalizeList(professionAliases),
         tags: [...normalizedSkills, ...normalizeList(providedTags)],
         source: 'provider-signup',
-        preserveInput: true
+        preserveInput: true,
+        rawInput: description || profession
       });
       const professionCatalog = await professionCatalogService.getAllProfessions();
       const tags = deriveProfileTags({
@@ -131,6 +134,12 @@ class AuthService {
         },
         { upsert: true, new: true }
       );
+      await professionInferenceService.recordSelection(professionInferenceId, savedProfession, {
+        aliases: normalizeList(professionAliases),
+        tags,
+        source: 'provider-signup',
+        rawInput: description || profession
+      });
       logger.info(`Starter professional profile created for user: ${user._id}`);
     }
 
@@ -320,6 +329,7 @@ class AuthService {
       };
 
       const providedAliases = normalizeList(payload.professionAliases || []);
+      const professionInferenceId = String(payload.professionInferenceId || '').trim();
       const providedServiceAreas = 'serviceAreas' in payload
         ? normalizeList(payload.serviceAreas)
         : (existingProfessionalProfile?.serviceAreas || []);
@@ -358,7 +368,8 @@ class AuthService {
             ...(existingProfessionalProfile?.tags || [])
           ],
           source: 'account-profile',
-          preserveInput: true
+          preserveInput: true,
+          rawInput: providedDescription || payload.profession
         });
       }
 
@@ -398,6 +409,15 @@ class AuthService {
         },
         { upsert: true, new: true, runValidators: true }
       );
+
+      if (professionalUpdates.profession) {
+        await professionInferenceService.recordSelection(professionInferenceId, professionalUpdates.profession, {
+          aliases: providedAliases,
+          tags: professionalUpdates.tags || [],
+          source: 'account-profile',
+          rawInput: providedDescription || payload.profession
+        });
+      }
     }
 
     return this.getCurrentUserProfile(userId);

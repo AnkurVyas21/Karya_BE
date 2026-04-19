@@ -9,8 +9,9 @@ const aiSearchService = require('./aiSearchService');
 const { composeLocation, isProfessionalProfileListable } = require('../utils/accountPresenter');
 const { deriveProfileTags, deriveRelatedProfessionTags, normalizeList, uniqueStrings } = require('../utils/profileTagUtils');
 const professionCatalogService = require('./professionCatalogService');
+const professionInferenceService = require('./professionInferenceService');
+const professionSearchService = require('./professionSearchService');
 const providerGrowthService = require('./providerGrowthService');
-const { inferProfessionFromText } = require('../utils/professionInferenceUtils');
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
@@ -75,8 +76,12 @@ class ProfessionalService {
     }
     delete update.specializations;
     const professionAliases = normalizeList(update.professionAliases || update.aliases || []);
+    const professionInferenceId = String(update.professionInferenceId || '').trim();
+    const professionInputSource = String(update.professionInputSource || update.description || update.profession || '').trim();
     delete update.professionAliases;
     delete update.aliases;
+    delete update.professionInferenceId;
+    delete update.professionInputSource;
 
     if ('skills' in update) {
       update.skills = normalizeList(update.skills);
@@ -166,6 +171,15 @@ class ProfessionalService {
       { new: true, upsert: true, runValidators: true }
     ).populate('user');
 
+    if (update.profession) {
+      await professionInferenceService.recordSelection(professionInferenceId, update.profession, {
+        aliases: professionAliases,
+        tags: update.tags || update.skills || [],
+        source: 'provider-profile',
+        rawInput: professionInputSource
+      });
+    }
+
     logger.info(`Profile upserted for user: ${userId}`);
     return this.getProfileByUserId(userId);
   }
@@ -180,143 +194,9 @@ class ProfessionalService {
   }
 
   async detectProfession(description) {
-    if (!description || !description.trim()) {
-      throw new Error('Description is required');
-    }
-
-    const professionCatalog = await professionCatalogService.getAllProfessions();
-    const professionCatalogEntries = await professionCatalogService.getAllProfessionEntries();
-    const explicitCandidates = this.extractExplicitProfessionCandidates(description, professionCatalogEntries);
-    const heuristicSuggestion = inferProfessionFromText(description, professionCatalog);
-    const bestGuessProfessions = this.getBestGuessProfessions(description, professionCatalog, professionCatalogEntries, heuristicSuggestion);
-    const preferredExplicitProfession = explicitCandidates[0];
-    const preferredHeuristicProfession = this.shouldPreferHeuristicProfession(
-      preferredExplicitProfession,
-      heuristicSuggestion,
-      description,
-      professionCatalogEntries
-    )
-      ? heuristicSuggestion.profession
-      : '';
-
-    if (preferredHeuristicProfession) {
-      return this.finalizeProfessionSuggestion({
-        profession: preferredHeuristicProfession,
-        matchedText: preferredHeuristicProfession,
-        confidence: 0.93,
-        reason: 'Used the more specific profession implied by the stated specialty in the description.',
-        status: 'confirmed',
-        specializations: heuristicSuggestion.specializations,
-        similarProfessions: uniqueStrings([
-          preferredExplicitProfession,
-          ...heuristicSuggestion.similarProfessions,
-          ...bestGuessProfessions
-        ])
-      }, description, professionCatalog, professionCatalogEntries);
-    }
-
-    if (explicitCandidates.length > 0) {
-      return this.finalizeProfessionSuggestion({
-        profession: explicitCandidates[0],
-        matchedText: explicitCandidates[0],
-        confidence: 0.97,
-        reason: 'Matched the profession directly from the role stated in the description.',
-        status: 'confirmed',
-        specializations: heuristicSuggestion.specializations,
-        similarProfessions: uniqueStrings([
-          ...heuristicSuggestion.similarProfessions,
-          ...bestGuessProfessions
-        ])
-      }, description, professionCatalog, professionCatalogEntries);
-    }
-
-    if (heuristicSuggestion.profession && heuristicSuggestion.score >= 6 && this.descriptionSupportsProfessionIntent(description, heuristicSuggestion.profession, professionCatalog, professionCatalogEntries)) {
-      return this.finalizeProfessionSuggestion({
-        profession: heuristicSuggestion.profession,
-        matchedText: heuristicSuggestion.profession,
-        confidence: 0.82,
-        reason: 'Mapped the described work to a standard profession.',
-        status: 'confirmed',
-        specializations: heuristicSuggestion.specializations,
-        similarProfessions: uniqueStrings([
-          ...heuristicSuggestion.similarProfessions,
-          ...bestGuessProfessions
-        ])
-      }, description, professionCatalog, professionCatalogEntries);
-    }
-
-    if (!openai) {
-      return this.finalizeProfessionSuggestion(
-        {
-          ...this.keywordBasedProfessionDetection(description, professionCatalog, professionCatalogEntries),
-          similarProfessions: bestGuessProfessions
-        },
-        description,
-        professionCatalog,
-        professionCatalogEntries
-      );
-    }
-
-    let result = await this.classifyProfessionWithAi(description, professionCatalogEntries, {
-      explicitCandidates
+    return professionInferenceService.inferProfession(description, {
+      context: 'profession-detect'
     });
-    let validation = this.validateProfessionSuggestion(result, description, professionCatalogEntries, explicitCandidates);
-
-    if (validation.status !== 'confirmed') {
-      const retryResult = await this.classifyProfessionWithAi(description, professionCatalogEntries, {
-        explicitCandidates,
-        retry: true,
-        previousResult: result
-      });
-      const retryValidation = this.validateProfessionSuggestion(retryResult, description, professionCatalogEntries, explicitCandidates);
-
-      if (retryValidation.status === 'confirmed' || retryValidation.confidence > validation.confidence) {
-        result = retryResult;
-        validation = retryValidation;
-      }
-    }
-
-    if (validation.status !== 'confirmed' && heuristicSuggestion.profession && this.descriptionSupportsProfessionIntent(description, heuristicSuggestion.profession, professionCatalog, professionCatalogEntries)) {
-      validation = this.validateProfessionSuggestion({
-        profession: heuristicSuggestion.profession,
-        confidence: 0.72,
-        matchedText: heuristicSuggestion.profession,
-        specializations: normalizeList([
-          ...(result.specializations || result.skills || []),
-          ...heuristicSuggestion.specializations
-        ]),
-        tags: result.tags || [],
-        aliases: result.aliases || [],
-        similarProfessions: uniqueStrings([
-          ...(result.similarProfessions || []),
-          ...(heuristicSuggestion.similarProfessions || [])
-        ])
-      }, description, professionCatalogEntries, explicitCandidates);
-      result = {
-        ...result,
-        profession: validation.suggestedProfession || heuristicSuggestion.profession,
-        specializations: normalizeList([
-          ...(result.specializations || result.skills || []),
-          ...heuristicSuggestion.specializations
-        ]),
-        similarProfessions: uniqueStrings([
-          ...(result.similarProfessions || []),
-          ...(heuristicSuggestion.similarProfessions || []),
-          ...bestGuessProfessions
-        ])
-      };
-    }
-
-    return this.finalizeProfessionSuggestion({
-      ...result,
-      ...validation,
-      suggestedProfession: validation.suggestedProfession || result.suggestedProfession || bestGuessProfessions[0] || '',
-      similarProfessions: uniqueStrings([
-        ...(result.similarProfessions || []),
-        ...(validation.similarProfessions || []),
-        ...bestGuessProfessions
-      ])
-    }, description, professionCatalog, professionCatalogEntries);
   }
 
   async getProfessionCatalog() {
@@ -335,31 +215,12 @@ class ProfessionalService {
       skills: normalizeList(filters?.skills || [])
     };
 
-    const professionCatalogEntries = await professionCatalogService.getAllProfessionEntries();
-    const explicitProfessionMatch = normalizedFilters.profession
-      ? professionCatalogService.findBestProfessionMatchSync(normalizedFilters.profession, professionCatalogEntries)
-      : null;
-    const professionTextMatches = this.collectProfessionMatchesFromText(
-      normalizedFilters.profession,
-      professionCatalogEntries,
-      4
-    );
-    const queryProfessionMatches = this.collectProfessionMatchesFromText(
-      normalizedFilters.query,
-      professionCatalogEntries,
-      4
-    );
-    const resolvedProfessionMatches = uniqueStrings([
-      ...(explicitProfessionMatch ? [explicitProfessionMatch.name] : []),
-      ...professionTextMatches.map((entry) => entry.name),
-      ...queryProfessionMatches.map((entry) => entry.name)
-    ]).map((name) => professionCatalogEntries.find((entry) => entry.name === name)).filter(Boolean);
-    const professionTerms = uniqueStrings(resolvedProfessionMatches.flatMap((entry) => professionCatalogService.getSearchTerms(entry)));
+    const semanticFilters = await professionSearchService.resolveSearchFilters(normalizedFilters);
     const searchFilters = {
       ...normalizedFilters,
-      profession: explicitProfessionMatch?.name || normalizedFilters.profession,
-      professionCandidates: uniqueStrings(resolvedProfessionMatches.map((entry) => entry.name)),
-      professionTerms
+      profession: semanticFilters.profession || normalizedFilters.profession,
+      professionCandidates: semanticFilters.professionCandidates || [],
+      professionTerms: semanticFilters.professionTerms || []
     };
 
     const candidateQuery = this.buildSearchCandidateQuery(searchFilters);
@@ -441,14 +302,9 @@ class ProfessionalService {
       throw new Error('Problem description is required');
     }
 
-    const catalogEntries = await professionCatalogService.getAllProfessionEntries();
     const result = await aiSearchService.inferSearch({
       ...options,
-      catalogEntries,
-      allowedProfessions: uniqueStrings([
-        ...(options.allowedProfessions || []),
-        ...catalogEntries.map((entry) => entry.name)
-      ])
+      allowedProfessions: uniqueStrings(options.allowedProfessions || [])
     });
     logger.info(`AI search for problem: ${options.problem} using ${result.providerUsed}`);
     return result;

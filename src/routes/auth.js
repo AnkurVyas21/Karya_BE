@@ -39,6 +39,7 @@ const signupSchema = Joi.object({
     Joi.array().items(Joi.string()),
     Joi.string().allow('')
   ).optional(),
+  professionInferenceId: Joi.string().allow('').optional(),
   country: Joi.string().allow('').optional(),
   state: Joi.string().allow('').optional(),
   addressLine: Joi.string().allow('').optional(),
@@ -97,6 +98,7 @@ const updateCurrentUserSchema = Joi.object({
     Joi.array().items(Joi.string()),
     Joi.string().allow('')
   ).optional(),
+  professionInferenceId: Joi.string().allow('').optional(),
   description: Joi.string().allow('').optional(),
   serviceAreas: Joi.alternatives().try(
     Joi.array().items(Joi.string()),

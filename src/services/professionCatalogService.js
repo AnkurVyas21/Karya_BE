@@ -1,424 +1,290 @@
-const DEFAULT_PROFESSIONS = require('../constants/professions');
 const ProfessionCatalog = require('../models/ProfessionCatalog');
-const { PROFESSION_RULES } = require('../utils/professionInferenceUtils');
+const embeddingService = require('./embeddingService');
+const textNormalizationService = require('./textNormalizationService');
 
 const uniqueStrings = (values = []) => {
   const seen = new Set();
-  const items = [];
+  const output = [];
 
   values.forEach((value) => {
     const cleaned = String(value || '').trim();
-    const normalized = cleaned
-      .toLowerCase()
-      .replace(/[^\p{L}\p{N}+/&\s-]+/gu, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-
+    const normalized = textNormalizationService.normalizeProfessionKey(cleaned);
     if (!cleaned || !normalized || seen.has(normalized)) {
       return;
     }
 
     seen.add(normalized);
-    items.push(cleaned);
+    output.push(cleaned);
   });
 
-  return items;
-};
-
-const normalizeProfessionKey = (value = '') => String(value || '')
-  .trim()
-  .toLowerCase()
-  .replace(/[^\p{L}\p{N}+/&\s-]+/gu, ' ')
-  .replace(/\s+/g, ' ')
-  .trim();
-
-const ACRONYM_TOKENS = new Map([
-  ['ac', 'AC'],
-  ['seo', 'SEO'],
-  ['ui', 'UI'],
-  ['ux', 'UX'],
-  ['hr', 'HR'],
-  ['qa', 'QA'],
-  ['it', 'IT'],
-  ['ai', 'AI']
-]);
-
-const ROLE_FAMILY_TERMS = [
-  { family: 'education', terms: ['teacher', 'professor', 'lecturer', 'tutor', 'faculty', 'trainer', 'coach'] },
-  { family: 'medical', terms: ['doctor', 'physician', 'surgeon', 'medical', 'veterinarian', 'veterinary', 'vet'] },
-  { family: 'legal', terms: ['lawyer', 'advocate', 'attorney', 'legal'] },
-  { family: 'engineering', terms: ['engineer', 'developer', 'designer', 'architect'] },
-  { family: 'construction', terms: ['builder', 'mason', 'contractor'] },
-  { family: 'repair', terms: ['mechanic', 'technician', 'repair', 'repairer'] },
-  { family: 'beauty', terms: ['beautician', 'barber', 'stylist', 'salon'] },
-  { family: 'care', terms: ['consultant', 'specialist', 'advisor'] }
-];
-
-const formatProfessionName = (value = '') => {
-  const cleaned = String(value || '')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .replace(/\btech\b/gi, 'Technician');
-
-  if (!cleaned) {
-    return '';
-  }
-
-  return cleaned
-    .split(' ')
-    .map((part) => {
-      const token = part.trim();
-      if (!token) {
-        return '';
-      }
-
-      const directAcronym = ACRONYM_TOKENS.get(token.toLowerCase());
-      if (directAcronym) {
-        return directAcronym;
-      }
-
-      if (token.includes('/')) {
-        return token
-          .split('/')
-          .map((item) => formatProfessionName(item))
-          .join('/');
-      }
-
-      return token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
-    })
-    .join(' ')
-    .trim();
-};
-
-const extractRoleFamilies = (value = '') => {
-  const normalized = normalizeProfessionKey(value);
-  if (!normalized) {
-    return new Set();
-  }
-
-  const families = ROLE_FAMILY_TERMS
-    .filter(({ terms }) => terms.some((term) => normalized.includes(term)))
-    .map(({ family }) => family);
-
-  return new Set(families);
+  return output;
 };
 
 class ProfessionCatalogService {
-  buildDefaultProfessionMap() {
-    const entries = new Map();
-
-    DEFAULT_PROFESSIONS.forEach((profession) => {
-      const normalizedName = normalizeProfessionKey(profession);
-      entries.set(normalizedName, {
-        name: profession,
-        normalizedName,
-        source: 'system',
-        aliases: [],
-        tags: []
-      });
-    });
-
-    PROFESSION_RULES.forEach((rule) => {
-      const normalizedName = normalizeProfessionKey(rule.profession);
-      const existing = entries.get(normalizedName) || {
-        name: formatProfessionName(rule.profession),
-        normalizedName,
-        source: 'system',
-        aliases: [],
-        tags: []
-      };
-
-      const aliases = uniqueStrings([
-        ...existing.aliases,
-        ...(rule.keywords || []).filter((keyword) => normalizeProfessionKey(keyword) !== normalizedName)
-      ]);
-      const tags = uniqueStrings([
-        ...existing.tags,
-        ...(rule.specializations || []),
-        ...(rule.keywords || []).filter((keyword) => String(keyword || '').trim().split(/\s+/).length <= 4)
-      ]);
-
-      entries.set(normalizedName, {
-        ...existing,
-        aliases,
-        tags
-      });
-    });
-
-    return entries;
-  }
-
   normalizeProfessionKey(value = '') {
-    return normalizeProfessionKey(value);
+    return textNormalizationService.normalizeProfessionKey(value);
   }
 
   formatProfessionName(value = '') {
-    return formatProfessionName(value);
+    return textNormalizationService.formatProfessionName(value);
+  }
+
+  buildEmbeddingText(entry = {}) {
+    const canonicalName = entry.canonicalName || entry.name || '';
+    const aliases = uniqueStrings(entry.aliases || []);
+    const tags = uniqueStrings(entry.tags || []);
+    const variants = [
+      canonicalName,
+      ...textNormalizationService.buildVariants(canonicalName),
+      ...aliases.flatMap((item) => [item, ...textNormalizationService.buildVariants(item)]),
+      ...tags
+    ];
+
+    return uniqueStrings(variants).join(' | ');
+  }
+
+  toEntry(doc = {}) {
+    const canonicalName = String(doc.canonicalName || doc.name || '').trim();
+    const normalizedKey = this.normalizeProfessionKey(doc.normalizedKey || doc.normalizedName || canonicalName);
+    return {
+      id: doc._id?.toString?.() || '',
+      name: canonicalName,
+      canonicalName,
+      normalizedKey,
+      aliases: uniqueStrings(doc.aliases || []),
+      tags: uniqueStrings(doc.tags || []),
+      source: doc.source || 'learned',
+      embedding: doc.embedding || {},
+      learning: doc.learning || {}
+    };
+  }
+
+  async getAllProfessionEntries() {
+    const rows = await ProfessionCatalog.find({})
+      .sort({ canonicalName: 1, name: 1 })
+      .lean();
+
+    return rows
+      .map((row) => this.toEntry(row))
+      .filter((entry) => entry.canonicalName);
+  }
+
+  async getAllProfessions() {
+    const entries = await this.getAllProfessionEntries();
+    return uniqueStrings(entries.map((entry) => entry.canonicalName))
+      .sort((left, right) => left.localeCompare(right));
   }
 
   getSearchTerms(entry = {}) {
     return uniqueStrings([
-      entry.name,
+      entry.canonicalName || entry.name || '',
       ...(entry.aliases || []),
       ...(entry.tags || [])
     ]);
   }
 
-  scoreProfessionMatch(candidate = '', entry = {}) {
-    const normalizedCandidate = normalizeProfessionKey(candidate);
+  stringSimilarity(left = '', right = '') {
+    const leftVariants = textNormalizationService.buildVariants(left);
+    const rightVariants = textNormalizationService.buildVariants(right);
+    let best = 0;
+
+    leftVariants.forEach((leftValue) => {
+      rightVariants.forEach((rightValue) => {
+        const leftTokens = new Set(String(leftValue || '').split(/\s+/).filter(Boolean));
+        const rightTokens = new Set(String(rightValue || '').split(/\s+/).filter(Boolean));
+        if (!leftTokens.size || !rightTokens.size) {
+          return;
+        }
+
+        const intersection = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+        const score = (2 * intersection) / (leftTokens.size + rightTokens.size);
+        best = Math.max(best, score);
+      });
+    });
+
+    return best;
+  }
+
+  findBestProfessionMatchSync(candidate = '', entries = [], options = {}) {
+    const normalizedCandidate = this.normalizeProfessionKey(candidate);
     if (!normalizedCandidate) {
-      return 0;
+      return null;
     }
 
-    const normalizedName = normalizeProfessionKey(entry.name);
-    const normalizedAliases = (entry.aliases || []).map((item) => normalizeProfessionKey(item)).filter(Boolean);
-    const normalizedTags = (entry.tags || []).map((item) => normalizeProfessionKey(item)).filter(Boolean);
-    const exactAliases = new Set(normalizedAliases);
-    const exactTags = new Set(normalizedTags);
-
-    if (normalizedCandidate === normalizedName) {
-      return 140;
-    }
-
-    if (exactAliases.has(normalizedCandidate)) {
-      return 125;
-    }
-
-    if (exactTags.has(normalizedCandidate)) {
-      return 118;
-    }
-
-    let bestScore = 0;
-    const scoreTerm = (term = '', baseScore = 0) => {
-      if (!term) {
-        return;
-      }
-
-      if (term.includes(normalizedCandidate) || normalizedCandidate.includes(term)) {
-        bestScore = Math.max(bestScore, baseScore);
-        return;
-      }
-
-      const candidateTokens = normalizedCandidate.split(/\s+/).filter(Boolean);
-      const termTokens = term.split(/\s+/).filter(Boolean);
-      const overlap = candidateTokens.filter((token) => termTokens.some((item) => item.includes(token) || token.includes(item)));
-      if (overlap.length > 0) {
-        bestScore = Math.max(bestScore, Math.min(baseScore - 4, overlap.length * 10));
-      }
-    };
-
-    scoreTerm(normalizedName, 104);
-    normalizedAliases.forEach((alias) => scoreTerm(alias, 94));
-    normalizedTags.forEach((tag) => scoreTerm(tag, 84));
-
-    return bestScore;
-  }
-
-  shouldPreserveSpecificProfession(candidate = '', matchedEntry = {}) {
-    const formattedCandidate = formatProfessionName(candidate);
-    const normalizedCandidate = normalizeProfessionKey(formattedCandidate);
-    const normalizedName = normalizeProfessionKey(matchedEntry?.name);
-
-    if (!normalizedCandidate || !normalizedName || normalizedCandidate === normalizedName) {
-      return false;
-    }
-
-    const exactCatalogTerms = new Set(uniqueStrings([
-      matchedEntry?.name,
-      ...(matchedEntry?.aliases || []),
-      ...(matchedEntry?.tags || [])
-    ]).map((item) => normalizeProfessionKey(item)).filter(Boolean));
-
-    if (exactCatalogTerms.has(normalizedCandidate)) {
-      return false;
-    }
-
-    const candidateTokens = normalizedCandidate.split(/\s+/).filter(Boolean);
-    const matchedTokens = normalizedName.split(/\s+/).filter(Boolean);
-    const candidateContainsMatched = normalizedCandidate.includes(normalizedName);
-    const containsAllMatchedTokens = matchedTokens.length > 0 && matchedTokens.every((token) => candidateTokens.includes(token));
-    const candidateFamilies = extractRoleFamilies(formattedCandidate);
-    const matchedFamilies = new Set(
-      uniqueStrings([
-        matchedEntry?.name,
-        ...(matchedEntry?.aliases || []),
-        ...(matchedEntry?.tags || [])
-      ]).flatMap((term) => [...extractRoleFamilies(term)])
-    );
-    const sharedRoleFamily = [...candidateFamilies].some((family) => matchedFamilies.has(family));
-    const hasMeaningfulDescriptor = candidateTokens.some((token) => token.length > 2 && !matchedTokens.includes(token));
-
-    if (candidateTokens.length > matchedTokens.length && (candidateContainsMatched || containsAllMatchedTokens)) {
-      return true;
-    }
-
-    if (candidateTokens.length > 1 && sharedRoleFamily && hasMeaningfulDescriptor) {
-      return true;
-    }
-
-    return matchedTokens.length === 1 && candidateTokens.length > 1 && hasMeaningfulDescriptor;
-  }
-
-  findBestProfessionMatchSync(candidate = '', entries = []) {
-    let bestEntry = null;
+    const minimumScore = Number(options.minimumScore || 0.84);
+    let best = null;
     let bestScore = 0;
 
     entries.forEach((entry) => {
-      const score = this.scoreProfessionMatch(candidate, entry);
+      const terms = this.getSearchTerms(entry);
+      const exactTerm = terms.find((term) => this.normalizeProfessionKey(term) === normalizedCandidate);
+      const score = exactTerm ? 1 : Math.max(...terms.map((term) => this.stringSimilarity(candidate, term)), 0);
       if (score > bestScore) {
+        best = entry;
         bestScore = score;
-        bestEntry = entry;
       }
     });
 
-    return bestScore >= 18 ? bestEntry : null;
+    return bestScore >= minimumScore ? best : null;
   }
 
   findProfessionMatchesInTextSync(text = '', entries = [], limit = 3) {
-    const normalizedText = normalizeProfessionKey(text);
-    if (!normalizedText) {
+    const normalized = textNormalizationService.preprocess(text);
+    if (!normalized.normalized) {
       return [];
     }
 
     return entries
       .map((entry) => {
-        const searchTerms = this.getSearchTerms(entry)
-          .map((term) => normalizeProfessionKey(term))
-          .filter(Boolean);
-
-        const score = searchTerms.reduce((best, term) => {
-          if (!term) {
-            return best;
-          }
-
-          if (normalizedText === term) {
-            return Math.max(best, 140);
-          }
-
-          if (normalizedText.includes(term)) {
-            return Math.max(best, Math.min(118, 60 + term.split(/\s+/).length * 16));
-          }
-
-          const tokens = term.split(/\s+/).filter(Boolean);
-          const overlap = tokens.filter((token) => normalizedText.includes(token));
-          if (overlap.length > 0) {
-            return Math.max(best, overlap.length * 14);
-          }
-
-          return best;
-        }, 0);
-
+        const terms = this.getSearchTerms(entry);
+        const score = Math.max(...terms.map((term) => this.stringSimilarity(normalized.embeddingText, term)), 0);
         return { entry, score };
       })
-      .filter((item) => item.score >= 18)
+      .filter((item) => item.score >= 0.35)
       .sort((left, right) => right.score - left.score)
       .slice(0, limit)
       .map((item) => item.entry);
   }
 
-  mergeProfessionEntries(baseEntry = {}, extraEntry = {}) {
-    return {
-      name: extraEntry.name || baseEntry.name || '',
-      normalizedName: extraEntry.normalizedName || baseEntry.normalizedName || '',
-      source: extraEntry.source || baseEntry.source || 'system',
-      aliases: uniqueStrings([...(baseEntry.aliases || []), ...(extraEntry.aliases || [])]),
-      tags: uniqueStrings([...(baseEntry.tags || []), ...(extraEntry.tags || [])])
-    };
+  async ensureEmbeddingForEntry(entry = {}) {
+    const targetText = this.buildEmbeddingText(entry);
+    const checksum = embeddingService.checksum(targetText);
+    const existingChecksum = String(entry.embedding?.checksum || '');
+
+    if (existingChecksum === checksum && Array.isArray(entry.embedding?.vector) && entry.embedding.vector.length > 0) {
+      return entry;
+    }
+
+    const vector = await embeddingService.embedText(targetText);
+    const updated = await ProfessionCatalog.findOneAndUpdate(
+      { _id: entry.id },
+      {
+        $set: {
+          embedding: {
+            provider: embeddingService.getProvider(),
+            model: embeddingService.getModelName(),
+            checksum,
+            vector,
+            text: targetText,
+            updatedAt: new Date()
+          }
+        }
+      },
+      { new: true }
+    ).lean();
+
+    return this.toEntry(updated || entry);
   }
 
-  async getAllProfessionEntries() {
-    const defaultMap = this.buildDefaultProfessionMap();
-    const stored = await ProfessionCatalog.find({})
-      .sort({ name: 1 })
-      .lean();
+  async ensureEmbeddings(entries = []) {
+    const results = [];
+    for (const entry of entries) {
+      results.push(await this.ensureEmbeddingForEntry(entry));
+    }
+    return results;
+  }
 
-    stored.forEach((item) => {
-      const normalizedName = normalizeProfessionKey(item.normalizedName || item.name);
-      const existing = defaultMap.get(normalizedName) || {
-        name: item.name,
-        normalizedName,
-        source: item.source || 'ai',
-        aliases: [],
-        tags: []
-      };
+  async createOrUpdateProfession(payload = {}) {
+    const canonicalName = this.formatProfessionName(payload.canonicalName || payload.name || '');
+    const normalizedKey = this.normalizeProfessionKey(payload.normalizedKey || canonicalName);
+    const aliases = uniqueStrings(payload.aliases || []);
+    const tags = uniqueStrings(payload.tags || []);
+    const rawInput = String(payload.rawInput || '').trim();
 
-      defaultMap.set(normalizedName, this.mergeProfessionEntries(existing, {
-        name: item.name || existing.name,
-        normalizedName,
-        source: item.source || existing.source,
-        aliases: item.aliases || [],
-        tags: item.tags || []
-      }));
+    if (!canonicalName || !normalizedKey) {
+      return null;
+    }
+
+    const existingEntries = await this.getAllProfessionEntries();
+    const matchedEntry = this.findBestProfessionMatchSync(canonicalName, existingEntries, { minimumScore: 0.93 })
+      || aliases.map((alias) => this.findBestProfessionMatchSync(alias, existingEntries, { minimumScore: 0.93 })).find(Boolean);
+
+    const filter = matchedEntry?.id
+      ? { _id: matchedEntry.id }
+      : {
+          $or: [
+            { normalizedKey: matchedEntry?.normalizedKey || normalizedKey },
+            { normalizedName: matchedEntry?.normalizedKey || normalizedKey }
+          ]
+        };
+
+    const update = {
+      $setOnInsert: {
+        canonicalName: matchedEntry?.canonicalName || canonicalName,
+        normalizedKey: matchedEntry?.normalizedKey || normalizedKey,
+        source: payload.source || matchedEntry?.source || 'learned'
+      },
+      $set: matchedEntry ? {} : {
+        canonicalName,
+        normalizedKey
+      },
+      $addToSet: {
+        aliases: {
+          $each: uniqueStrings([
+            ...aliases,
+            ...(matchedEntry && matchedEntry.canonicalName !== canonicalName ? [canonicalName] : [])
+          ])
+        },
+        tags: { $each: tags }
+      }
+    };
+
+    if (rawInput) {
+      update.$addToSet['learning.rawInputs'] = rawInput;
+    }
+
+    const updated = await ProfessionCatalog.findOneAndUpdate(
+      filter,
+      update,
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    const entry = this.toEntry(updated);
+    return this.ensureEmbeddingForEntry(entry);
+  }
+
+  async ensureProfession(value = '', options = {}) {
+    const saved = await this.createOrUpdateProfession({
+      canonicalName: value,
+      aliases: options.aliases || [],
+      tags: options.tags || [],
+      source: options.source || 'learned',
+      rawInput: options.rawInput || value
     });
 
-    return [...defaultMap.values()].sort((left, right) => left.name.localeCompare(right.name));
+    return saved?.canonicalName || '';
   }
 
-  async getAllProfessions() {
-    const entries = await this.getAllProfessionEntries();
+  async markProfessionSelected(canonicalName = '', rawInput = '') {
+    const entry = await this.findBestProfessionMatch(canonicalName);
+    if (!entry) {
+      return null;
+    }
 
-    return uniqueStrings(entries.map((item) => item.name))
-      .sort((left, right) => left.localeCompare(right));
+    const update = {
+      $inc: {
+        'learning.usageCount': 1,
+        'learning.selectedCount': 1
+      },
+      $set: {
+        'learning.lastSelectedAt': new Date()
+      }
+    };
+
+    if (rawInput) {
+      update.$addToSet = {
+        'learning.rawInputs': String(rawInput).trim()
+      };
+    }
+
+    await ProfessionCatalog.findOneAndUpdate({ _id: entry.id }, update);
+
+    return entry;
   }
 
   async findBestProfessionMatch(candidate = '') {
     const entries = await this.getAllProfessionEntries();
     return this.findBestProfessionMatchSync(candidate, entries);
-  }
-
-  async ensureProfession(value = '', options = {}) {
-    const aliases = uniqueStrings(options.aliases || []);
-    const tags = uniqueStrings(options.tags || []);
-    const preserveInput = options.preserveInput === true;
-    const entries = await this.getAllProfessionEntries();
-    const matchedEntry = this.findBestProfessionMatchSync(value, entries)
-      || aliases.map((alias) => this.findBestProfessionMatchSync(alias, entries)).find(Boolean)
-      || tags.map((tag) => this.findBestProfessionMatchSync(tag, entries)).find(Boolean);
-    const shouldPreserveSpecificProfession = matchedEntry
-      ? this.shouldPreserveSpecificProfession(value, matchedEntry)
-      : false;
-
-    const formatted = preserveInput || shouldPreserveSpecificProfession
-      ? formatProfessionName(value)
-      : (matchedEntry?.name || formatProfessionName(value));
-    const normalizedName = preserveInput || shouldPreserveSpecificProfession
-      ? normalizeProfessionKey(formatted)
-      : (matchedEntry?.normalizedName || normalizeProfessionKey(formatted));
-    if (!formatted || !normalizedName) {
-      return '';
-    }
-
-    const existingDefault = this.buildDefaultProfessionMap().get(normalizedName);
-    const finalName = existingDefault?.name || formatted;
-
-    await ProfessionCatalog.findOneAndUpdate(
-      { normalizedName },
-      {
-        $setOnInsert: {
-          name: finalName,
-          normalizedName,
-          source: options.source || matchedEntry?.source || (existingDefault ? 'system' : 'ai')
-        },
-        $addToSet: {
-          aliases: {
-            $each: uniqueStrings([
-              ...(matchedEntry?.aliases || []),
-              ...(preserveInput || shouldPreserveSpecificProfession ? [matchedEntry?.name || ''] : []),
-              ...aliases
-            ])
-          },
-          tags: {
-            $each: uniqueStrings([
-              ...(matchedEntry?.tags || []),
-              ...tags
-            ])
-          }
-        }
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-
-    return finalName;
   }
 }
 
