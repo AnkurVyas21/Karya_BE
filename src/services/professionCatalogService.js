@@ -247,12 +247,7 @@ class ProfessionCatalogService {
 
     const filter = matchedEntry?.id
       ? { _id: matchedEntry.id }
-      : {
-          $or: [
-            { normalizedKey: matchedEntry?.normalizedKey || normalizedKey },
-            { normalizedName: matchedEntry?.normalizedKey || normalizedKey }
-          ]
-        };
+      : { normalizedKey: matchedEntry?.normalizedKey || normalizedKey };
 
     const update = {
       $setOnInsert: {
