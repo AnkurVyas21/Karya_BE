@@ -29,10 +29,14 @@ class ProfessionSearchService {
       : null;
 
     const professionCandidates = uniqueStrings([
-      professionInference?.suggestedProfession || '',
-      ...(professionInference?.similarProfessions || []),
-      queryInference?.suggestedProfession || '',
-      ...(queryInference?.similarProfessions || [])
+      ...((professionInference && professionInference.status !== 'unknown') ? [
+        professionInference.suggestedProfession || '',
+        ...(professionInference.similarProfessions || [])
+      ] : []),
+      ...((queryInference && queryInference.status !== 'unknown') ? [
+        queryInference.suggestedProfession || '',
+        ...(queryInference.similarProfessions || [])
+      ] : [])
     ]);
 
     const entries = await professionCatalogService.getAllProfessionEntries();

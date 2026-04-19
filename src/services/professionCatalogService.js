@@ -1,3 +1,4 @@
+const DEFAULT_PROFESSIONS = require('../constants/professions');
 const ProfessionCatalog = require('../models/ProfessionCatalog');
 const embeddingService = require('./embeddingService');
 const textNormalizationService = require('./textNormalizationService');
@@ -21,6 +22,51 @@ const uniqueStrings = (values = []) => {
 };
 
 class ProfessionCatalogService {
+  async ensureSystemCatalog() {
+    const count = await ProfessionCatalog.countDocuments({});
+    if (count > 0) {
+      return;
+    }
+
+    for (const profession of DEFAULT_PROFESSIONS) {
+      const canonicalName = this.formatProfessionName(profession);
+      const normalizedKey = this.normalizeProfessionKey(canonicalName);
+      await ProfessionCatalog.updateOne(
+        {
+          $or: [
+            { normalizedKey },
+            { normalizedName: normalizedKey }
+          ]
+        },
+        {
+          $setOnInsert: {
+            canonicalName,
+            normalizedKey,
+            aliases: [],
+            tags: [],
+            source: 'system'
+          }
+        },
+        { upsert: true }
+      );
+    }
+  }
+
+  sanitizeEntryTags(entry = {}) {
+    const canonicalName = entry.canonicalName || entry.name || '';
+    const aliases = uniqueStrings(entry.aliases || []);
+    const referenceTerms = [canonicalName, ...aliases];
+
+    return uniqueStrings(entry.tags || []).filter((tag) => {
+      const score = Math.max(
+        ...referenceTerms.map((term) => this.stringSimilarity(tag, term)),
+        this.stringSimilarity(tag, canonicalName),
+        0
+      );
+      return score >= 0.18;
+    }).slice(0, 8);
+  }
+
   normalizeProfessionKey(value = '') {
     return textNormalizationService.normalizeProfessionKey(value);
   }
@@ -52,7 +98,11 @@ class ProfessionCatalogService {
       canonicalName,
       normalizedKey,
       aliases: uniqueStrings(doc.aliases || []),
-      tags: uniqueStrings(doc.tags || []),
+      tags: this.sanitizeEntryTags({
+        canonicalName,
+        aliases: doc.aliases || [],
+        tags: doc.tags || []
+      }),
       source: doc.source || 'learned',
       embedding: doc.embedding || {},
       learning: doc.learning || {}
@@ -60,6 +110,7 @@ class ProfessionCatalogService {
   }
 
   async getAllProfessionEntries() {
+    await this.ensureSystemCatalog();
     const rows = await ProfessionCatalog.find({})
       .sort({ canonicalName: 1, name: 1 })
       .lean();

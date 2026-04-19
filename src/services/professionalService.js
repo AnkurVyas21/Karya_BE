@@ -139,10 +139,6 @@ class ProfessionalService {
     if ('profession' in mergedProfile) {
       mergedProfile.profession = await professionCatalogService.ensureProfession(mergedProfile.profession, {
         aliases: professionAliases,
-        tags: [
-          ...(mergedProfile.tags || []),
-          ...(mergedProfile.skills || [])
-        ],
         source: 'provider-profile',
         preserveInput: true
       });
@@ -174,7 +170,6 @@ class ProfessionalService {
     if (update.profession) {
       await professionInferenceService.recordSelection(professionInferenceId, update.profession, {
         aliases: professionAliases,
-        tags: update.tags || update.skills || [],
         source: 'provider-profile',
         rawInput: professionInputSource
       });

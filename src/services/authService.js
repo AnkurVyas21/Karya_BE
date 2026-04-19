@@ -91,7 +91,6 @@ class AuthService {
       const normalizedDescription = toCleanString(description);
       const savedProfession = await professionCatalogService.ensureProfession(profession, {
         aliases: normalizeList(professionAliases),
-        tags: [...normalizedSkills, ...normalizeList(providedTags)],
         source: 'provider-signup',
         preserveInput: true,
         rawInput: description || profession
@@ -136,7 +135,6 @@ class AuthService {
       );
       await professionInferenceService.recordSelection(professionInferenceId, savedProfession, {
         aliases: normalizeList(professionAliases),
-        tags,
         source: 'provider-signup',
         rawInput: description || profession
       });
@@ -362,11 +360,6 @@ class AuthService {
       if ('profession' in payload) {
         professionalUpdates.profession = await professionCatalogService.ensureProfession(payload.profession, {
           aliases: providedAliases,
-          tags: [
-            ...providedSkills,
-            ...manualTags,
-            ...(existingProfessionalProfile?.tags || [])
-          ],
           source: 'account-profile',
           preserveInput: true,
           rawInput: providedDescription || payload.profession
@@ -413,7 +406,6 @@ class AuthService {
       if (professionalUpdates.profession) {
         await professionInferenceService.recordSelection(professionInferenceId, professionalUpdates.profession, {
           aliases: providedAliases,
-          tags: professionalUpdates.tags || [],
           source: 'account-profile',
           rawInput: providedDescription || payload.profession
         });

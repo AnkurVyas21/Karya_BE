@@ -128,6 +128,17 @@ const tokenizeText = (value = '') => splitWords(value)
   .map((item) => sanitizeTag(item))
   .filter(Boolean);
 
+const tokenOverlapScore = (left = '', right = '') => {
+  const leftTokens = new Set(splitWords(left).map((item) => toSingular(item)));
+  const rightTokens = new Set(splitWords(right).map((item) => toSingular(item)));
+  if (!leftTokens.size || !rightTokens.size) {
+    return 0;
+  }
+
+  const overlap = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  return overlap / Math.max(leftTokens.size, rightTokens.size);
+};
+
 const RELATED_PROFESSIONS = {
   plumber: ['Pipe Fitter', 'Bathroom Fitting Expert', 'Sanitary Technician', 'Drainage Technician'],
   electrician: ['Electrical Technician', 'Wiring Technician', 'Appliance Electrician'],
@@ -247,14 +258,29 @@ const deriveProfileTags = ({
   const specializationTags = normalizedSpecializations
     .map((item) => sanitizeTag(item) || cleanText(item))
     .filter(Boolean);
+  const professionAnchors = uniqueStrings([
+    sanitizeTag(profession) || profession,
+    ...relatedProfessionTags,
+    ...specializationTags,
+    ...providedTags
+  ]).filter(Boolean);
+  const relevantDescriptionTags = uniqueStrings([
+    ...descriptionPhrases,
+    ...descriptionTokens
+  ]).filter((tag) => {
+    if (!professionAnchors.length) {
+      return true;
+    }
+
+    return professionAnchors.some((anchor) => tokenOverlapScore(anchor, tag) >= 0.34);
+  });
 
   return uniqueStrings([
     sanitizeTag(profession) || profession,
     ...relatedProfessionTags,
     ...specializationTags,
     ...providedTags,
-    ...descriptionPhrases,
-    ...descriptionTokens,
+    ...relevantDescriptionTags,
     ...locationTags
   ]);
 };
