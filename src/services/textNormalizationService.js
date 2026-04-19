@@ -10,35 +10,42 @@ const ACRONYM_TOKENS = new Map([
 ]);
 
 const DEVANAGARI_MAP = {
-  'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ii', 'उ': 'u', 'ऊ': 'uu', 'ऋ': 'ri', 'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au',
-  'ा': 'aa', 'ि': 'i', 'ी': 'ii', 'ु': 'u', 'ू': 'uu', 'ृ': 'ri', 'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au',
-  'क': 'k', 'ख': 'kh', 'ग': 'g', 'घ': 'gh', 'ङ': 'n',
-  'च': 'ch', 'छ': 'chh', 'ज': 'j', 'झ': 'jh', 'ञ': 'n',
-  'ट': 't', 'ठ': 'th', 'ड': 'd', 'ढ': 'dh', 'ण': 'n',
-  'त': 't', 'थ': 'th', 'द': 'd', 'ध': 'dh', 'न': 'n',
-  'प': 'p', 'फ': 'ph', 'ब': 'b', 'भ': 'bh', 'म': 'm',
-  'य': 'y', 'र': 'r', 'ल': 'l', 'व': 'v',
-  'श': 'sh', 'ष': 'sh', 'स': 's', 'ह': 'h',
-  'क़': 'q', 'ख़': 'kh', 'ग़': 'g', 'ज़': 'z', 'ड़': 'd', 'ढ़': 'dh', 'फ़': 'f', 'य़': 'y',
-  'ं': 'n', 'ँ': 'n', 'ः': 'h', '्': '', '़': ''
+  '\u0905': 'a', '\u0906': 'aa', '\u0907': 'i', '\u0908': 'ii', '\u0909': 'u', '\u090a': 'uu', '\u090b': 'ri', '\u090f': 'e', '\u0910': 'ai', '\u0913': 'o', '\u0914': 'au',
+  '\u093e': 'aa', '\u093f': 'i', '\u0940': 'ii', '\u0941': 'u', '\u0942': 'uu', '\u0943': 'ri', '\u0947': 'e', '\u0948': 'ai', '\u094b': 'o', '\u094c': 'au',
+  '\u0915': 'k', '\u0916': 'kh', '\u0917': 'g', '\u0918': 'gh', '\u0919': 'n',
+  '\u091a': 'ch', '\u091b': 'chh', '\u091c': 'j', '\u091d': 'jh', '\u091e': 'n',
+  '\u091f': 't', '\u0920': 'th', '\u0921': 'd', '\u0922': 'dh', '\u0923': 'n',
+  '\u0924': 't', '\u0925': 'th', '\u0926': 'd', '\u0927': 'dh', '\u0928': 'n',
+  '\u092a': 'p', '\u092b': 'ph', '\u092c': 'b', '\u092d': 'bh', '\u092e': 'm',
+  '\u092f': 'y', '\u0930': 'r', '\u0932': 'l', '\u0935': 'v',
+  '\u0936': 'sh', '\u0937': 'sh', '\u0938': 's', '\u0939': 'h',
+  '\u0958': 'q', '\u0959': 'kh', '\u095a': 'g', '\u095b': 'z', '\u095c': 'd', '\u095d': 'dh', '\u095e': 'f', '\u095f': 'y',
+  '\u0902': 'n', '\u0901': 'n', '\u0903': 'h', '\u094d': '', '\u093c': ''
 };
 
 const PHONETIC_EQUIVALENTS = [
   [/\bshaadi\b/g, 'shadi'],
   [/\bshadi\b/g, 'shadi'],
+  [/\bshaadiyon\b/g, 'shadi'],
+  [/\bshadiyon\b/g, 'shadi'],
+  [/\bshaadiyo\b/g, 'shadi'],
+  [/\bshadiyo\b/g, 'shadi'],
   [/\bmehendi\b/g, 'mehndi'],
-  [/\bmehndi\b/g, 'mehndi'],
   [/\bmehandi\b/g, 'mehndi'],
+  [/\bmehndi\b/g, 'mehndi'],
   [/\bbaraat\b/g, 'barat'],
   [/\bbarat\b/g, 'barat'],
+  [/\bbaraaton\b/g, 'barat'],
+  [/\bbaraton\b/g, 'barat'],
   [/\bghori\b/g, 'ghodi'],
   [/\bghodi\b/g, 'ghodi'],
   [/\bsaafa\b/g, 'safa'],
   [/\bsafa\b/g, 'safa'],
   [/\bpanditji\b/g, 'pandit ji'],
-  [/\bbyaah\b/g, 'byah'],
-  [/\bshaadiyon\b/g, 'shadi'],
-  [/\bshaadhi\b/g, 'shadi']
+  [/\bkhane\b/g, 'khana'],
+  [/\bkhanae\b/g, 'khana'],
+  [/\bkhaney\b/g, 'khana'],
+  [/\bbyaah\b/g, 'byah']
 ];
 
 class TextNormalizationService {

@@ -152,6 +152,7 @@ class ProfessionInferenceService {
 
     return {
       inferenceId: log?._id?.toString?.() || '',
+      profession_name: bestSuggestion?.canonicalName || '',
       profession: canAutoSelect ? (bestSuggestion?.canonicalName || '') : 'unknown',
       suggestedProfession: canSuggest ? (bestSuggestion?.canonicalName || '') : '',
       status,

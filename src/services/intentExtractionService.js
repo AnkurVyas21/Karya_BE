@@ -30,8 +30,8 @@ const INTENT_KEYWORD_RULES = [
   {
     intent: 'cooking service',
     context: 'wedding',
-    keywords: ['khana', 'catering', 'caterer', 'halwai', 'food', 'cook', 'rasoi'],
-    professions: ['Caterer', 'Halwai']
+    keywords: ['khana', 'catering', 'caterer', 'halwai', 'food', 'cook', 'rasoi', 'order'],
+    professions: ['Wedding Caterer', 'Caterer', 'Halwai']
   },
   {
     intent: 'mehendi service',
@@ -70,6 +70,14 @@ const INTENT_KEYWORD_RULES = [
     professions: ['Plumber']
   }
 ];
+
+const CONTEXT_HINT_TERMS = {
+  wedding: ['wedding', 'marriage', 'shadi', 'barat', 'bridal', 'mehndi', 'pandit', 'ghodi', 'safa', 'band', 'tent', 'decor'],
+  childcare: ['child', 'childcare', 'baby', 'kids', 'nanny', 'baccha', 'bache'],
+  home: ['home', 'house', 'ghar', 'room', 'kitchen', 'bathroom'],
+  repair: ['repair', 'fix', 'service', 'leak', 'wiring', 'pipe', 'board', 'electric', 'plumbing'],
+  beauty: ['beauty', 'makeup', 'parlour', 'mehndi', 'bridal']
+};
 
 class IntentExtractionService {
   async extractIntent(rawInput = '', options = {}) {
@@ -118,19 +126,19 @@ class IntentExtractionService {
     const prompt = [
       'You are a strict classifier for an India-only local professional finder.',
       'Input may be Hindi, Hinglish, English, or mixed.',
+      'Understand the service semantically, not only by exact phrase match.',
       'Choose exactly one main category from the supplied catalog whenever possible.',
-      'Do not hallucinate categories.',
-      'If you are unsure, leave normalized_category empty and set confidence low.',
+      'If no supplied category is a close match, return a short English profession_name inferred from the work described.',
+      'Do not hallucinate random categories or generic labels.',
       'Return JSON only in this exact shape:',
-      '{"intent":"","language":"","normalized_category":"","city":"","tags":[],"related_services":[],"confidence":0,"create_new_category":false}',
+      '{"profession_name":"","tags":[],"confidence":0,"language":"","city":""}',
       'Rules:',
-      '1. normalized_category must be one of the supplied catalog category names.',
-      '2. Do not invent or rewrite category names.',
-      '3. Only one main category is allowed.',
-      '4. If confidence is below 0.75, normalized_category must be empty.',
-      '5. create_new_category must stay false for this phase.',
-      '6. related_services must use only supplied catalog category names and should be empty unless strongly relevant.',
-      '7. city must be extracted only if clearly present in the user input.',
+      '1. If a supplied catalog category clearly fits, profession_name must be exactly that category name.',
+      '2. If no supplied category clearly fits, profession_name may be a short English profession title inferred from the sentence.',
+      '3. Only one main profession_name is allowed.',
+      '4. If confidence is below 0.75, profession_name should be empty.',
+      '5. tags should contain short normalized meaning words, not full sentences.',
+      '6. city must be extracted only if clearly present in the user input.',
       `Catalog: ${JSON.stringify(catalogSummary)}`,
       `Input: ${JSON.stringify(preprocessed.raw)}`,
       `Normalized: ${JSON.stringify(preprocessed.embeddingText)}`
@@ -152,17 +160,21 @@ class IntentExtractionService {
 
   extractWithKeywords(preprocessed, catalogEntries = []) {
     const text = String(preprocessed.embeddingText || preprocessed.raw || '').toLowerCase();
+    const detectedContext = this.detectContext(text);
     const matchedRules = INTENT_KEYWORD_RULES.filter((rule) => rule.keywords.some((keyword) => text.includes(keyword.toLowerCase())));
     const inferredCatalogProfessions = professionCatalogService.findProfessionMatchesInTextSync(preprocessed.raw, catalogEntries, 5)
       .map((entry) => entry.canonicalName);
+    const semanticCatalogProfessions = this.findSemanticCatalogMatches(preprocessed, catalogEntries, detectedContext)
+      .map((entry) => entry.canonicalName);
     const professions = uniqueStrings([
+      ...semanticCatalogProfessions,
       ...matchedRules.flatMap((rule) => rule.professions),
       ...inferredCatalogProfessions
     ]);
 
     return {
       primary_intent: matchedRules[0]?.intent || (professions[0] ? `${professions[0]} service` : ''),
-      context: matchedRules[0]?.context || this.detectContext(text),
+      context: matchedRules[0]?.context || detectedContext,
       keywords: uniqueStrings([
         ...matchedRules.flatMap((rule) => rule.keywords),
         ...text.split(/[\s|,/&+-]+/).filter((token) => token.length > 2)
@@ -175,6 +187,7 @@ class IntentExtractionService {
 
   mergeIntentResults(preprocessed, llmResult, fallbackResult, catalogEntries = [], options = {}) {
     const llmProfessions = uniqueStrings([
+      llmResult?.profession_name || '',
       llmResult?.normalized_category || '',
       ...(llmResult?.suggested_professions || []),
       ...(llmResult?.suggestedProfessions || [])
@@ -198,7 +211,7 @@ class IntentExtractionService {
     });
 
     return {
-      primary_intent: String(llmResult?.intent || llmResult?.primary_intent || llmResult?.primaryIntent || fallbackResult.primary_intent || '').trim(),
+      primary_intent: String(llmResult?.profession_name || llmResult?.intent || llmResult?.primary_intent || llmResult?.primaryIntent || fallbackResult.primary_intent || '').trim(),
       context: String(llmResult?.language || llmResult?.context || fallbackResult.context || '').trim(),
       keywords: uniqueStrings([
         ...(llmResult?.tags || []),
@@ -212,7 +225,7 @@ class IntentExtractionService {
   }
 
   detectContext(text = '') {
-    if (/\b(shaadi|shadi|wedding|marriage|bridal|baraat)\b/.test(text)) {
+    if (/\b(shaadi|shadi|shadiyon|wedding|marriage|bridal|baraat|barat)\b/.test(text)) {
       return 'wedding';
     }
     if (/\b(child|childcare|baby|kids|nanny|baccha|bache)\b/.test(text)) {
@@ -225,6 +238,81 @@ class IntentExtractionService {
       return 'event';
     }
     return '';
+  }
+
+  findSemanticCatalogMatches(preprocessed, catalogEntries = [], detectedContext = '', limit = 5) {
+    const variantsText = uniqueStrings(preprocessed.variants || []).join(' | ');
+    const queryTokens = new Set(
+      uniqueStrings(variantsText.split(/[\s|,/&+-]+/).filter((token) => token.length > 1))
+        .map((token) => textNormalizationService.normalizeProfessionKey(token))
+        .filter(Boolean)
+    );
+
+    return catalogEntries
+      .map((entry) => {
+        const terms = professionCatalogService.getSearchTerms(entry);
+        const bestSimilarity = Math.max(
+          ...terms.map((term) => professionCatalogService.stringSimilarity(variantsText, term)),
+          0
+        );
+
+        const overlapScore = Math.max(
+          ...terms.map((term) => {
+            const termTokens = new Set(
+              textNormalizationService.buildVariants(term)
+                .join(' ')
+                .split(/\s+/)
+                .map((token) => textNormalizationService.normalizeProfessionKey(token))
+                .filter(Boolean)
+            );
+
+            if (!termTokens.size) {
+              return 0;
+            }
+
+            const overlap = [...termTokens].filter((token) => queryTokens.has(token)).length;
+            return overlap / termTokens.size;
+          }),
+          0
+        );
+
+        let score = (bestSimilarity * 0.68) + (overlapScore * 0.32);
+        if (detectedContext && this.entryMatchesContext(entry, detectedContext)) {
+          score += 0.18;
+        }
+        if (
+          (queryTokens.has('khana') || queryTokens.has('food') || queryTokens.has('cook') || queryTokens.has('order'))
+          && this.entryHasFoodSignals(entry)
+        ) {
+          score += 0.12;
+        }
+
+        return { entry, score };
+      })
+      .filter((item) => item.score >= 0.34)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, limit)
+      .map((item) => item.entry);
+  }
+
+  entryMatchesContext(entry = {}, context = '') {
+    const hintTerms = CONTEXT_HINT_TERMS[context] || [];
+    if (hintTerms.length === 0) {
+      return false;
+    }
+
+    const searchable = textNormalizationService.normalizeProfessionKey(
+      professionCatalogService.getSearchTerms(entry).join(' ')
+    );
+
+    return hintTerms.some((term) => searchable.includes(textNormalizationService.normalizeProfessionKey(term)));
+  }
+
+  entryHasFoodSignals(entry = {}) {
+    const searchable = textNormalizationService.normalizeProfessionKey(
+      professionCatalogService.getSearchTerms(entry).join(' ')
+    );
+    return /\bcater|food|cook|khana|halwai|meal\b/.test(searchable);
   }
 
   getProvider() {
