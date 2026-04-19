@@ -10,8 +10,8 @@ const ACRONYM_TOKENS = new Map([
 ]);
 
 const DEVANAGARI_MAP = {
-  'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo', 'ऋ': 'ri', 'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au',
-  'ा': 'aa', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo', 'ृ': 'ri', 'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au',
+  'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ii', 'उ': 'u', 'ऊ': 'uu', 'ऋ': 'ri', 'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au',
+  'ा': 'aa', 'ि': 'i', 'ी': 'ii', 'ु': 'u', 'ू': 'uu', 'ृ': 'ri', 'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au',
   'क': 'k', 'ख': 'kh', 'ग': 'g', 'घ': 'gh', 'ङ': 'n',
   'च': 'ch', 'छ': 'chh', 'ज': 'j', 'झ': 'jh', 'ञ': 'n',
   'ट': 't', 'ठ': 'th', 'ड': 'd', 'ढ': 'dh', 'ण': 'n',
@@ -23,14 +23,51 @@ const DEVANAGARI_MAP = {
   'ं': 'n', 'ँ': 'n', 'ः': 'h', '्': '', '़': ''
 };
 
+const PHONETIC_EQUIVALENTS = [
+  [/\bshaadi\b/g, 'shadi'],
+  [/\bshadi\b/g, 'shadi'],
+  [/\bmehendi\b/g, 'mehndi'],
+  [/\bmehndi\b/g, 'mehndi'],
+  [/\bmehandi\b/g, 'mehndi'],
+  [/\bbaraat\b/g, 'barat'],
+  [/\bbarat\b/g, 'barat'],
+  [/\bghori\b/g, 'ghodi'],
+  [/\bghodi\b/g, 'ghodi'],
+  [/\bsaafa\b/g, 'safa'],
+  [/\bsafa\b/g, 'safa'],
+  [/\bpanditji\b/g, 'pandit ji'],
+  [/\bbyaah\b/g, 'byah'],
+  [/\bshaadiyon\b/g, 'shadi'],
+  [/\bshaadhi\b/g, 'shadi']
+];
+
 class TextNormalizationService {
   normalizeBase(value = '') {
     return String(value || '')
       .normalize('NFKC')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
       .toLowerCase()
       .replace(/[^\p{L}\p{N}\s/&+-]+/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+
+  detectScript(value = '') {
+    const text = String(value || '').normalize('NFKC');
+    const hasDevanagari = /[\u0900-\u097F]/.test(text);
+    const hasLatin = /[a-z]/i.test(text);
+
+    if (hasDevanagari && hasLatin) {
+      return 'mixed';
+    }
+    if (hasDevanagari) {
+      return 'devanagari';
+    }
+    if (hasLatin) {
+      return 'latin';
+    }
+
+    return 'other';
   }
 
   transliterateHindiToLatin(value = '') {
@@ -47,7 +84,13 @@ class TextNormalizationService {
   }
 
   normalizePhoneticLatin(value = '') {
-    return this.normalizeBase(value)
+    let normalized = this.normalizeBase(value);
+
+    PHONETIC_EQUIVALENTS.forEach(([pattern, replacement]) => {
+      normalized = normalized.replace(pattern, replacement);
+    });
+
+    return normalized
       .replace(/ph/g, 'f')
       .replace(/bh/g, 'b')
       .replace(/kh/g, 'k')
@@ -55,6 +98,7 @@ class TextNormalizationService {
       .replace(/chh/g, 'ch')
       .replace(/sh/g, 's')
       .replace(/aa/g, 'a')
+      .replace(/ii/g, 'i')
       .replace(/ee/g, 'i')
       .replace(/oo/g, 'u')
       .replace(/([a-z])\1+/g, '$1')
@@ -70,7 +114,8 @@ class TextNormalizationService {
   }
 
   normalizeProfessionKey(value = '') {
-    return this.buildVariants(value)[0] || '';
+    const transliterated = this.transliterateHindiToLatin(value);
+    return this.normalizePhoneticLatin(transliterated || value);
   }
 
   formatProfessionName(value = '') {
@@ -106,12 +151,15 @@ class TextNormalizationService {
   }
 
   preprocess(value = '') {
-    const variants = this.buildVariants(value);
+    const raw = String(value || '').trim();
+    const variants = this.buildVariants(raw);
+
     return {
-      raw: String(value || '').trim(),
+      raw,
       normalized: variants[0] || '',
       transliterated: variants[1] || variants[0] || '',
       phonetic: variants[2] || variants[1] || variants[0] || '',
+      script: this.detectScript(raw),
       variants,
       embeddingText: variants.join(' | ')
     };

@@ -1,133 +1,152 @@
 const DEFAULT_PROFESSIONS = require('../constants/professions');
 
 const normalizeText = (value = '') => String(value || '')
+  .normalize('NFKC')
   .toLowerCase()
   .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
   .replace(/\s+/g, ' ')
-  .trim();
+  .trim()
+  .replace(/\bshaadi\b/g, 'shadi')
+  .replace(/\bmehendi\b/g, 'mehndi')
+  .replace(/\bbaraat\b/g, 'barat');
 
 const escapeRegex = (value = '') => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const PROFESSION_RULES = [
   {
     profession: 'Carpenter',
-    keywords: ['carpenter', 'carpentry', 'wood work', 'wooden work', 'woodwork', 'wood worker', 'furniture', 'furniture repair', 'cabinet', 'wardrobe', 'cupboard', 'sofa repair', 'door fitting', 'table repair', 'modular furniture', 'wood polishing', 'लकड़ी', 'लकड़ी का काम', 'फर्नीचर', 'बढ़ई', 'फर्नीचर का काम'],
+    keywords: ['carpenter', 'carpentry', 'wood work', 'furniture', 'cabinet', 'wardrobe', 'बढ़ई', 'लकड़ी का काम', 'फर्नीचर'],
     specializations: ['Furniture work', 'Wooden work', 'Cabinet installation', 'Furniture repair']
   },
   {
     profession: 'Plumber',
-    keywords: ['plumber', 'plumbing', 'pipe', 'pipeline', 'tap', 'leak', 'leakage', 'water leakage', 'drain', 'drainage', 'bathroom fitting', 'sanitary fitting', 'washbasin', 'flush', 'toilet fitting', 'sewer', 'nal', 'nali', 'geyser fitting', 'प्लंबर', 'प्लम्बिंग', 'नल', 'पाइप', 'लीकेज', 'पानी की पाइप', 'बाथरूम फिटिंग', 'सैनिटरी', 'ड्रेनेज'],
+    keywords: ['plumber', 'plumbing', 'pipe', 'tap', 'leak', 'leakage', 'bathroom fitting', 'nal', 'nali', 'प्लंबर', 'नल', 'पाइप', 'लीकेज', 'बाथरूम फिटिंग'],
     specializations: ['Pipe repair', 'Leak fixing', 'Bathroom fitting', 'Sanitary work']
   },
   {
     profession: 'Architect',
-    keywords: ['architect', 'architecture', 'architectural', 'house design', 'home design', 'building design', 'map design', 'floor plan', 'house plan', 'elevation', 'blueprint', 'house drawing', '3d design', 'ghar ka naksha', 'home map', 'naksha', 'आर्किटेक्ट', 'नक्शा', 'घर का नक्शा', 'डिजाइन मैप', 'फ्लोर प्लान'],
+    keywords: ['architect', 'house design', 'building design', 'map design', 'floor plan', 'naksha', 'आर्किटेक्ट', 'नक्शा', 'घर का नक्शा'],
     specializations: ['House planning', 'Elevation design', 'Blueprint design', 'Building design']
   },
   {
     profession: 'Builder',
-    keywords: ['builder', 'building contractor', 'contractor', 'construction', 'house construction', 'building work', 'civil work', 'site work', 'site supervision', 'ghar banana', 'makan banana', 'निर्माण', 'बिल्डर', 'कंस्ट्रक्शन', 'कॉन्ट्रैक्टर', 'घर बनाना', 'बिल्डिंग का काम'],
+    keywords: ['builder', 'contractor', 'construction', 'house construction', 'ghar banana', 'निर्माण', 'बिल्डर', 'कॉन्ट्रैक्टर', 'घर बनाना'],
     specializations: ['Construction work', 'Building contractor', 'Site supervision', 'House construction']
   },
   {
     profession: 'Mason',
-    keywords: ['mason', 'brick work', 'tile work', 'plaster', 'plastering', 'tiles fitting', 'stone work', 'ईंट का काम', 'राजमिस्त्री', 'टाइल्स का काम', 'प्लास्टर'],
+    keywords: ['mason', 'brick work', 'tile work', 'plaster', 'rajmistri', 'राजमिस्त्री', 'टाइल्स का काम', 'प्लास्टर'],
     specializations: ['Brick work', 'Tile fitting', 'Plaster work', 'Stone work']
   },
   {
     profession: 'Electrician',
-    keywords: ['electrician', 'electrical', 'wiring', 'switch', 'socket', 'mcb', 'short circuit', 'inverter', 'fan fitting', 'light fitting', 'bijli', 'wireman', 'इलेक्ट्रीशियन', 'बिजली', 'वायरिंग', 'स्विच बोर्ड'],
+    keywords: ['electrician', 'electrical', 'wiring', 'switch', 'socket', 'mcb', 'bijli', 'इलेक्ट्रीशियन', 'बिजली', 'वायरिंग', 'स्विच बोर्ड'],
     specializations: ['Wiring', 'Electrical repair', 'Switchboard work', 'Appliance wiring']
   },
   {
     profession: 'Auto Mechanic',
-    keywords: ['auto mechanic', 'mechanic', 'car repair', 'bike repair', 'vehicle repair', 'vehicle service', 'fix vehicle', 'fix vehicles', 'fix car', 'fix cars', 'repair car', 'repair cars', 'repair bike', 'repair bikes', 'garage', 'engine', 'engine noise', 'cylinder', 'clutch', 'gear', 'brake', 'silencer', 'gaadi', 'gaadi mechanic', 'bike mechanic', 'मैकेनिक', 'गाड़ी', 'इंजन', 'सिलेंडर', 'ब्रेक', 'क्लच'],
+    keywords: ['auto mechanic', 'mechanic', 'car repair', 'bike repair', 'garage', 'engine', 'brake', 'clutch', 'गाड़ी मैकेनिक', 'मैकेनिक', 'गाड़ी'],
     specializations: ['Engine repair', 'Vehicle diagnostics', 'Bike repair', 'Car servicing']
   },
   {
     profession: 'Teacher',
-    keywords: ['teacher', 'teaching', 'teach', 'teach students', 'teaches students', 'school teacher', 'subject teacher', 'faculty', 'professor', 'lecturer', 'chemistry teacher', 'physics teacher', 'math teacher', 'mathematics teacher', 'science teacher', 'biology teacher', 'english teacher', 'teach chemistry', 'teach physics', 'teach maths', 'teach math', 'teach biology', 'teach english', 'शिक्षक', 'अध्यापक', 'प्रोफेसर', 'लेक्चरर'],
+    keywords: ['teacher', 'teaching', 'school teacher', 'professor', 'lecturer', 'शिक्षक', 'अध्यापक'],
     specializations: ['Teaching', 'Subject instruction', 'Student mentoring', 'Classroom teaching']
   },
   {
     profession: 'Veterinarian',
-    keywords: ['veterinarian', 'veterinary doctor', 'veterinary surgeon', 'vet doctor', 'vet', 'animal doctor', 'animal hospital', 'animal clinic', 'pet doctor', 'livestock doctor', 'cow doctor', 'buffalo doctor', 'cattle doctor', 'farm animal doctor', 'livestock specialist', 'animal specialist', 'veterinary', 'cow buffalo', 'pashu doctor', 'à¤ªà¤¶à¥ à¤šà¤¿à¤•à¤¿à¤¤à¥à¤¸à¤•', 'à¤œà¤¾à¤¨à¤µà¤° à¤•à¤¾ à¤¡à¥‰à¤•à¥à¤Ÿà¤°'],
+    keywords: ['veterinarian', 'vet doctor', 'animal doctor', 'pashu doctor', 'पशु चिकित्सक', 'पशु डॉक्टर', 'जानवरों का डॉक्टर'],
     specializations: ['Animal treatment', 'Veterinary consultation', 'Livestock care', 'Farm animal care']
   },
   {
     profession: 'Home Tutor',
-    keywords: ['home tutor', 'private tutor', 'tuition teacher', 'tuition', 'home tuition', 'personal tutor', 'coach students', 'ट्यूशन', 'ट्यूटर', 'घर पर पढ़ाना'],
+    keywords: ['home tutor', 'private tutor', 'tuition teacher', 'tuition', 'ट्यूशन', 'घर पर पढ़ाना'],
     specializations: ['Home tuition', 'One-to-one teaching', 'Exam preparation', 'Student coaching']
   },
   {
     profession: 'Painter',
-    keywords: ['painter', 'painting', 'wall paint', 'texture paint', 'putty', 'color work', 'paint work', 'पेंटर', 'पेंटिंग', 'पुट्टी'],
+    keywords: ['painter', 'painting', 'wall paint', 'texture paint', 'putty', 'पेंटर', 'पेंटिंग', 'पुट्टी'],
     specializations: ['Wall painting', 'Texture work', 'Putty work', 'Interior paint']
   },
   {
     profession: 'Interior Designer',
-    keywords: ['interior designer', 'interior design', 'room design', 'modular kitchen', 'home interior', 'kitchen design', 'living room design', 'bedroom design', 'इंटीरियर', 'इंटीरियर डिजाइन', 'घर का इंटीरियर'],
+    keywords: ['interior designer', 'interior design', 'room design', 'modular kitchen', 'इंटीरियर', 'घर का इंटीरियर'],
     specializations: ['Home interior', 'Room design', 'Kitchen design', 'Space planning']
   },
   {
     profession: 'Web Developer',
-    keywords: ['web developer', 'website', 'website development', 'site development', 'wordpress', 'shopify', 'frontend', 'landing page', 'portfolio site', 'वेबसाइट', 'वेब डेवलपर', 'साइट बनाना'],
+    keywords: ['web developer', 'website development', 'wordpress', 'shopify', 'website', 'वेबसाइट', 'वेब डेवलपर'],
     specializations: ['Website development', 'Frontend development', 'WordPress', 'Landing pages']
   },
   {
     profession: 'Software Engineer',
-    keywords: ['software engineer', 'software developer', 'software development', 'app development', 'application development', 'backend', 'api development', 'mobile app', 'android app', 'ios app', 'coding', 'software', 'डेवलपर', 'सॉफ्टवेयर', 'ऐप डेवलपमेंट', 'एंड्रॉइड ऐप'],
+    keywords: ['software engineer', 'software developer', 'app development', 'backend', 'api development', 'सॉफ्टवेयर', 'ऐप डेवलपमेंट'],
     specializations: ['Software development', 'Backend development', 'App development', 'API development']
   },
   {
     profession: 'Graphic Designer',
-    keywords: ['graphic designer', 'graphic design', 'logo design', 'poster design', 'brochure design', 'social media post', 'branding design', 'ग्राफिक डिजाइन', 'लोगो डिजाइन'],
+    keywords: ['graphic designer', 'logo design', 'poster design', 'ग्राफिक डिजाइन', 'लोगो डिजाइन'],
     specializations: ['Logo design', 'Poster design', 'Branding', 'Social graphics']
   },
   {
     profession: 'Mehendi Artist',
-    keywords: [
-      'mehendi artist', 'mehndi artist', 'henna artist', 'bridal mehendi', 'bridal mehndi',
-      'mehendi', 'mehndi', 'henna', 'apply mehendi', 'apply mehndi', 'mehendi lagata', 'mehendi lagati',
-      'mehndi lagata', 'mehndi lagati', 'shaadi mehendi', 'wedding mehendi', 'mehendi in weddings'
-    ],
+    keywords: ['mehendi artist', 'mehndi artist', 'henna artist', 'mehendi', 'mehndi', 'मेहंदी', 'मेहँदी लगाने वाली', 'mehndi wali'],
     specializations: ['Bridal mehendi', 'Henna design', 'Wedding mehendi', 'Arabic mehendi']
   },
   {
     profession: 'Wedding Decorator',
-    keywords: [
-      'wedding decorator', 'event decorator', 'stage decorator', 'stage decoration', 'stage decor',
-      'wedding decor', 'wedding decoration', 'decorate stages', 'decorates stages', 'decorate stage',
-      'mandap decoration', 'mandap decor', 'flower decoration', 'wedding setup', 'event setup',
-      'baraat decoration', 'reception decoration', 'shaadi decoration', 'shaadi decor'
-    ],
+    keywords: ['wedding decorator', 'event decorator', 'stage decorator', 'stage decoration', 'wedding decor', 'mandap decoration', 'shaadi decoration', 'शादी डेकोरेटर', 'स्टेज सजावट'],
     specializations: ['Stage decoration', 'Mandap decor', 'Flower setup', 'Wedding event styling']
   },
   {
     profession: 'Dhol Player',
-    keywords: [
-      'dhol player', 'play dhol', 'plays dhol', 'dhol wala', 'dholi', 'wedding dhol',
-      'baraat dhol', 'dhol bajata', 'dhol bajati', 'dhol service', 'band dhol'
-    ],
+    keywords: ['dhol player', 'dhol wala', 'dholi', 'barat dhol', 'ढोल वाला'],
     specializations: ['Wedding dhol', 'Baraat performance', 'Live percussion', 'Event music']
   },
   {
     profession: 'Ghodi Service',
-    keywords: [
-      'ghodi service', 'ghodi for baraat', 'provide ghodi', 'provides ghodi', 'baraat ghodi',
-      'wedding horse', 'horse for wedding', 'ghodi booking', 'ghodi wala', 'dulha ghodi'
-    ],
+    keywords: ['ghodi service', 'ghodi wala', 'wedding horse', 'horse for wedding', 'घोड़ी वाला', 'दूल्हा घोड़ी'],
     specializations: ['Baraat horse', 'Wedding procession', 'Groom entry', 'Event horse rental']
   },
   {
     profession: 'Beautician',
-    keywords: ['beautician', 'beauty parlour', 'parlour', 'makeup', 'bridal makeup', 'facial', 'threading', 'waxing', 'pedicure', 'manicure', 'ब्यूटी पार्लर', 'मेकअप', 'फेशियल'],
+    keywords: ['beautician', 'beauty parlour', 'parlour', 'makeup', 'bridal makeup', 'ब्यूटी पार्लर', 'मेकअप'],
     specializations: ['Makeup', 'Facial', 'Salon services', 'Bridal work']
   },
   {
     profession: 'Barber',
-    keywords: ['barber', 'hair cut', 'haircut', 'cut hair', 'trim beard', 'beard trim', 'shaving', 'mens salon', 'men salon', 'hair styling', 'नाई', 'बाल काटना', 'दाढ़ी बनाना'],
+    keywords: ['barber', 'hair cut', 'haircut', 'trim beard', 'नाई', 'बाल काटना', 'दाढ़ी बनाना'],
     specializations: ['Hair cutting', 'Beard trimming', 'Shaving', 'Men grooming']
+  },
+  {
+    profession: 'Wedding Caterer',
+    keywords: ['wedding caterer', 'marriage caterer', 'shaadi caterer', 'shadi caterer', 'barat food', 'baraat food', 'halwai', 'शादी कैटरर', 'बारात में खाना', 'खाना बनाने वाला'],
+    specializations: ['Wedding catering', 'Baraat food', 'Traditional cooking', 'Bulk event meals']
+  },
+  {
+    profession: 'Pandit',
+    keywords: ['pandit', 'pandit ji', 'puja pandit', 'पंडित', 'पंडित जी', 'पूजा कराने वाला'],
+    specializations: ['Wedding rituals', 'Puja', 'Havan', 'Religious ceremonies']
+  },
+  {
+    profession: 'Tent House',
+    keywords: ['tent house', 'tent wala', 'shamiana', 'टेंट हाउस', 'टेंट वाला'],
+    specializations: ['Tent setup', 'Event rental', 'Chairs and tables', 'Canopy setup']
+  },
+  {
+    profession: 'Florist',
+    keywords: ['florist', 'flower decorator', 'phool wala', 'फूल वाला', 'फ्लोरिस्ट'],
+    specializations: ['Flower decoration', 'Garlands', 'Bouquets', 'Event flowers']
+  },
+  {
+    profession: 'Wedding Band',
+    keywords: ['wedding band', 'band baja', 'baraat band', 'बैंड बाजा', 'बारात बैंड'],
+    specializations: ['Wedding procession music', 'Brass band', 'Ceremony music']
+  },
+  {
+    profession: 'Safa Tying Service',
+    keywords: ['safa tying', 'safa bandhne wala', 'pagdi bandhne wala', 'साफा बांधने वाला', 'पगड़ी बांधने वाला'],
+    specializations: ['Turban tying', 'Wedding dress support', 'Baraat styling']
   }
 ];
 

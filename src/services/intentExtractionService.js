@@ -108,28 +108,30 @@ class IntentExtractionService {
       return null;
     }
 
+    const catalogSummary = catalogEntries
+      .slice(0, 120)
+      .map((entry) => ({
+        name: entry.canonicalName,
+        aliases: (entry.aliases || []).slice(0, 8),
+        tags: (entry.tags || []).slice(0, 8)
+      }));
     const prompt = [
-      'You are an expert system that identifies professions from user input for an Indian service marketplace.',
-      'The input may be in Hindi, Hinglish, or English, and may describe either what the user does or what service the user needs.',
-      'Your job is to understand the service being described and map it to practical, real-world profession names commonly used in India.',
-      'Use the full meaning of the sentence, not just single keywords. Resolve Hinglish and Hindi phrases to the intended profession.',
-      'If the user mentions an activity, role, tool, ceremony, event type, or place of work, infer the most relevant service profession from that context.',
-      'If context such as wedding, event, house repair, beauty, childcare, religious ceremony, cooking, music, transport, or cleaning is present, use it to refine the profession suggestions.',
-      'Always prefer specific profession titles such as Caterer, Halwai, Pandit, Mehendi Artist, Bridal Mehendi Artist, Barber, Makeup Artist, Electrician, Plumber, Carpenter, Photographer, Videographer, Dhol Player, Wedding Band, Babysitter, Child Care Provider, Tutor, Driver, Cleaner, Cook, Mason, Painter, Tailor, AC Technician.',
-      'Do not return generic labels such as worker, helper, person, staff, labour, service provider, or professional.',
-      'Do not return unrelated professions.',
-      'Always return at least 2 suggested professions.',
-      'Never return an empty suggested_professions array.',
-      'If you are unsure, make the best reasonable guess based on the described activity and context.',
+      'You are a strict classifier for an India-only local professional finder.',
+      'Input may be Hindi, Hinglish, English, or mixed.',
+      'Choose exactly one main category from the supplied catalog whenever possible.',
+      'Do not hallucinate categories.',
+      'If you are unsure, leave normalized_category empty and set confidence low.',
       'Return JSON only in this exact shape:',
-      '{"primary_intent":"","context":"","keywords":[""],"suggested_professions":["",""]}',
-      'Requirements for the JSON:',
-      '1. primary_intent: short service description in English.',
-      '2. context: short context label such as wedding, event, home service, repair, beauty, childcare, religious, transport, or home.',
-      '3. keywords: 2 to 8 short keywords derived from the user input and normalized meaning.',
-      '4. suggested_professions: at least 2 valid profession names in English.',
-      '5. suggested_professions must contain only profession titles, not tasks or sentences.',
-      `Catalog sample: ${JSON.stringify(catalogEntries.slice(0, 80).map((entry) => entry.canonicalName))}`,
+      '{"intent":"","language":"","normalized_category":"","city":"","tags":[],"related_services":[],"confidence":0,"create_new_category":false}',
+      'Rules:',
+      '1. normalized_category must be one of the supplied catalog category names.',
+      '2. Do not invent or rewrite category names.',
+      '3. Only one main category is allowed.',
+      '4. If confidence is below 0.75, normalized_category must be empty.',
+      '5. create_new_category must stay false for this phase.',
+      '6. related_services must use only supplied catalog category names and should be empty unless strongly relevant.',
+      '7. city must be extracted only if clearly present in the user input.',
+      `Catalog: ${JSON.stringify(catalogSummary)}`,
       `Input: ${JSON.stringify(preprocessed.raw)}`,
       `Normalized: ${JSON.stringify(preprocessed.embeddingText)}`
     ].join('\n');
@@ -172,7 +174,11 @@ class IntentExtractionService {
   }
 
   mergeIntentResults(preprocessed, llmResult, fallbackResult, catalogEntries = [], options = {}) {
-    const llmProfessions = uniqueStrings(llmResult?.suggested_professions || llmResult?.suggestedProfessions || []);
+    const llmProfessions = uniqueStrings([
+      llmResult?.normalized_category || '',
+      ...(llmResult?.suggested_professions || []),
+      ...(llmResult?.suggestedProfessions || [])
+    ]);
     const fallbackProfessions = uniqueStrings(fallbackResult?.suggested_professions || []);
     const catalogMatches = professionCatalogService.findProfessionMatchesInTextSync(preprocessed.raw, catalogEntries, 5)
       .map((entry) => entry.canonicalName);
@@ -192,9 +198,10 @@ class IntentExtractionService {
     });
 
     return {
-      primary_intent: String(llmResult?.primary_intent || llmResult?.primaryIntent || fallbackResult.primary_intent || '').trim(),
-      context: String(llmResult?.context || fallbackResult.context || '').trim(),
+      primary_intent: String(llmResult?.intent || llmResult?.primary_intent || llmResult?.primaryIntent || fallbackResult.primary_intent || '').trim(),
+      context: String(llmResult?.language || llmResult?.context || fallbackResult.context || '').trim(),
       keywords: uniqueStrings([
+        ...(llmResult?.tags || []),
         ...(llmResult?.keywords || []),
         ...(fallbackResult.keywords || [])
       ]).slice(0, 8),

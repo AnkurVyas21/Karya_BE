@@ -1,4 +1,5 @@
 const DEFAULT_PROFESSIONS = require('../constants/professions');
+const PROFESSION_SEED_DATA = require('../constants/professionSeedData');
 const { PROFESSION_RELATIONS } = require('../constants/professionContextData');
 const ProfessionCatalog = require('../models/ProfessionCatalog');
 const embeddingService = require('./embeddingService');
@@ -24,8 +25,12 @@ const uniqueStrings = (values = []) => {
 
 class ProfessionCatalogService {
   async ensureSystemCatalog() {
-    for (const profession of DEFAULT_PROFESSIONS) {
-      const canonicalName = this.formatProfessionName(profession);
+    const seedData = PROFESSION_SEED_DATA.length > 0
+      ? PROFESSION_SEED_DATA
+      : DEFAULT_PROFESSIONS.map((profession) => ({ canonicalName: profession }));
+
+    for (const profession of seedData) {
+      const canonicalName = this.formatProfessionName(profession.canonicalName || profession);
       const normalizedKey = this.normalizeProfessionKey(canonicalName);
       await ProfessionCatalog.updateOne(
         {
@@ -44,7 +49,18 @@ class ProfessionCatalogService {
             source: 'system'
           },
           $set: {
-            relatedProfessions: PROFESSION_RELATIONS[canonicalName] || []
+            relatedProfessions: uniqueStrings([
+              ...(profession.relatedProfessions || []),
+              ...(PROFESSION_RELATIONS[canonicalName] || [])
+            ])
+          },
+          $addToSet: {
+            aliases: {
+              $each: uniqueStrings(profession.aliases || [])
+            },
+            tags: {
+              $each: uniqueStrings(profession.tags || [])
+            }
           }
         },
         { upsert: true }
@@ -306,8 +322,23 @@ class ProfessionCatalogService {
   }
 
   async ensureProfession(value = '', options = {}) {
+    const cleaned = this.formatProfessionName(value);
+    if (!cleaned) {
+      return '';
+    }
+
+    const existing = await this.findBestProfessionMatch(cleaned);
+    if (existing) {
+      return existing.canonicalName || existing.name || '';
+    }
+
+    const allowCreate = options.allowCreate === true;
+    if (!allowCreate) {
+      return '';
+    }
+
     const saved = await this.createOrUpdateProfession({
-      canonicalName: value,
+      canonicalName: cleaned,
       aliases: options.aliases || [],
       tags: options.tags || [],
       relatedProfessions: options.relatedProfessions || [],

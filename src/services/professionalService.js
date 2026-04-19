@@ -12,6 +12,7 @@ const professionCatalogService = require('./professionCatalogService');
 const professionInferenceService = require('./professionInferenceService');
 const professionSearchService = require('./professionSearchService');
 const providerGrowthService = require('./providerGrowthService');
+const textNormalizationService = require('./textNormalizationService');
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
@@ -463,8 +464,10 @@ class ProfessionalService {
 
   buildSearchCandidateQuery(filters = {}) {
     const query = {};
-    const orConditions = [];
-    const pushRegexConditions = (fields, value) => {
+    const andConditions = [];
+    const professionConditions = [];
+    const locationConditions = [];
+    const pushRegexConditions = (bucket, fields, value) => {
       const term = String(value || '').trim();
       if (!term) {
         return;
@@ -472,14 +475,13 @@ class ProfessionalService {
 
       const regex = new RegExp(escapeRegExp(term), 'i');
       fields.forEach((field) => {
-        orConditions.push({ [field]: regex });
+        bucket.push({ [field]: regex });
       });
     };
 
     if (filters.country) {
       if (filters.country.toLowerCase() === 'india') {
-        query.$and = query.$and || [];
-        query.$and.push({
+        andConditions.push({
           $or: [
             { country: /india/i },
             { country: '' },
@@ -491,17 +493,37 @@ class ProfessionalService {
       }
     }
 
-    pushRegexConditions(['profession', 'skills', 'tags'], filters.profession);
-    (filters.professionTerms || []).forEach((term) => pushRegexConditions(['profession', 'skills', 'tags', 'description'], term));
-    pushRegexConditions(['location', 'city', 'town', 'area', 'state', 'serviceAreas'], filters.location);
-    pushRegexConditions(['state', 'location', 'serviceAreas'], filters.state);
-    pushRegexConditions(['city', 'location', 'serviceAreas'], filters.city);
-    pushRegexConditions(['town', 'area', 'location', 'serviceAreas'], filters.town);
-    (filters.skills || []).forEach((skill) => pushRegexConditions(['skills', 'tags', 'profession', 'description'], skill));
-    pushRegexConditions(['profession', 'skills', 'tags', 'description', 'location', 'city', 'town', 'area', 'state', 'serviceAreas'], filters.query);
+    pushRegexConditions(professionConditions, ['profession', 'skills', 'tags'], filters.profession);
+    (filters.professionTerms || []).forEach((term) => pushRegexConditions(professionConditions, ['profession', 'skills', 'tags', 'description'], term));
+    (filters.skills || []).forEach((skill) => pushRegexConditions(professionConditions, ['skills', 'tags', 'profession', 'description'], skill));
 
-    if (orConditions.length > 0) {
-      query.$or = orConditions;
+    pushRegexConditions(locationConditions, ['city', 'location', 'serviceAreas'], filters.city);
+    pushRegexConditions(locationConditions, ['town', 'area', 'location', 'serviceAreas'], filters.town);
+    pushRegexConditions(locationConditions, ['state', 'location', 'serviceAreas'], filters.state);
+    pushRegexConditions(locationConditions, ['location', 'city', 'town', 'area', 'state', 'serviceAreas'], filters.location);
+
+    if (professionConditions.length > 0) {
+      andConditions.push({ $or: professionConditions });
+    }
+
+    if (locationConditions.length > 0) {
+      andConditions.push({ $or: locationConditions });
+    }
+
+    if (!filters.city && !filters.state && filters.query) {
+      const queryRegex = new RegExp(escapeRegExp(filters.query), 'i');
+      andConditions.push({
+        $or: [
+          { profession: queryRegex },
+          { skills: queryRegex },
+          { tags: queryRegex },
+          { description: queryRegex }
+        ]
+      });
+    }
+
+    if (andConditions.length > 0) {
+      query.$and = andConditions;
     }
 
     return query;
@@ -551,16 +573,32 @@ class ProfessionalService {
       }
     };
 
-    const professionScore = Math.max(
-      this.matchWeightedText(profileData.profession, filters.profession),
-      ...(filters.professionCandidates || []).map((candidate) => this.matchWeightedText(profileData.profession, candidate)),
-      ...(filters.professionTerms || []).map((term) => this.matchWeightedText(combinedSearchable, term))
-    );
+    const normalizedProfessionKey = textNormalizationService.normalizeProfessionKey(profile.profession || '');
+    const professionTargets = uniqueStrings([
+      filters.profession,
+      ...(filters.professionCandidates || []),
+      ...(filters.professionTerms || [])
+    ]).map((item) => textNormalizationService.normalizeProfessionKey(item));
+    const exactCategoryMatch = professionTargets.some((target) => target && target === normalizedProfessionKey);
+    const aliasMatch = professionTargets.some((target) => target && profileData.tags.some((tag) => textNormalizationService.normalizeProfessionKey(tag) === target));
+    const professionScore = exactCategoryMatch
+      ? 100
+      : aliasMatch
+        ? 70
+        : Math.max(
+            this.matchWeightedText(profileData.profession, filters.profession),
+            ...(filters.professionCandidates || []).map((candidate) => this.matchWeightedText(profileData.profession, candidate)),
+            ...(filters.professionTerms || []).map((term) => this.matchWeightedText(combinedSearchable, term))
+          );
     markSignal('profession', professionScore > 0, professionScore);
-    markSignal('location', this.matchWeightedText(combinedLocation, filters.location) > 0, this.matchWeightedText(combinedLocation, filters.location));
-    markSignal('state', this.matchWeightedText(`${profileData.state} ${combinedLocation}`, filters.state) > 0, this.matchWeightedText(`${profileData.state} ${combinedLocation}`, filters.state));
-    markSignal('city', this.matchWeightedText(`${profileData.city} ${combinedLocation}`, filters.city) > 0, this.matchWeightedText(`${profileData.city} ${combinedLocation}`, filters.city));
-    markSignal('town', this.matchWeightedText(`${profileData.town} ${profileData.area} ${combinedLocation}`, filters.town) > 0, this.matchWeightedText(`${profileData.town} ${profileData.area} ${combinedLocation}`, filters.town));
+    const genericLocationScore = this.matchWeightedText(combinedLocation, filters.location);
+    const stateScore = this.matchWeightedText(`${profileData.state} ${combinedLocation}`, filters.state);
+    const cityScore = this.matchWeightedText(`${profileData.city} ${combinedLocation}`, filters.city);
+    const townScore = this.matchWeightedText(`${profileData.town} ${profileData.area} ${combinedLocation}`, filters.town);
+    markSignal('location', genericLocationScore > 0, genericLocationScore);
+    markSignal('state', stateScore > 0, stateScore > 0 ? Math.max(stateScore, 25) : 0);
+    markSignal('city', cityScore > 0, cityScore > 0 ? Math.max(cityScore, 60) : 0);
+    markSignal('town', townScore > 0, townScore > 0 ? Math.max(townScore, 40) : 0);
 
     const countryScore = this.matchCountry(profileData.country, filters.country);
     markSignal('country', countryScore > 0, countryScore);
@@ -596,6 +634,9 @@ class ProfessionalService {
     }).filter(([, value]) => String(value || '').trim()).length;
 
     const matchedSignals = Object.values(signals).filter(Boolean).length;
+    if (profile.isProfileComplete) {
+      score += 10;
+    }
     score += providerGrowthService.getRankingBoost(growthState);
 
     return {
