@@ -71,6 +71,7 @@ class ProfessionInferenceService {
       && bestSuggestion.confidence >= CONFIRM_THRESHOLD
       && Number(bestSuggestion.scoreBreakdown?.semanticScore || 0) >= MATCH_THRESHOLD
       && autoSelectMargin >= AUTO_SELECT_MARGIN_THRESHOLD;
+    const isGenericFallback = Boolean(bestSuggestion && !bestSuggestion.professionId && bestSuggestion.source.startsWith('fallback'));
     const canSuggest = bestSuggestion
       && (
         (bestSuggestion.source === 'semantic' && bestSuggestion.confidence >= SUGGESTION_THRESHOLD)
@@ -78,7 +79,7 @@ class ProfessionInferenceService {
       );
     const status = canAutoSelect
       ? 'confirmed'
-      : canSuggest
+      : (canSuggest || (isGenericFallback && Number(bestSuggestion?.confidence || 0) >= 0.68))
         ? 'needs_confirmation'
         : 'unknown';
     const contextSuggestions = await contextSuggestionService.suggest({
@@ -152,7 +153,7 @@ class ProfessionInferenceService {
 
     return {
       inferenceId: log?._id?.toString?.() || '',
-      profession_name: bestSuggestion?.canonicalName || '',
+      profession_name: (canSuggest || canAutoSelect) ? (bestSuggestion?.canonicalName || '') : '',
       profession: canAutoSelect ? (bestSuggestion?.canonicalName || '') : 'unknown',
       suggestedProfession: canSuggest ? (bestSuggestion?.canonicalName || '') : '',
       status,
@@ -166,7 +167,10 @@ class ProfessionInferenceService {
           : 'No confident primary profession match was found.',
       aliases: bestSuggestion?.aliases || [],
       specializations: bestSuggestion?.tags || [],
-      tags: bestSuggestion?.tags || [],
+      tags: uniqueStrings([
+        ...(bestSuggestion?.tags || []),
+        ...(intent?.keywords || [])
+      ]).slice(0, 8),
       similarProfessions: suggestions.slice(1).map((item) => item.canonicalName),
       contextSuggestions,
       professions: suggestions.map((item) => item.canonicalName),
@@ -243,13 +247,14 @@ class ProfessionInferenceService {
       : uniqueStrings(intent.suggested_professions || [])
         .map((candidate) => professionCatalogService.findBestProfessionMatchSync(candidate, allEntries, { minimumScore: 0.58 }))
         .filter(Boolean);
+    const syntheticTags = uniqueStrings(intent.keywords || []).slice(0, 8);
     const syntheticPool = matchedPool.length === 0
       ? uniqueStrings(intent.suggested_professions || []).map((profession) => ({
           id: null,
           canonicalName: professionCatalogService.formatProfessionName(profession),
           normalizedKey: professionCatalogService.normalizeProfessionKey(profession),
           aliases: [],
-          tags: []
+          tags: syntheticTags
         }))
       : [];
     const pool = matchedPool.length > 0 ? matchedPool : syntheticPool;

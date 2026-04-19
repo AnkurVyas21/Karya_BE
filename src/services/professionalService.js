@@ -927,7 +927,7 @@ class ProfessionalService {
   }
 
   validateProfessionSuggestion(rawResult = {}, description = '', professionCatalogEntries = [], explicitCandidates = []) {
-    const rawProfession = String(rawResult?.profession || '').trim();
+    const rawProfession = String(rawResult?.profession_name || rawResult?.suggestedProfession || rawResult?.profession || '').trim();
     const suggestedProfession = rawProfession && !/^unknown$/i.test(rawProfession)
       ? this.resolveExplicitProfessionCandidate(rawProfession, professionCatalogEntries)
       : '';
@@ -974,7 +974,12 @@ class ProfessionalService {
       };
     }
 
-    if (!suggestedProfession || !strongContextMatch || baseConfidence < 0.45) {
+    const isCatalogBacked = Boolean(
+      suggestedProfession
+      && professionCatalogService.findBestProfessionMatchSync(suggestedProfession, professionCatalogEntries, { minimumScore: 0.84 })
+    );
+
+    if (!suggestedProfession || ((!strongContextMatch && isCatalogBacked) || baseConfidence < 0.45)) {
       return {
         profession: 'unknown',
         suggestedProfession: suggestedProfession || explicitCandidates[0] || '',
@@ -1010,7 +1015,10 @@ class ProfessionalService {
     const specializations = normalizeList(rawResult?.specializations || rawResult?.skills || []);
     const status = rawResult?.status || 'unknown';
     const requiresConfirmation = Boolean(rawResult?.requiresConfirmation);
-    const suggestedProfession = String(rawResult?.suggestedProfession || rawResult?.profession || '').trim();
+    const suggestedProfession = String(rawResult?.profession_name || rawResult?.suggestedProfession || rawResult?.profession || '').trim();
+    const catalogMatch = suggestedProfession
+      ? professionCatalogService.findBestProfessionMatchSync(suggestedProfession, professionCatalogEntries)
+      : null;
 
     if (status !== 'confirmed' || !suggestedProfession || /^unknown$/i.test(suggestedProfession)) {
       const fallbackSuggestions = uniqueStrings([
@@ -1035,14 +1043,16 @@ class ProfessionalService {
       };
     }
 
-    const ensuredProfession = await professionCatalogService.ensureProfession(suggestedProfession, {
-      aliases: rawResult?.aliases || rawResult?.localNames || [],
-      tags: [
-        ...(rawResult?.tags || []),
-        ...(rawResult?.specializations || rawResult?.skills || [])
-      ],
-      source: 'ai-detect'
-    });
+    const ensuredProfession = catalogMatch
+      ? await professionCatalogService.ensureProfession(suggestedProfession, {
+          aliases: rawResult?.aliases || rawResult?.localNames || [],
+          tags: [
+            ...(rawResult?.tags || []),
+            ...(rawResult?.specializations || rawResult?.skills || [])
+          ],
+          source: 'ai-detect'
+        })
+      : professionCatalogService.formatProfessionName(suggestedProfession);
     const catalogEntries = professionCatalogEntries.length > 0
       ? await professionCatalogService.getAllProfessionEntries()
       : await professionCatalogService.getAllProfessionEntries();
