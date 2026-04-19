@@ -85,6 +85,41 @@ const PROFESSION_RULES = [
     specializations: ['Logo design', 'Poster design', 'Branding', 'Social graphics']
   },
   {
+    profession: 'Mehendi Artist',
+    keywords: [
+      'mehendi artist', 'mehndi artist', 'henna artist', 'bridal mehendi', 'bridal mehndi',
+      'mehendi', 'mehndi', 'henna', 'apply mehendi', 'apply mehndi', 'mehendi lagata', 'mehendi lagati',
+      'mehndi lagata', 'mehndi lagati', 'shaadi mehendi', 'wedding mehendi', 'mehendi in weddings'
+    ],
+    specializations: ['Bridal mehendi', 'Henna design', 'Wedding mehendi', 'Arabic mehendi']
+  },
+  {
+    profession: 'Wedding Decorator',
+    keywords: [
+      'wedding decorator', 'event decorator', 'stage decorator', 'stage decoration', 'stage decor',
+      'wedding decor', 'wedding decoration', 'decorate stages', 'decorates stages', 'decorate stage',
+      'mandap decoration', 'mandap decor', 'flower decoration', 'wedding setup', 'event setup',
+      'baraat decoration', 'reception decoration', 'shaadi decoration', 'shaadi decor'
+    ],
+    specializations: ['Stage decoration', 'Mandap decor', 'Flower setup', 'Wedding event styling']
+  },
+  {
+    profession: 'Dhol Player',
+    keywords: [
+      'dhol player', 'play dhol', 'plays dhol', 'dhol wala', 'dholi', 'wedding dhol',
+      'baraat dhol', 'dhol bajata', 'dhol bajati', 'dhol service', 'band dhol'
+    ],
+    specializations: ['Wedding dhol', 'Baraat performance', 'Live percussion', 'Event music']
+  },
+  {
+    profession: 'Ghodi Service',
+    keywords: [
+      'ghodi service', 'ghodi for baraat', 'provide ghodi', 'provides ghodi', 'baraat ghodi',
+      'wedding horse', 'horse for wedding', 'ghodi booking', 'ghodi wala', 'dulha ghodi'
+    ],
+    specializations: ['Baraat horse', 'Wedding procession', 'Groom entry', 'Event horse rental']
+  },
+  {
     profession: 'Beautician',
     keywords: ['beautician', 'beauty parlour', 'parlour', 'makeup', 'bridal makeup', 'facial', 'threading', 'waxing', 'pedicure', 'manicure', 'ब्यूटी पार्लर', 'मेकअप', 'फेशियल'],
     specializations: ['Makeup', 'Facial', 'Salon services', 'Bridal work']

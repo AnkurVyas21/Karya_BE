@@ -339,11 +339,19 @@ class ProfessionalService {
     const explicitProfessionMatch = normalizedFilters.profession
       ? professionCatalogService.findBestProfessionMatchSync(normalizedFilters.profession, professionCatalogEntries)
       : null;
-    const queryProfessionMatches = normalizedFilters.query
-      ? professionCatalogService.findProfessionMatchesInTextSync(normalizedFilters.query, professionCatalogEntries, 3)
-      : [];
+    const professionTextMatches = this.collectProfessionMatchesFromText(
+      normalizedFilters.profession,
+      professionCatalogEntries,
+      4
+    );
+    const queryProfessionMatches = this.collectProfessionMatchesFromText(
+      normalizedFilters.query,
+      professionCatalogEntries,
+      4
+    );
     const resolvedProfessionMatches = uniqueStrings([
       ...(explicitProfessionMatch ? [explicitProfessionMatch.name] : []),
+      ...professionTextMatches.map((entry) => entry.name),
       ...queryProfessionMatches.map((entry) => entry.name)
     ]).map((name) => professionCatalogEntries.find((entry) => entry.name === name)).filter(Boolean);
     const professionTerms = uniqueStrings(resolvedProfessionMatches.flatMap((entry) => professionCatalogService.getSearchTerms(entry)));
@@ -1001,6 +1009,29 @@ class ProfessionalService {
     const leftRole = EXPLICIT_ROLE_TERMS.find((role) => leftNormalized.includes(role));
     const rightRole = EXPLICIT_ROLE_TERMS.find((role) => rightNormalized.includes(role));
     return Boolean(leftRole && rightRole && leftRole === rightRole);
+  }
+
+  collectProfessionMatchesFromText(text = '', professionCatalogEntries = [], limit = 5) {
+    const normalizedText = String(text || '').trim();
+    if (!normalizedText) {
+      return [];
+    }
+
+    const catalogNames = professionCatalogEntries.map((entry) => entry.name);
+    const inferred = inferProfessionFromText(normalizedText, catalogNames);
+    const broaderInferred = inferProfessionFromText(normalizedText);
+    const matchedNames = uniqueStrings([
+      ...(professionCatalogService.findProfessionMatchesInTextSync(normalizedText, professionCatalogEntries, limit) || []).map((entry) => entry.name),
+      inferred?.profession || '',
+      ...(inferred?.similarProfessions || []),
+      broaderInferred?.profession || '',
+      ...(broaderInferred?.similarProfessions || [])
+    ]);
+
+    return matchedNames
+      .map((candidate) => professionCatalogService.findBestProfessionMatchSync(candidate, professionCatalogEntries))
+      .filter(Boolean)
+      .slice(0, limit);
   }
 
   validateProfessionSuggestion(rawResult = {}, description = '', professionCatalogEntries = [], explicitCandidates = []) {
