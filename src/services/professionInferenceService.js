@@ -259,11 +259,22 @@ class ProfessionInferenceService {
       : [];
     const pool = matchedPool.length > 0 ? matchedPool : syntheticPool;
 
-    return pool.slice(0, MAX_CANDIDATES).map((entry, index) => ({
+    const llmProfessionKey = professionCatalogService.normalizeProfessionKey(intent.llm_profession_name || '');
+    const llmConfidence = Math.max(0, Math.min(1, Number(intent.llm_confidence || 0)));
+
+    return pool.slice(0, MAX_CANDIDATES).map((entry, index) => {
+      const isLlmGenericTopChoice = !entry.id
+        && llmProfessionKey
+        && professionCatalogService.normalizeProfessionKey(entry.canonicalName) === llmProfessionKey;
+      const baseConfidence = isLlmGenericTopChoice && llmConfidence > 0
+        ? llmConfidence
+        : Math.max(0.45, 0.72 - (index * 0.05));
+
+      return {
       professionId: entry.id,
       canonicalName: entry.canonicalName,
       normalizedKey: entry.normalizedKey,
-      confidence: Number(Math.max(0.45, 0.72 - (index * 0.05)).toFixed(4)),
+      confidence: Number(baseConfidence.toFixed(4)),
       similarity: 0,
       aliases: entry.aliases || [],
       tags: entry.tags || [],
@@ -273,9 +284,10 @@ class ProfessionInferenceService {
         lexicalScore: Number(index === 0 ? 1 : Math.max(0.4, 0.82 - (index * 0.08)).toFixed(4)),
         keywordBoost: Number(index === 0 ? 0.15 : 0.08),
         popularityScore: 0,
-        finalScore: Number(Math.max(0.45, 0.72 - (index * 0.05)).toFixed(4))
+        finalScore: Number(baseConfidence.toFixed(4))
       }
-    }));
+    };
+    });
   }
 
   buildIntentEmbeddingText(preprocessed, intent = {}) {

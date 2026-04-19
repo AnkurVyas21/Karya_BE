@@ -129,16 +129,17 @@ class IntentExtractionService {
       'Understand the service semantically, not only by exact phrase match.',
       'Choose exactly one main category from the supplied catalog whenever possible.',
       'If no supplied category is a close match, return a short English profession_name inferred from the work described.',
-      'Do not hallucinate random categories or generic labels.',
+      'Do not hallucinate random categories or vague labels like worker, helper, service, businessman, self employed, or professional.',
       'Return JSON only in this exact shape:',
       '{"profession_name":"","tags":[],"confidence":0,"language":"","city":""}',
       'Rules:',
       '1. If a supplied catalog category clearly fits, profession_name must be exactly that category name.',
-      '2. If no supplied category clearly fits, profession_name may be a short English profession title inferred from the sentence.',
+      '2. If no supplied category clearly fits, profession_name should be a short specific English profession title inferred from the sentence.',
       '3. Only one main profession_name is allowed.',
       '4. Only leave profession_name empty when the work meaning is genuinely unclear or contradictory.',
       '5. tags should contain short normalized meaning words, not full sentences.',
       '6. city must be extracted only if clearly present in the user input.',
+      '7. Prefer titles like Homeopath, Mover, Gardener, Architect, Astrologer, Street Food Vendor when those meanings are clear.',
       `Catalog: ${JSON.stringify(catalogSummary)}`,
       `Input: ${JSON.stringify(preprocessed.raw)}`,
       `Normalized: ${JSON.stringify(preprocessed.embeddingText)}`
@@ -162,7 +163,6 @@ class IntentExtractionService {
     const text = String(preprocessed.embeddingText || preprocessed.raw || '').toLowerCase();
     const detectedContext = this.detectContext(text);
     const matchedRules = INTENT_KEYWORD_RULES.filter((rule) => rule.keywords.some((keyword) => text.includes(keyword.toLowerCase())));
-    const genericFallback = this.inferGenericProfession(preprocessed, detectedContext);
     const inferredCatalogProfessions = professionCatalogService.findProfessionMatchesInTextSync(preprocessed.raw, catalogEntries, 5)
       .map((entry) => entry.canonicalName);
     const semanticCatalogProfessions = this.findSemanticCatalogMatches(preprocessed, catalogEntries, detectedContext)
@@ -170,23 +170,17 @@ class IntentExtractionService {
     const professions = uniqueStrings([
       ...semanticCatalogProfessions,
       ...matchedRules.flatMap((rule) => rule.professions),
-      ...inferredCatalogProfessions,
-      genericFallback?.profession_name || ''
+      ...inferredCatalogProfessions
     ]);
 
     return {
-      primary_intent: matchedRules[0]?.intent
-        || genericFallback?.profession_name
-        || (professions[0] ? `${professions[0]} service` : ''),
+      primary_intent: matchedRules[0]?.intent || (professions[0] ? `${professions[0]} service` : ''),
       context: matchedRules[0]?.context || detectedContext,
       keywords: uniqueStrings([
-        ...(genericFallback?.tags || []),
         ...matchedRules.flatMap((rule) => rule.keywords),
         ...text.split(/[\s|,/&+-]+/).filter((token) => token.length > 2)
       ]).slice(0, 8),
       suggested_professions: professions,
-      generic_profession: genericFallback?.profession_name || '',
-      generic_confidence: Number(genericFallback?.confidence || 0),
       providerUsed: 'keyword-fallback',
       usedFallback: true
     };
@@ -226,6 +220,8 @@ class IntentExtractionService {
         ...(fallbackResult.keywords || [])
       ]).slice(0, 8),
       suggested_professions: suggestedProfessions,
+      llm_profession_name: String(llmResult?.profession_name || '').trim(),
+      llm_confidence: Number(llmResult?.confidence || 0),
       providerUsed: llmResult ? this.getProvider() : fallbackResult.providerUsed,
       usedFallback: !llmResult || fallbackResult.usedFallback
     };
@@ -245,56 +241,6 @@ class IntentExtractionService {
       return 'event';
     }
     return '';
-  }
-
-  inferGenericProfession(preprocessed, detectedContext = '') {
-    const normalizedText = uniqueStrings(preprocessed.variants || []).join(' | ');
-    const hasAny = (terms = []) => terms.some((term) => normalizedText.includes(textNormalizationService.normalizeProfessionKey(term)));
-
-    if (hasAny(['homeopathy', 'homeopath', 'homeopathic'])) {
-      return {
-        profession_name: 'Homeopathy Practitioner',
-        tags: ['homeopathy', 'treatment', 'healing'],
-        confidence: 0.8
-      };
-    }
-
-    if (
-      hasAny(['shift', 'moving', 'mover', 'transport', 'transportation', 'delivery', 'cargo'])
-      && hasAny(['saman', 'samaan', 'goods', 'furniture', 'gadi', 'gaadi', 'vehicle', 'tempo', 'truck'])
-    ) {
-      return {
-        profession_name: 'Mover',
-        tags: ['moving', 'transport', 'goods shifting'],
-        confidence: 0.78
-      };
-    }
-
-    if (hasAny(['janwar', 'janvar', 'animal', 'animals', 'pashu', 'pet']) && hasAny(['doctor', 'vet', 'treat', 'treatment', 'ilaj'])) {
-      return {
-        profession_name: 'Veterinarian',
-        tags: ['animal doctor', 'animal care', 'treatment'],
-        confidence: 0.82
-      };
-    }
-
-    if (hasAny(['ped', 'paudhe', 'paudha', 'plant', 'plants', 'garden', 'gardening', 'bagicha', 'mali']) && hasAny(['dekhbhal', 'care', 'maintenance', 'sambhal', 'watering', 'trim'])) {
-      return {
-        profession_name: 'Gardener',
-        tags: ['plant care', 'gardening', 'maintenance'],
-        confidence: 0.76
-      };
-    }
-
-    if (detectedContext === 'home' && hasAny(['clean', 'cleaning', 'safai'])) {
-      return {
-        profession_name: 'House Cleaner',
-        tags: ['cleaning', 'home cleaning', 'housekeeping'],
-        confidence: 0.72
-      };
-    }
-
-    return null;
   }
 
   findSemanticCatalogMatches(preprocessed, catalogEntries = [], detectedContext = '', limit = 5) {
