@@ -27,7 +27,12 @@ class ProfessionCatalogService {
       const canonicalName = this.formatProfessionName(profession);
       const normalizedKey = this.normalizeProfessionKey(canonicalName);
       await ProfessionCatalog.updateOne(
-        { normalizedKey },
+        {
+          $or: [
+            { normalizedKey },
+            { normalizedName: normalizedKey }
+          ]
+        },
         {
           $setOnInsert: {
             canonicalName,
@@ -243,7 +248,12 @@ class ProfessionCatalogService {
 
     const filter = matchedEntry?.id
       ? { _id: matchedEntry.id }
-      : { normalizedKey: matchedEntry?.normalizedKey || normalizedKey };
+      : {
+          $or: [
+            { normalizedKey: matchedEntry?.normalizedKey || normalizedKey },
+            { normalizedName: matchedEntry?.normalizedKey || normalizedKey }
+          ]
+        };
 
     const update = {
       $setOnInsert: {
