@@ -10,6 +10,10 @@ const CREATE_THRESHOLD = Number(process.env.PROFESSION_CREATE_THRESHOLD || 0.82)
 const CANDIDATE_THRESHOLD = Number(process.env.PROFESSION_CANDIDATE_THRESHOLD || 0.44);
 const MIN_LEXICAL_SCORE = Number(process.env.PROFESSION_MIN_LEXICAL_SCORE || 0.04);
 const SUGGESTION_THRESHOLD = Number(process.env.PROFESSION_SUGGESTION_THRESHOLD || 0.5);
+const SEMANTIC_ONLY_THRESHOLD = Number(process.env.PROFESSION_SEMANTIC_ONLY_THRESHOLD || 0.42);
+const SEMANTIC_CANDIDATE_THRESHOLD = Number(process.env.PROFESSION_SEMANTIC_CANDIDATE_THRESHOLD || 0.52);
+const LEXICAL_CANDIDATE_THRESHOLD = Number(process.env.PROFESSION_LEXICAL_CANDIDATE_THRESHOLD || 0.2);
+const AUTO_SELECT_MARGIN_THRESHOLD = Number(process.env.PROFESSION_AUTO_SELECT_MARGIN_THRESHOLD || 0.08);
 const MAX_CANDIDATES = Math.max(Number(process.env.PROFESSION_TOP_K || 8), 5);
 const LLM_PROVIDER = String(process.env.PROFESSION_LLM_PROVIDER || process.env.PROFESSION_EMBEDDING_PROVIDER || '').trim().toLowerCase();
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
@@ -77,19 +81,22 @@ class ProfessionInferenceService {
           source: 'catalog'
         };
       })
-      .sort((left, right) => right.confidence - left.confidence);
+      .sort((left, right) => this.compareCandidates(left, right));
 
-    const ranked = broadRanked
+    const semanticPool = broadRanked
+      .filter((item) => this.isSemanticCandidate(item));
+    const ranked = semanticPool
       .filter((item) => item.confidence >= CANDIDATE_THRESHOLD)
       .filter((item) => item.lexicalScore >= MIN_LEXICAL_SCORE || item.semanticScore >= MATCH_THRESHOLD)
       .slice(0, Math.max(topN, MAX_CANDIDATES));
-    const prefilterCandidates = broadRanked.slice(0, Math.max(MAX_CANDIDATES, 10));
+    const prefilterCandidates = semanticPool.slice(0, Math.max(MAX_CANDIDATES, 10));
 
     const top = ranked[0] || null;
-    const relaxedCandidates = broadRanked
-      .filter((item) => item.confidence >= SUGGESTION_THRESHOLD)
+    const relaxedCandidates = semanticPool
+      .filter((item) => item.confidence >= SUGGESTION_THRESHOLD || this.isSemanticCandidate(item, { strict: false }))
       .slice(0, Math.max(3, topN));
-    const llmFallback = (!top || top.confidence < MATCH_THRESHOLD)
+    const hasSemanticCandidates = semanticPool.length > 0;
+    const llmFallback = !hasSemanticCandidates
       ? await this.suggestWithLlm(preprocessed, (ranked.length > 0 ? ranked : prefilterCandidates).slice(0, MAX_CANDIDATES), entries)
       : null;
 
@@ -132,44 +139,54 @@ class ProfessionInferenceService {
       }
     }
 
-    const suggestions = [
-      ...ranked.map((item) => ({
-        professionId: item.entry.id,
-        profession: item.entry.canonicalName,
-        canonicalName: item.entry.canonicalName,
-        normalizedKey: item.entry.normalizedKey,
-        confidence: item.confidence,
-        similarity: item.semanticScore,
-        source: item.source,
-        aliases: item.entry.aliases || [],
-        tags: item.entry.tags || []
-      })),
-      ...((ranked.length === 0 ? relaxedCandidates : []).map((item) => ({
-        professionId: item.entry.id,
-        profession: item.entry.canonicalName,
-        canonicalName: item.entry.canonicalName,
-        normalizedKey: item.entry.normalizedKey,
-        confidence: item.confidence,
-        similarity: item.semanticScore,
-        source: 'relaxed-catalog',
-        aliases: item.entry.aliases || [],
-        tags: item.entry.tags || []
-      }))),
-      ...((ranked.length === 0 && relaxedCandidates.length === 0 && !createdFallback)
-        ? prefilterCandidates.slice(0, 3).map((item) => ({
-            professionId: item.entry.id,
-            profession: item.entry.canonicalName,
-            canonicalName: item.entry.canonicalName,
-            normalizedKey: item.entry.normalizedKey,
-            confidence: Math.max(item.confidence, 0.26),
-            similarity: item.semanticScore,
-            source: 'last-resort-catalog',
-            aliases: item.entry.aliases || [],
-            tags: item.entry.tags || []
-          }))
-        : []),
-      ...(createdFallback ? [createdFallback] : [])
-    ].sort((left, right) => right.confidence - left.confidence);
+    const rankedSuggestions = ranked.map((item) => ({
+      professionId: item.entry.id,
+      profession: item.entry.canonicalName,
+      canonicalName: item.entry.canonicalName,
+      normalizedKey: item.entry.normalizedKey,
+      confidence: item.confidence,
+      similarity: item.semanticScore,
+      scoreBreakdown: {
+        semanticScore: Number(item.semanticScore.toFixed(4)),
+        lexicalScore: Number(item.lexicalScore.toFixed(4)),
+        keywordBoost: Number(item.keywordBoost.toFixed(4)),
+        popularityScore: Number(item.popularityScore.toFixed(4)),
+        finalScore: item.confidence
+      },
+      source: 'semantic-ranked',
+      aliases: item.entry.aliases || [],
+      tags: item.entry.tags || []
+    }));
+    const relaxedSuggestions = relaxedCandidates.map((item) => ({
+      professionId: item.entry.id,
+      profession: item.entry.canonicalName,
+      canonicalName: item.entry.canonicalName,
+      normalizedKey: item.entry.normalizedKey,
+      confidence: item.confidence,
+      similarity: item.semanticScore,
+      scoreBreakdown: {
+        semanticScore: Number(item.semanticScore.toFixed(4)),
+        lexicalScore: Number(item.lexicalScore.toFixed(4)),
+        keywordBoost: Number(item.keywordBoost.toFixed(4)),
+        popularityScore: Number(item.popularityScore.toFixed(4)),
+        finalScore: item.confidence
+      },
+      source: 'semantic-relaxed',
+      aliases: item.entry.aliases || [],
+      tags: item.entry.tags || []
+    }));
+
+    const semanticSuggestions = rankedSuggestions.length > 0
+      ? rankedSuggestions
+      : relaxedSuggestions;
+    const strongestSemanticSuggestion = semanticSuggestions[0] || null;
+    const useSemanticSuggestions = Boolean(hasSemanticCandidates);
+    const fallbackSuggestions = createdFallback ? [createdFallback] : [];
+
+    const suggestions = (hasSemanticCandidates
+      ? semanticSuggestions
+      : fallbackSuggestions)
+      .sort((left, right) => right.confidence - left.confidence);
 
     const dedupedSuggestions = [];
     const seen = new Set();
@@ -183,15 +200,34 @@ class ProfessionInferenceService {
     });
 
     const bestSuggestion = dedupedSuggestions[0] || null;
-    const status = bestSuggestion && bestSuggestion.confidence >= CONFIRM_THRESHOLD
+    const runnerUpSuggestion = dedupedSuggestions[1] || null;
+    const autoSelectMargin = bestSuggestion && runnerUpSuggestion
+      ? Number((bestSuggestion.confidence - runnerUpSuggestion.confidence).toFixed(4))
+      : Number(bestSuggestion?.confidence || 0);
+    const canAutoSelect = useSemanticSuggestions
+      && bestSuggestion
+      && bestSuggestion.source === 'semantic-ranked'
+      && bestSuggestion.confidence >= CONFIRM_THRESHOLD
+      && bestSuggestion.confidence >= SEMANTIC_ONLY_THRESHOLD
+      && this.isHighConfidenceSemanticWinner(bestSuggestion)
+      && autoSelectMargin >= AUTO_SELECT_MARGIN_THRESHOLD;
+
+    const canSuggestWithConfidence = useSemanticSuggestions
+      && bestSuggestion
+      && (
+        (bestSuggestion.source === 'semantic-ranked'
+          && bestSuggestion.confidence >= MATCH_THRESHOLD
+          && this.isSemanticCandidate(bestSuggestion, { strict: false }))
+        || (bestSuggestion.source === 'semantic-relaxed' && bestSuggestion.confidence >= SUGGESTION_THRESHOLD)
+      );
+
+    const status = canAutoSelect
       ? 'confirmed'
-      : bestSuggestion && bestSuggestion.confidence >= MATCH_THRESHOLD
-        ? 'needs_confirmation'
-        : bestSuggestion && bestSuggestion.confidence >= SUGGESTION_THRESHOLD
+      : canSuggestWithConfidence
           ? 'needs_confirmation'
-          : bestSuggestion && ['llm-created', 'llm-matched', 'last-resort-catalog', 'relaxed-catalog'].includes(bestSuggestion.source)
+          : bestSuggestion && ['llm-created', 'llm-matched'].includes(bestSuggestion.source)
             ? 'needs_confirmation'
-        : 'unknown';
+            : 'unknown';
 
     const debugMatches = ranked.slice(0, MAX_CANDIDATES).map((item) => ({
       profession: item.entry.canonicalName,
@@ -199,7 +235,7 @@ class ProfessionInferenceService {
       lexicalScore: Number(item.lexicalScore.toFixed(4)),
       keywordBoost: Number(item.keywordBoost.toFixed(4)),
       popularityScore: Number(item.popularityScore.toFixed(4)),
-      confidence: item.confidence
+      finalScore: item.confidence
     }));
 
     const fallbackDebugMatches = broadRanked.slice(0, MAX_CANDIDATES).map((item) => ({
@@ -208,7 +244,7 @@ class ProfessionInferenceService {
       lexicalScore: Number(item.lexicalScore.toFixed(4)),
       keywordBoost: Number(item.keywordBoost.toFixed(4)),
       popularityScore: Number(item.popularityScore.toFixed(4)),
-      confidence: item.confidence
+      finalScore: item.confidence
     }));
 
     logger.info('Profession inference debug', {
@@ -225,9 +261,12 @@ class ProfessionInferenceService {
       })),
       topMatches: debugMatches,
       fallbackTopMatches: fallbackDebugMatches,
+      candidateSourceUsed: hasSemanticCandidates ? 'semantic' : (fallbackSuggestions.length > 0 ? 'fallback' : 'none'),
       llmFallback: llmFallback?.canonicalName || '',
       selectedMatch: bestSuggestion?.canonicalName || '',
-      rejectedMatches: fallbackDebugMatches.filter((item) => item.confidence < MATCH_THRESHOLD)
+      selectedScoreBreakdown: bestSuggestion?.scoreBreakdown || null,
+      autoSelectMargin,
+      rejectedMatches: fallbackDebugMatches.filter((item) => item.finalScore < MATCH_THRESHOLD)
     });
 
     const log = options.log === false
@@ -247,19 +286,23 @@ class ProfessionInferenceService {
             normalizedKey: item.normalizedKey,
             confidence: item.confidence,
             similarity: item.similarity,
-            source: item.source
+            source: item.source,
+            metadata: item.scoreBreakdown || null
           })),
           metadata: {
             catalogSize: entries.length,
             detectedProfession: bestSuggestion?.canonicalName || '',
-            status
+            status,
+            candidateSourceUsed: hasSemanticCandidates ? 'semantic' : (fallbackSuggestions.length > 0 ? 'fallback' : 'none'),
+            selectedScoreBreakdown: bestSuggestion?.scoreBreakdown || null,
+            autoSelectMargin
           }
         });
 
     return {
       inferenceId: log?._id?.toString?.() || '',
-      profession: status === 'confirmed' ? (bestSuggestion?.canonicalName || '') : 'unknown',
-      suggestedProfession: bestSuggestion?.canonicalName || '',
+      profession: canAutoSelect ? (bestSuggestion?.canonicalName || '') : 'unknown',
+      suggestedProfession: canSuggestWithConfidence ? (bestSuggestion?.canonicalName || '') : '',
       status,
       requiresConfirmation: status === 'needs_confirmation',
       confidence: Number(bestSuggestion?.confidence || 0),
@@ -277,7 +320,8 @@ class ProfessionInferenceService {
         profession: item.canonicalName,
         confidence: item.confidence,
         similarity: item.similarity,
-        source: item.source
+        source: item.source,
+        scoreBreakdown: item.scoreBreakdown || null
       })),
       professions: dedupedSuggestions.map((item) => item.canonicalName)
     };
@@ -288,7 +332,40 @@ class ProfessionInferenceService {
     const lexical = Math.max(0, Math.min(1, lexicalScore));
     const popularity = Math.max(0, Math.min(1, popularityScore));
     const keyword = Math.max(0, Math.min(1, keywordBoost));
-    return Number((semantic * 0.58 + lexical * 0.18 + popularity * 0.06 + keyword * 0.18).toFixed(4));
+    return Number((semantic * 0.82 + lexical * 0.14 + keyword * 0.03 + popularity * 0.01).toFixed(4));
+  }
+
+  compareCandidates(left = {}, right = {}) {
+    const semanticDelta = Number(right.semanticScore || 0) - Number(left.semanticScore || 0);
+    if (semanticDelta !== 0) {
+      return semanticDelta;
+    }
+
+    const lexicalDelta = Number(right.lexicalScore || 0) - Number(left.lexicalScore || 0);
+    if (lexicalDelta !== 0) {
+      return lexicalDelta;
+    }
+
+    const confidenceDelta = Number(right.confidence || 0) - Number(left.confidence || 0);
+    if (confidenceDelta !== 0) {
+      return confidenceDelta;
+    }
+
+    return Number(right.keywordBoost || 0) - Number(left.keywordBoost || 0);
+  }
+
+  isSemanticCandidate(item = {}, options = {}) {
+    const strict = options.strict !== false;
+    const semanticFloor = strict ? SEMANTIC_CANDIDATE_THRESHOLD : SEMANTIC_ONLY_THRESHOLD;
+    const lexicalFloor = strict ? LEXICAL_CANDIDATE_THRESHOLD : Math.max(MIN_LEXICAL_SCORE, 0.08);
+    return Number(item.semanticScore || item.similarity || 0) >= semanticFloor
+      || Number(item.lexicalScore || item?.scoreBreakdown?.lexicalScore || 0) >= lexicalFloor;
+  }
+
+  isHighConfidenceSemanticWinner(suggestion = {}) {
+    const semanticScore = Number(suggestion?.scoreBreakdown?.semanticScore || suggestion?.similarity || 0);
+    const lexicalScore = Number(suggestion?.scoreBreakdown?.lexicalScore || 0);
+    return semanticScore >= MATCH_THRESHOLD || lexicalScore >= 0.9;
   }
 
   getKeywordBoost(preprocessed = {}, entry = {}) {
