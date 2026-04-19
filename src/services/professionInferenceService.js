@@ -7,14 +7,29 @@ const logger = require('../utils/logger');
 const MATCH_THRESHOLD = Number(process.env.PROFESSION_MATCH_THRESHOLD || 0.78);
 const CONFIRM_THRESHOLD = Number(process.env.PROFESSION_CONFIRM_THRESHOLD || 0.86);
 const CREATE_THRESHOLD = Number(process.env.PROFESSION_CREATE_THRESHOLD || 0.82);
-const CANDIDATE_THRESHOLD = Number(process.env.PROFESSION_CANDIDATE_THRESHOLD || 0.52);
-const MIN_LEXICAL_SCORE = Number(process.env.PROFESSION_MIN_LEXICAL_SCORE || 0.08);
+const CANDIDATE_THRESHOLD = Number(process.env.PROFESSION_CANDIDATE_THRESHOLD || 0.44);
+const MIN_LEXICAL_SCORE = Number(process.env.PROFESSION_MIN_LEXICAL_SCORE || 0.04);
+const SUGGESTION_THRESHOLD = Number(process.env.PROFESSION_SUGGESTION_THRESHOLD || 0.5);
 const MAX_CANDIDATES = Math.max(Number(process.env.PROFESSION_TOP_K || 8), 5);
 const LLM_PROVIDER = String(process.env.PROFESSION_LLM_PROVIDER || process.env.PROFESSION_EMBEDDING_PROVIDER || '').trim().toLowerCase();
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const OLLAMA_BASE_URL = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/+$/, '');
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:8b';
+
+const KEYWORD_BOOSTS = {
+  caterer: ['khana', 'khane', 'bhojan', 'halwai', 'catering', 'caterer', 'cook', 'cooking', 'order', 'food', 'rasoi', 'shaadi', 'shadi', 'wedding'],
+  'mehendi artist': ['mehndi', 'mehendi', 'henna', 'bridal mehndi', 'bridal mehendi', 'shaadi', 'shadi', 'wedding'],
+  beautician: ['makeup', 'bridal makeup', 'parlour', 'beauty', 'salon'],
+  photographer: ['photo', 'photography', 'camera', 'wedding shoot', 'photoshoot'],
+  videographer: ['video', 'videography', 'reel', 'shoot'],
+  'event planner': ['event', 'wedding', 'shaadi', 'shadi', 'planner', 'arrangement'],
+  driver: ['gaadi', 'car', 'driver', 'driving'],
+  electrician: ['bijli', 'wiring', 'switch', 'light', 'electric'],
+  plumber: ['nal', 'pipe', 'paani', 'leak', 'bathroom', 'tap'],
+  'dhol player': ['dhol', 'baraat', 'band', 'wedding'],
+  'ghodi service': ['ghodi', 'baraat', 'dulha', 'wedding horse']
+};
 
 const uniqueStrings = (values = []) => [...new Set(
   values
@@ -39,7 +54,7 @@ class ProfessionInferenceService {
     entries = await professionCatalogService.ensureEmbeddings(entries);
     const queryVector = await embeddingService.embedText(preprocessed.embeddingText);
 
-    const ranked = entries
+    const broadRanked = entries
       .map((entry) => {
         const semanticScore = embeddingService.cosineSimilarity(queryVector, entry.embedding?.vector || []);
         const lexicalScore = Math.max(
@@ -47,25 +62,32 @@ class ProfessionInferenceService {
           ...professionCatalogService.getSearchTerms(entry).map((term) => professionCatalogService.stringSimilarity(preprocessed.embeddingText, term)),
           0
         );
+        const keywordBoost = this.getKeywordBoost(preprocessed, entry);
         const popularityScore = this.toPopularityScore(entry);
-        const confidence = this.toConfidence(semanticScore, lexicalScore, popularityScore);
+        const confidence = this.toConfidence(semanticScore, lexicalScore, popularityScore, keywordBoost);
         return {
           entry,
           confidence,
           semanticScore,
           lexicalScore,
+          keywordBoost,
           popularityScore,
           source: 'catalog'
         };
       })
+      .sort((left, right) => right.confidence - left.confidence);
+
+    const ranked = broadRanked
       .filter((item) => item.confidence >= CANDIDATE_THRESHOLD)
       .filter((item) => item.lexicalScore >= MIN_LEXICAL_SCORE || item.semanticScore >= MATCH_THRESHOLD)
-      .sort((left, right) => right.confidence - left.confidence)
       .slice(0, Math.max(topN, MAX_CANDIDATES));
 
     const top = ranked[0] || null;
+    const relaxedCandidates = broadRanked
+      .filter((item) => item.confidence >= SUGGESTION_THRESHOLD)
+      .slice(0, Math.max(3, topN));
     const llmFallback = (!top || top.confidence < MATCH_THRESHOLD)
-      ? await this.suggestWithLlm(preprocessed, ranked.slice(0, MAX_CANDIDATES), entries)
+      ? await this.suggestWithLlm(preprocessed, (ranked.length > 0 ? ranked : broadRanked).slice(0, MAX_CANDIDATES), entries)
       : null;
 
     let createdFallback = null;
@@ -119,6 +141,17 @@ class ProfessionInferenceService {
         aliases: item.entry.aliases || [],
         tags: item.entry.tags || []
       })),
+      ...((ranked.length === 0 ? relaxedCandidates : []).map((item) => ({
+        professionId: item.entry.id,
+        profession: item.entry.canonicalName,
+        canonicalName: item.entry.canonicalName,
+        normalizedKey: item.entry.normalizedKey,
+        confidence: item.confidence,
+        similarity: item.semanticScore,
+        source: 'relaxed-catalog',
+        aliases: item.entry.aliases || [],
+        tags: item.entry.tags || []
+      }))),
       ...(createdFallback ? [createdFallback] : [])
     ].sort((left, right) => right.confidence - left.confidence);
 
@@ -138,12 +171,24 @@ class ProfessionInferenceService {
       ? 'confirmed'
       : bestSuggestion && bestSuggestion.confidence >= MATCH_THRESHOLD
         ? 'needs_confirmation'
+        : bestSuggestion && bestSuggestion.confidence >= SUGGESTION_THRESHOLD
+          ? 'needs_confirmation'
         : 'unknown';
 
     const debugMatches = ranked.slice(0, MAX_CANDIDATES).map((item) => ({
       profession: item.entry.canonicalName,
       semanticScore: Number(item.semanticScore.toFixed(4)),
       lexicalScore: Number(item.lexicalScore.toFixed(4)),
+      keywordBoost: Number(item.keywordBoost.toFixed(4)),
+      popularityScore: Number(item.popularityScore.toFixed(4)),
+      confidence: item.confidence
+    }));
+
+    const fallbackDebugMatches = broadRanked.slice(0, MAX_CANDIDATES).map((item) => ({
+      profession: item.entry.canonicalName,
+      semanticScore: Number(item.semanticScore.toFixed(4)),
+      lexicalScore: Number(item.lexicalScore.toFixed(4)),
+      keywordBoost: Number(item.keywordBoost.toFixed(4)),
       popularityScore: Number(item.popularityScore.toFixed(4)),
       confidence: item.confidence
     }));
@@ -153,8 +198,10 @@ class ProfessionInferenceService {
       input: preprocessed.raw,
       normalizedInput: preprocessed.normalized,
       topMatches: debugMatches,
+      fallbackTopMatches: fallbackDebugMatches,
+      llmFallback: llmFallback?.canonicalName || '',
       selectedMatch: bestSuggestion?.canonicalName || '',
-      rejectedMatches: debugMatches.filter((item) => item.confidence < MATCH_THRESHOLD)
+      rejectedMatches: fallbackDebugMatches.filter((item) => item.confidence < MATCH_THRESHOLD)
     });
 
     const log = options.log === false
@@ -210,11 +257,46 @@ class ProfessionInferenceService {
     };
   }
 
-  toConfidence(semanticScore = 0, lexicalScore = 0, popularityScore = 0) {
+  toConfidence(semanticScore = 0, lexicalScore = 0, popularityScore = 0, keywordBoost = 0) {
     const semantic = Math.max(0, Math.min(1, (semanticScore + 1) / 2));
     const lexical = Math.max(0, Math.min(1, lexicalScore));
     const popularity = Math.max(0, Math.min(1, popularityScore));
-    return Number((semantic * 0.72 + lexical * 0.2 + popularity * 0.08).toFixed(4));
+    const keyword = Math.max(0, Math.min(1, keywordBoost));
+    return Number((semantic * 0.58 + lexical * 0.18 + popularity * 0.06 + keyword * 0.18).toFixed(4));
+  }
+
+  getKeywordBoost(preprocessed = {}, entry = {}) {
+    const normalizedProfession = professionCatalogService.normalizeProfessionKey(entry.canonicalName || entry.name || '');
+    const boosters = KEYWORD_BOOSTS[normalizedProfession] || [];
+    if (!boosters.length) {
+      return 0;
+    }
+
+    const haystack = new Set(
+      uniqueStrings([
+        ...(preprocessed.variants || []),
+        preprocessed.embeddingText || '',
+        preprocessed.raw || ''
+      ])
+        .flatMap((value) => String(value || '').toLowerCase().split(/[\s|,/&+-]+/))
+        .filter(Boolean)
+    );
+
+    const matches = boosters.filter((term) => {
+      const normalizedTerm = String(term || '').toLowerCase().trim();
+      if (!normalizedTerm) {
+        return false;
+      }
+
+      const parts = normalizedTerm.split(/\s+/).filter(Boolean);
+      return parts.every((part) => haystack.has(part));
+    }).length;
+
+    if (!matches) {
+      return 0;
+    }
+
+    return Math.min(1, 0.22 + (matches * 0.12));
   }
 
   toPopularityScore(entry = {}) {
