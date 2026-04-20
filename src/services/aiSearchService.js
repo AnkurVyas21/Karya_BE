@@ -1,9 +1,12 @@
 const logger = require('../utils/logger');
 const professionInferenceService = require('./professionInferenceService');
+const openaiProviderService = require('./openaiProviderService');
+const { parseJsonObject } = require('../utils/llmJsonUtils');
 
 const AI_PROVIDERS = {
   GEMINI: 'gemini',
   OLLAMA: 'ollama',
+  OPENAI: 'openai',
   FALLBACK: 'fallback'
 };
 
@@ -50,6 +53,8 @@ class AiSearchService {
         locationSuggestion = await this.askGemini(problem, professionInference, selectedLocation, currentLocation);
       } else if (requestedProvider === AI_PROVIDERS.OLLAMA) {
         locationSuggestion = await this.askOllama(problem, professionInference, selectedLocation, currentLocation);
+      } else if (requestedProvider === AI_PROVIDERS.OPENAI) {
+        locationSuggestion = await this.askOpenAi(problem, professionInference, selectedLocation, currentLocation);
       }
     } catch (error) {
       warning = error.message;
@@ -84,6 +89,9 @@ class AiSearchService {
     const normalized = normalizeText(value);
     if (normalized === AI_PROVIDERS.OLLAMA) {
       return AI_PROVIDERS.OLLAMA;
+    }
+    if (normalized === AI_PROVIDERS.OPENAI) {
+      return AI_PROVIDERS.OPENAI;
     }
     return AI_PROVIDERS.GEMINI;
   }
@@ -178,21 +186,53 @@ class AiSearchService {
     return this.parseModelResponse(payload?.response);
   }
 
+  async askOpenAi(problem, professionInference, selectedLocation, currentLocation) {
+    const instructions = [
+      'You extract only location filters for a local-services marketplace.',
+      'The profession candidates are already inferred semantically and should be copied from the provided suggestions.',
+      'Return JSON only.',
+      'Use only this shape:',
+      '{"country":"","state":"","city":"","town":"","reason":"","locationSource":"query|current-location|selected-filters|none"}'
+    ].join('\n');
+    const input = [
+      `Suggested professions: ${JSON.stringify(uniqueStrings([professionInference.suggestedProfession, ...(professionInference.similarProfessions || [])]))}`,
+      `selectedLocation=${JSON.stringify(compactObject(selectedLocation))}`,
+      `currentLocation=${JSON.stringify(compactObject(currentLocation))}`,
+      `problem=${JSON.stringify(problem)}`
+    ].join('\n');
+
+    const { data } = await openaiProviderService.createStructuredJsonResponse({
+      instructions,
+      input,
+      schemaName: 'ai_search_location',
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          country: { type: 'string' },
+          state: { type: 'string' },
+          city: { type: 'string' },
+          town: { type: 'string' },
+          reason: { type: 'string' },
+          locationSource: {
+            type: 'string',
+            enum: ['query', 'current-location', 'selected-filters', 'none']
+          }
+        },
+        required: ['country', 'state', 'city', 'town', 'reason', 'locationSource']
+      },
+      maxOutputTokens: 220
+    });
+
+    return data;
+  }
+
   parseModelResponse(rawText = '') {
-    const text = String(rawText || '').trim();
-    if (!text) {
+    if (!String(rawText || '').trim()) {
       throw new Error('AI provider returned an empty response');
     }
 
-    try {
-      return JSON.parse(text);
-    } catch (_error) {
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) {
-        throw new Error('AI response was not valid JSON');
-      }
-      return JSON.parse(match[0]);
-    }
+    return parseJsonObject(rawText, { label: 'AI provider response' });
   }
 
   locationFallback(problem, selectedLocation, currentLocation) {

@@ -1,6 +1,8 @@
 const logger = require('../utils/logger');
 const professionCatalogService = require('./professionCatalogService');
 const textNormalizationService = require('./textNormalizationService');
+const openaiProviderService = require('./openaiProviderService');
+const { parseJsonObject, validateProfessionClassification } = require('../utils/llmJsonUtils');
 
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
@@ -134,7 +136,7 @@ class IntentExtractionService {
         aliases: (entry.aliases || []).slice(0, 8),
         tags: (entry.tags || []).slice(0, 8)
       }));
-    const prompt = [
+    const instructions = [
       'You are a strict classifier for an India-only local professional finder.',
       'Input may be Hindi, Hinglish, English, or mixed.',
       'Understand the service semantically, not only by exact phrase match.',
@@ -142,22 +144,27 @@ class IntentExtractionService {
       'If no supplied category is a close match, return a short English profession_name inferred from the work described.',
       'Do not hallucinate random categories or vague labels like worker, helper, service, businessman, self employed, or professional.',
       'Return JSON only in this exact shape:',
-      '{"profession_name":"","tags":[],"confidence":0,"language":"","city":"","domain":""}',
+      '{"profession_name":"","tags":[],"confidence":0}',
       'Rules:',
       '1. If a supplied catalog category clearly fits, profession_name must be exactly that category name.',
       '2. If no supplied category clearly fits, profession_name should be a short specific English profession title inferred from the sentence.',
       '3. Only one main profession_name is allowed.',
       '4. Only leave profession_name empty when the work meaning is genuinely unclear or contradictory.',
       '5. tags should contain short normalized meaning words, not full sentences.',
-      '6. city must be extracted only if clearly present in the user input.',
-      '7. domain must be one of: technology, wedding, home services, medical, food, transport, or empty.',
-      '8. Prefer titles like Homeopath, Mover, Gardener, Architect, Astrologer, Street Food Vendor when those meanings are clear.',
+      '6. confidence must be a number between 0 and 1.',
+      '7. Prefer titles like Homeopath, Mover, Gardener, Architect, Astrologer, Street Food Vendor when those meanings are clear.'
+    ].join('\n');
+    const input = [
       `Catalog: ${JSON.stringify(catalogSummary)}`,
       `Input: ${JSON.stringify(preprocessed.raw)}`,
       `Normalized: ${JSON.stringify(preprocessed.embeddingText)}`
     ].join('\n');
+    const prompt = [instructions, input].join('\n');
 
     try {
+      if (provider === 'openai') {
+        return await this.askOpenAi(instructions, input);
+      }
       if (provider === 'gemini') {
         return await this.askGemini(prompt);
       }
@@ -378,11 +385,17 @@ class IntentExtractionService {
     if (INTENT_PROVIDER === 'gemini' && GEMINI_API_KEY) {
       return 'gemini';
     }
+    if (INTENT_PROVIDER === 'openai' && openaiProviderService.isConfigured()) {
+      return 'openai';
+    }
     if (INTENT_PROVIDER === 'ollama') {
       return 'ollama';
     }
     if (GEMINI_API_KEY) {
       return 'gemini';
+    }
+    if (openaiProviderService.isConfigured()) {
+      return 'openai';
     }
     if (OLLAMA_BASE_URL) {
       return 'ollama';
@@ -452,17 +465,31 @@ class IntentExtractionService {
     return this.parseJson(payload?.response);
   }
 
+  async askOpenAi(instructions, input) {
+    const { data, requestId } = await openaiProviderService.createStructuredJsonResponse({
+      instructions,
+      input,
+      schemaName: 'profession_classification',
+      schema: openaiProviderService.getProfessionClassificationSchema(),
+      maxOutputTokens: 180
+    });
+
+    const validated = validateProfessionClassification(data);
+    if (requestId) {
+      validated.requestId = requestId;
+    }
+    return validated;
+  }
+
   parseJson(rawText = '') {
-    const text = String(rawText || '').trim();
-    if (!text) {
+    if (!String(rawText || '').trim()) {
       return null;
     }
 
     try {
-      return JSON.parse(text);
+      return parseJsonObject(rawText, { label: 'Intent extraction response' });
     } catch (_error) {
-      const match = text.match(/\{[\s\S]*\}/);
-      return match ? JSON.parse(match[0]) : null;
+      return null;
     }
   }
 }
