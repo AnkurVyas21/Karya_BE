@@ -33,6 +33,12 @@ const uniqueStrings = (values = []) => {
 };
 
 const PROFESSION_CACHE_TTL_MS = Math.max(Number(process.env.PROFESSION_CACHE_TTL_MS || 5 * 60 * 1000) || (5 * 60 * 1000), 1000);
+const NEUTRAL_PROFESSION_TOKENS = new Set([
+  'a', 'an', 'the', 'for', 'with', 'and', 'or', 'to', 'of', 'in', 'on', 'at',
+  'need', 'looking', 'look', 'want', 'wanted', 'required', 'service', 'services',
+  'provider', 'professional', 'expert', 'specialist', 'best', 'good', 'top',
+  'local', 'nearby', 'near', 'online', 'freelance', 'freelancer'
+]);
 
 class ProfessionCatalogService {
   constructor() {
@@ -280,6 +286,57 @@ class ProfessionCatalogService {
     return best;
   }
 
+  tokenizeProfessionMeaning(value = '') {
+    return uniqueStrings(
+      this.normalizeProfessionKey(value)
+        .split(/\s+/)
+        .filter((token) => token && !NEUTRAL_PROFESSION_TOKENS.has(token))
+    );
+  }
+
+  scoreCandidateTermMatch(candidate = '', term = '') {
+    const normalizedCandidate = this.normalizeProfessionKey(candidate);
+    const normalizedTerm = this.normalizeProfessionKey(term);
+    if (!normalizedCandidate || !normalizedTerm) {
+      return 0;
+    }
+
+    if (normalizedCandidate === normalizedTerm) {
+      return 1;
+    }
+
+    let score = this.stringSimilarity(candidate, term);
+    const candidateTokens = this.tokenizeProfessionMeaning(candidate);
+    const termTokens = this.tokenizeProfessionMeaning(term);
+    const overlappingTokens = candidateTokens.filter((token) => termTokens.includes(token));
+    const hasSpecificQualifier = candidateTokens.length > termTokens.length
+      && termTokens.length > 0
+      && termTokens.every((token) => candidateTokens.includes(token));
+
+    if (hasSpecificQualifier) {
+      const extraTokenCount = candidateTokens.filter((token) => !termTokens.includes(token)).length;
+      const specificityPenalty = Math.min(0.38, extraTokenCount * 0.32);
+      score -= specificityPenalty;
+    }
+
+    const hasConflictingSpecificTokens = candidateTokens.length > 1
+      && termTokens.length > 1
+      && overlappingTokens.length > 0
+      && overlappingTokens.length < candidateTokens.length
+      && overlappingTokens.length < termTokens.length;
+
+    if (hasConflictingSpecificTokens) {
+      const differingTokenCount = new Set([
+        ...candidateTokens.filter((token) => !termTokens.includes(token)),
+        ...termTokens.filter((token) => !candidateTokens.includes(token))
+      ]).size;
+      const mismatchPenalty = Math.min(0.36, differingTokenCount * 0.18);
+      score -= mismatchPenalty;
+    }
+
+    return Math.max(0, Number(score.toFixed(4)));
+  }
+
   findBestProfessionMatchSync(candidate = '', entries = [], options = {}) {
     const normalizedCandidate = this.normalizeProfessionKey(candidate);
     if (!normalizedCandidate) {
@@ -293,7 +350,7 @@ class ProfessionCatalogService {
     entries.forEach((entry) => {
       const terms = this.getSearchTerms(entry);
       const exactTerm = terms.find((term) => this.normalizeProfessionKey(term) === normalizedCandidate);
-      const score = exactTerm ? 1 : Math.max(...terms.map((term) => this.stringSimilarity(candidate, term)), 0);
+      const score = exactTerm ? 1 : Math.max(...terms.map((term) => this.scoreCandidateTermMatch(candidate, term)), 0);
       if (score > bestScore) {
         best = entry;
         bestScore = score;
@@ -312,7 +369,7 @@ class ProfessionCatalogService {
     return entries
       .map((entry) => {
         const terms = this.getSearchTerms(entry);
-        const score = Math.max(...terms.map((term) => this.stringSimilarity(normalized.embeddingText, term)), 0);
+        const score = Math.max(...terms.map((term) => this.scoreCandidateTermMatch(normalized.embeddingText, term)), 0);
         return { entry, score };
       })
       .filter((item) => item.score >= 0.35)

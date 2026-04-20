@@ -151,8 +151,19 @@ class IntentExtractionService {
       '3. Only one main profession_name is allowed.',
       '4. Only leave profession_name empty when the work meaning is genuinely unclear or contradictory.',
       '5. tags should contain short normalized meaning words, not full sentences.',
-      '6. confidence must be a number between 0 and 1.',
-      '7. Prefer titles like Homeopath, Mover, Gardener, Architect, Astrologer, Street Food Vendor when those meanings are clear.'
+      '6. Preserve meaningful modifiers or qualifiers when they change the profession meaning.',
+      '7. Do not collapse a specific profession into a broader parent profession unless the input itself is broad.',
+      '8. Broad titles like Doctor or Developer are correct only when the user says the broad title generally.',
+      '9. If the user says a specific phrase like website developer, ayurvedic doctor, animal doctor, tooth doctor, bridal makeup artist, or homeopathy doctor, return the most specific correct profession_name supported by the meaning.',
+      '10. confidence must be a number between 0 and 1.',
+      'Examples:',
+      '- "doctor" -> "Doctor"',
+      '- "ayurvedic doctor" -> "Ayurvedic Doctor"',
+      '- "homeopathy doctor" -> "Homeopath"',
+      '- "animal doctor" -> "Veterinarian"',
+      '- "tooth doctor" -> "Dentist"',
+      '- "website developer" -> "Web Developer"',
+      '- "bridal makeup artist" -> "Bridal Makeup Artist"'
     ].join('\n');
     const input = [
       `Catalog: ${JSON.stringify(catalogSummary)}`,
@@ -224,7 +235,15 @@ class IntentExtractionService {
       ? new Set(options.allowedProfessionNames.map((item) => textNormalizationService.normalizeProfessionKey(item)).filter(Boolean))
       : null;
 
+    const preservedLlmProfession = String(llmResult?.profession_name || '').trim();
+    const preservedProfessionKeys = new Set(
+      preservedLlmProfession
+        ? [textNormalizationService.normalizeProfessionKey(preservedLlmProfession)].filter(Boolean)
+        : []
+    );
+
     const suggestedProfessions = uniqueStrings([
+      preservedLlmProfession,
       ...llmProfessions,
       ...fallbackProfessions,
       ...catalogMatches
@@ -232,7 +251,8 @@ class IntentExtractionService {
       if (!allowedNames) {
         return true;
       }
-      return allowedNames.has(textNormalizationService.normalizeProfessionKey(profession));
+      const normalizedProfession = textNormalizationService.normalizeProfessionKey(profession);
+      return preservedProfessionKeys.has(normalizedProfession) || allowedNames.has(normalizedProfession);
     });
 
     return {
