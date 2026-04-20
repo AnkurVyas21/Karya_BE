@@ -483,11 +483,6 @@ class ProfessionCatalogService {
         normalizedName: matchedEntry?.normalizedKey || normalizedKey,
         source: payload.source || matchedEntry?.source || 'learned'
       },
-      $set: matchedEntry ? {} : {
-        canonicalName,
-        normalizedKey,
-        normalizedName: normalizedKey
-      },
       $addToSet: {
         aliases: {
           $each: uniqueStrings([
