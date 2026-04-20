@@ -93,7 +93,7 @@ const DOMAIN_KEYWORD_RULES = {
   technology: ['website', 'web', 'developer', 'develop', 'software', 'app', 'application', 'frontend', 'backend', 'seo', 'digital marketing', 'ui', 'ux', 'computer'],
   wedding: ['wedding', 'marriage', 'shaadi', 'shadi', 'baraat', 'barat', 'mehndi', 'pandit', 'ghodi', 'safa', 'band', 'tent', 'decor'],
   'home services': ['plumber', 'electrician', 'carpenter', 'mason', 'painter', 'cleaner', 'pipe', 'wiring', 'bathroom', 'repair', 'ghar'],
-  medical: ['doctor', 'medical', 'homeopathy', 'homeopath', 'clinic', 'nurse', 'health', 'treatment', 'veterinarian', 'vet'],
+  medical: ['doctor', 'medical', 'homeopathy', 'homeopath', 'clinic', 'nurse', 'health', 'treatment', 'veterinarian', 'vet', 'pediatrician', 'paediatrician', 'pediatrics', 'paediatrics', 'child specialist', 'children doctor', 'kids doctor', 'child health'],
   food: ['caterer', 'halwai', 'cook', 'food', 'khana', 'meal', 'chef', 'tiffin', 'vendor'],
   transport: ['driver', 'transport', 'delivery', 'mover', 'shift', 'shifting', 'cargo', 'truck', 'tempo', 'gaadi', 'gadi']
 };
@@ -171,6 +171,7 @@ class IntentExtractionService {
       '- "ayurvedic doctor" -> {"profession_name":"Ayurvedic Doctor","alternative_professions":["Ayurveda Practitioner"]}',
       '- "homeopathy doctor" -> {"profession_name":"Homeopath","alternative_professions":["Homeopathy Practitioner"]}',
       '- "animal doctor" -> {"profession_name":"Veterinarian","alternative_professions":["Animal Doctor"]}',
+      '- "i am a paediatrician" -> {"profession_name":"Pediatrician","alternative_professions":["Paediatrician","Child Specialist Doctor"]}',
       '- "website developer" -> {"profession_name":"Web Developer","alternative_professions":["Website Developer"]}',
       '- "main khana banane ka kam karta hun aur tiffin gharon mein pahunchata hun" -> {"profession_name":"Caterer","alternative_professions":["Tiffin Service","Home Food Service","Meal Delivery Service"]}',
       '- "main halwai ka kaam karta hun" -> {"profession_name":"Wedding Caterer","alternative_professions":["Halwai","Shaadi Caterer"]}',

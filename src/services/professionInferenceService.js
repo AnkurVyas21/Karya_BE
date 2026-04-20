@@ -267,8 +267,13 @@ class ProfessionInferenceService {
         .map((candidate) => professionCatalogService.findBestProfessionMatchSync(candidate, allEntries, { minimumScore: 0.58 }))
         .filter(Boolean);
     const syntheticTags = uniqueStrings(intent.keywords || []).slice(0, 8);
+    const llmDrivenProfessions = uniqueStrings([
+      intent.llm_profession_name || '',
+      ...(intent.alternative_professions || []),
+      ...(intent.suggested_professions || [])
+    ]);
     const syntheticPool = matchedPool.length === 0
-      ? uniqueStrings(intent.suggested_professions || []).map((profession) => ({
+      ? llmDrivenProfessions.map((profession) => ({
           id: null,
           canonicalName: professionCatalogService.formatProfessionName(profession),
           normalizedKey: professionCatalogService.normalizeProfessionKey(profession),

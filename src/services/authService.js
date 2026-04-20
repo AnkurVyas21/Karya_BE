@@ -454,7 +454,7 @@ class AuthService {
       try {
         const info = await this.sendEmailWithResend({
           to: user.email,
-          subject: 'Your Karya verification OTP',
+          subject: 'Your Nasdiya verification OTP',
           text: `Your OTP is ${otp}. It will expire in 10 minutes.`,
           html: `
             <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; color: #1f2937;">
