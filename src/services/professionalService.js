@@ -56,6 +56,11 @@ const EXPLICIT_ROLE_PATTERN = new RegExp(`\\b(?:${EXPLICIT_ROLE_TERMS.map(escape
 const SPECIALIZED_GENERIC_ROLE_OVERRIDES = new Map([
   ['doctor', new Set(['veterinarian'])]
 ]);
+const SEARCH_QUERY_STOPWORDS = new Set([
+  'a', 'an', 'and', 'aur', 'any', 'can', 'for', 'hai', 'he', 'i', 'in', 'is', 'ke', 'ki', 'ko',
+  'kya', 'liye', 'me', 'mein', 'mujhe', 'of', 'or', 'please', 'someone', 'there', 'to', 'who',
+  'with', 'wala', 'wali', 'want', 'chahiye', 'chahie', 'need', 'looking'
+]);
 
 class ProfessionalService {
   async createProfile(userId, profileData) {
@@ -559,15 +564,16 @@ class ProfessionalService {
     }
 
     if (!filters.city && !filters.state && filters.query) {
-      const queryRegex = new RegExp(escapeRegExp(filters.query), 'i');
-      andConditions.push({
-        $or: [
-          { profession: queryRegex },
-          { skills: queryRegex },
-          { tags: queryRegex },
-          { description: queryRegex }
-        ]
+      const queryTokens = this.extractSearchQueryTokens(filters.query);
+      const queryConditions = [];
+
+      queryTokens.forEach((token) => {
+        pushRegexConditions(queryConditions, ['profession', 'skills', 'tags', 'description'], token);
       });
+
+      if (queryConditions.length > 0) {
+        andConditions.push({ $or: queryConditions });
+      }
     }
 
     if (andConditions.length > 0) {
@@ -709,6 +715,20 @@ class ProfessionalService {
       .toLowerCase()
       .replace(/\s+/g, ' ')
       .trim();
+  }
+
+  extractSearchQueryTokens(rawQuery = '') {
+    const normalizedQuery = textNormalizationService.normalizeProfessionKey(rawQuery);
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    return uniqueStrings(
+      normalizedQuery
+        .split(/[\s,/&+-]+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 3 && !SEARCH_QUERY_STOPWORDS.has(token))
+    ).slice(0, 8);
   }
 
   matchWeightedText(haystack, needle) {
