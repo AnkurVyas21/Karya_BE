@@ -27,6 +27,7 @@ module.exports = [
     canonicalName: 'Wedding Caterer',
     aliases: [
       'Marriage Caterer', 'Wedding Food Service', 'Shaadi Caterer', 'Shadi Caterer', 'Baraat Food Service', 'Halwai',
+      'Shadi Khana Wala', 'Shaadi Bhoj Service',
       '\u0936\u093e\u0926\u0940 \u0915\u0948\u091f\u0930\u0930', '\u092c\u093e\u0930\u093e\u0924 \u092e\u0947\u0902 \u0916\u093e\u0928\u093e \u092c\u0928\u093e\u0928\u0947 \u0935\u093e\u0932\u093e',
       'shaadi me khana banane wala', 'baraat khana wala', 'shadiyon mein khane ka order leta hun'
     ],
@@ -71,21 +72,27 @@ module.exports = [
   },
   {
     canonicalName: 'Wedding Band',
-    aliases: ['Band Baja', 'Baraat Band', '\u092c\u0948\u0902\u0921 \u092c\u093e\u091c\u093e', 'band baja', 'baraat band'],
+    aliases: ['Band Baja', 'Baraat Band', 'Dholi', 'Shadi Band', 'Band Baja Wala', '\u092c\u0948\u0902\u0921 \u092c\u093e\u091c\u093e', 'band baja', 'baraat band', 'dholi'],
     tags: ['wedding band', 'baraat music', 'brass band', 'wedding procession'],
     relatedProfessions: ['Dhol Player', 'Ghodi Service', 'DJ Service']
   },
   {
     canonicalName: 'Ghodi Service',
-    aliases: ['Wedding Horse Service', 'Baraat Horse', '\u0918\u094b\u095c\u0940 \u0935\u093e\u0932\u093e', 'ghodi wala', 'dulha ghodi'],
+    aliases: ['Wedding Horse Service', 'Baraat Horse', 'Ghodi Wala', 'Baraat Ghodi', '\u0918\u094b\u095c\u0940 \u0935\u093e\u0932\u093e', 'ghodi wala', 'dulha ghodi'],
     tags: ['ghodi service', 'groom entry', 'baraat horse', 'wedding horse'],
     relatedProfessions: ['Wedding Band', 'Safa Tying Service', 'Dhol Player']
   },
   {
     canonicalName: 'Safa Tying Service',
-    aliases: ['Turban Tying Service', 'Pagdi Tying Service', '\u0938\u093e\u092b\u093e \u092c\u093e\u0902\u0927\u0928\u0947 \u0935\u093e\u0932\u093e', '\u092a\u0917\u095c\u0940 \u092c\u093e\u0902\u0927\u0928\u0947 \u0935\u093e\u0932\u093e', 'safa bandhne wala', 'pagdi bandhne wala'],
+    aliases: ['Turban Tying Service', 'Pagdi Tying Service', 'Safa Bandhne Wala', 'Pagdi Bandhne Wala', '\u0938\u093e\u092b\u093e \u092c\u093e\u0902\u0927\u0928\u0947 \u0935\u093e\u0932\u093e', '\u092a\u0917\u095c\u0940 \u092c\u093e\u0902\u0927\u0928\u0947 \u0935\u093e\u0932\u093e', 'safa bandhne wala', 'pagdi bandhne wala'],
     tags: ['safa', 'pagdi', 'turban tying', 'baraat dress'],
     relatedProfessions: ['Ghodi Service', 'Wedding Band', 'Wedding Caterer']
+  },
+  {
+    canonicalName: 'Cobbler',
+    aliases: ['Shoe Repair Service', 'Footwear Repair', 'Mochi', 'Joota Repair Wala', '\u092e\u094b\u091a\u0940', '\u091c\u0942\u0924\u093e \u0920\u0940\u0915 \u0915\u0930\u0928\u0947 \u0935\u093e\u0932\u093e', 'mochi', 'joota silai wala'],
+    tags: ['cobbler', 'shoe repair', 'footwear repair', 'mochi', 'chappal repair'],
+    relatedProfessions: ['Cleaner', 'Tailor', 'Leather Repair Service']
   },
   {
     canonicalName: 'Web Developer',

@@ -100,6 +100,7 @@ const validateProfessionClassification = (rawValue = {}) => {
   }
 
   const profession_name = String(rawValue.profession_name || '').trim();
+  const alternative_professions = normalizeStringArray(rawValue.alternative_professions);
   const tags = normalizeStringArray(rawValue.tags);
   const confidence = normalizeConfidence(rawValue.confidence);
 
@@ -115,6 +116,7 @@ const validateProfessionClassification = (rawValue = {}) => {
 
   return {
     profession_name,
+    alternative_professions,
     tags,
     confidence
   };

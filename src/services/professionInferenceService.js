@@ -13,6 +13,7 @@ const SEMANTIC_CANDIDATE_THRESHOLD = Number(process.env.PROFESSION_SEMANTIC_CAND
 const LEXICAL_CANDIDATE_THRESHOLD = Number(process.env.PROFESSION_LEXICAL_CANDIDATE_THRESHOLD || 0.2);
 const AUTO_SELECT_MARGIN_THRESHOLD = Number(process.env.PROFESSION_AUTO_SELECT_MARGIN_THRESHOLD || 0.08);
 const MAX_CANDIDATES = Math.max(Number(process.env.PROFESSION_TOP_K || 8), 5);
+const MAX_LLM_ALTERNATIVES = 4;
 
 const uniqueStrings = (values = []) => {
   const seen = new Set();
@@ -83,6 +84,12 @@ class ProfessionInferenceService {
       : (canSuggest || (isGenericFallback && Number(bestSuggestion?.confidence || 0) >= 0.68))
         ? 'needs_confirmation'
         : 'unknown';
+    const preservedAlternativeProfessions = this.buildAlternativeProfessionSuggestions({
+      intent,
+      suggestions,
+      bestSuggestion,
+      entries: scopedEntries
+    });
     const contextSuggestions = await contextSuggestionService.suggest({
       context: intent.context,
       domain: intent.domain,
@@ -173,11 +180,15 @@ class ProfessionInferenceService {
       specializations: bestSuggestion?.tags || [],
       tags: uniqueStrings([
         ...(bestSuggestion?.tags || []),
+        ...preservedAlternativeProfessions,
         ...(intent?.keywords || [])
       ]).slice(0, 8),
-      similarProfessions: suggestions.slice(1).map((item) => item.canonicalName),
+      similarProfessions: preservedAlternativeProfessions,
       contextSuggestions,
-      professions: suggestions.map((item) => item.canonicalName),
+      professions: uniqueStrings([
+        ...suggestions.map((item) => item.canonicalName),
+        ...preservedAlternativeProfessions
+      ]),
       suggestions: suggestions.map((item) => ({
         profession: item.canonicalName,
         confidence: item.confidence,
@@ -190,7 +201,8 @@ class ProfessionInferenceService {
         domain: intent.domain,
         context: intent.context,
         keywords: intent.keywords,
-        suggested_professions: intent.suggested_professions
+        suggested_professions: intent.suggested_professions,
+        alternative_professions: intent.alternative_professions
       },
       providerUsed: intent.providerUsed || '',
       usedFallback: Boolean(intent.usedFallback),
@@ -295,6 +307,32 @@ class ProfessionInferenceService {
       }
     };
     });
+  }
+
+  buildAlternativeProfessionSuggestions(options = {}) {
+    const suggestions = Array.isArray(options.suggestions) ? options.suggestions : [];
+    const bestSuggestionKey = professionCatalogService.normalizeProfessionKey(options.bestSuggestion?.canonicalName || '');
+    const rankedAlternatives = suggestions.slice(1).map((item) => item.canonicalName);
+    const llmAlternatives = uniqueStrings(options.intent?.alternative_professions || []);
+    const localAliasAlternatives = uniqueStrings([
+      ...professionCatalogService.getLocalAliasSuggestions(options.bestSuggestion || {}, 3),
+      ...suggestions.slice(1).flatMap((item) => professionCatalogService.getLocalAliasSuggestions(item, 2))
+    ]);
+    const minimumConfidence = Math.max(
+      0.55,
+      Math.min(0.82, Number(options.intent?.llm_confidence || 0) - 0.08)
+    );
+    const filteredLlmAlternatives = Number(options.intent?.llm_confidence || 0) >= minimumConfidence
+      ? llmAlternatives
+      : [];
+
+    return uniqueStrings([
+      ...filteredLlmAlternatives,
+      ...localAliasAlternatives,
+      ...rankedAlternatives
+    ])
+      .filter((profession) => professionCatalogService.normalizeProfessionKey(profession) !== bestSuggestionKey)
+      .slice(0, Math.max(MAX_CANDIDATES - 1, MAX_LLM_ALTERNATIVES));
   }
 
   buildIntentEmbeddingText(preprocessed, intent = {}) {

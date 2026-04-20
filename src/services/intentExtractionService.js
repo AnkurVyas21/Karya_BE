@@ -151,26 +151,31 @@ class IntentExtractionService {
       'If no supplied category is a close match, return a short English profession_name inferred from the work described.',
       'Do not hallucinate random categories or vague labels like worker, helper, service, businessman, self employed, or professional.',
       'Return JSON only in this exact shape:',
-      '{"profession_name":"","tags":[],"confidence":0}',
+      '{"profession_name":"","alternative_professions":[],"tags":[],"confidence":0}',
       'Rules:',
       '1. If a supplied catalog category clearly fits, profession_name must be exactly that category name.',
       '2. If no supplied category clearly fits, profession_name should be a short specific English profession title inferred from the sentence.',
       '3. Only one main profession_name is allowed.',
       '4. Only leave profession_name empty when the work meaning is genuinely unclear or contradictory.',
-      '5. tags should contain short normalized meaning words, not full sentences.',
-      '6. Preserve meaningful modifiers or qualifiers when they change the profession meaning.',
-      '7. Do not collapse a specific profession into a broader parent profession unless the input itself is broad.',
-      '8. Broad titles like Doctor or Developer are correct only when the user says the broad title generally.',
-      '9. If the user says a specific phrase like website developer, ayurvedic doctor, animal doctor, tooth doctor, bridal makeup artist, or homeopathy doctor, return the most specific correct profession_name supported by the meaning.',
-      '10. confidence must be a number between 0 and 1.',
+      '5. alternative_professions may contain up to 4 strong secondary profession interpretations when they are meaningfully different and still plausible.',
+      '6. When relevant for Indian local-service usage, alternative_professions may include common Roman Hindi or Hinglish names such as Halwai, Dholi, Mochi, Band Baja, Safa Bandhne Wala, or Ghodi Wala.',
+      '7. Only include alternative_professions when confidence is reasonably high for those alternatives. Do not add weak guesses.',
+      '8. tags should contain short normalized meaning words, not full sentences.',
+      '9. Preserve meaningful modifiers or qualifiers when they change the profession meaning.',
+      '10. Do not collapse a specific profession into a broader parent profession unless the input itself is broad.',
+      '11. Broad titles like Doctor or Developer are correct only when the user says the broad title generally.',
+      '12. If the user says a specific phrase like website developer, ayurvedic doctor, animal doctor, tooth doctor, bridal makeup artist, or homeopathy doctor, return the most specific correct profession_name supported by the meaning.',
+      '13. confidence must be a number between 0 and 1.',
       'Examples:',
-      '- "doctor" -> "Doctor"',
-      '- "ayurvedic doctor" -> "Ayurvedic Doctor"',
-      '- "homeopathy doctor" -> "Homeopath"',
-      '- "animal doctor" -> "Veterinarian"',
-      '- "tooth doctor" -> "Dentist"',
-      '- "website developer" -> "Web Developer"',
-      '- "bridal makeup artist" -> "Bridal Makeup Artist"'
+      '- "doctor" -> {"profession_name":"Doctor","alternative_professions":[]}',
+      '- "ayurvedic doctor" -> {"profession_name":"Ayurvedic Doctor","alternative_professions":["Ayurveda Practitioner"]}',
+      '- "homeopathy doctor" -> {"profession_name":"Homeopath","alternative_professions":["Homeopathy Practitioner"]}',
+      '- "animal doctor" -> {"profession_name":"Veterinarian","alternative_professions":["Animal Doctor"]}',
+      '- "website developer" -> {"profession_name":"Web Developer","alternative_professions":["Website Developer"]}',
+      '- "main khana banane ka kam karta hun aur tiffin gharon mein pahunchata hun" -> {"profession_name":"Caterer","alternative_professions":["Tiffin Service","Home Food Service","Meal Delivery Service"]}',
+      '- "main halwai ka kaam karta hun" -> {"profession_name":"Wedding Caterer","alternative_professions":["Halwai","Shaadi Caterer"]}',
+      '- "main dhol bajata hun shaadiyon me" -> {"profession_name":"Wedding Band","alternative_professions":["Dholi","Band Baja"]}',
+      '- "main mochi hun" -> {"profession_name":"Cobbler","alternative_professions":["Mochi","Shoe Repair Service"]}'
     ].join('\n');
     const input = [
       `Catalog: ${JSON.stringify(catalogSummary)}`,
@@ -243,6 +248,7 @@ class IntentExtractionService {
     const llmProfessions = uniqueStrings([
       llmResult?.profession_name || '',
       llmResult?.normalized_category || '',
+      ...(llmResult?.alternative_professions || []),
       ...(llmResult?.suggested_professions || []),
       ...(llmResult?.suggestedProfessions || [])
     ]);
@@ -254,14 +260,19 @@ class IntentExtractionService {
       : null;
 
     const preservedLlmProfession = String(llmResult?.profession_name || '').trim();
+    const preservedLlmAlternatives = uniqueStrings(llmResult?.alternative_professions || []);
     const preservedProfessionKeys = new Set(
-      preservedLlmProfession
-        ? [textNormalizationService.normalizeProfessionKey(preservedLlmProfession)].filter(Boolean)
-        : []
+      uniqueStrings([
+        preservedLlmProfession,
+        ...preservedLlmAlternatives
+      ])
+        .map((item) => textNormalizationService.normalizeProfessionKey(item))
+        .filter(Boolean)
     );
 
     const suggestedProfessions = uniqueStrings([
       preservedLlmProfession,
+      ...preservedLlmAlternatives,
       ...llmProfessions,
       ...fallbackProfessions,
       ...catalogMatches
@@ -283,6 +294,7 @@ class IntentExtractionService {
         ...(fallbackResult.keywords || [])
       ]).slice(0, 8),
       suggested_professions: suggestedProfessions,
+      alternative_professions: preservedLlmAlternatives,
       llm_profession_name: String(llmResult?.profession_name || '').trim(),
       llm_confidence: Number(llmResult?.confidence || 0),
       providerUsed: llmResult ? this.getProvider() : fallbackResult.providerUsed,

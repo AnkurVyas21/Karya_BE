@@ -1118,8 +1118,10 @@ class ProfessionalService {
       aliases: [],
       tags: []
     };
+    const localAliasSuggestions = professionCatalogService.getLocalAliasSuggestions(ensuredEntry, 3);
     const similarProfessions = uniqueStrings([
       ...(rawResult?.similarProfessions || []),
+      ...localAliasSuggestions,
       ...deriveRelatedProfessionTags(ensuredProfession, updatedCatalog)
     ])
       .filter((item) => this.normalizeSearchText(item) !== this.normalizeSearchText(ensuredProfession))
@@ -1128,7 +1130,7 @@ class ProfessionalService {
       profession: ensuredProfession,
       specializations,
       description,
-      tags: [...(rawResult?.tags || []), ...similarProfessions],
+      tags: [...(rawResult?.tags || []), ...(ensuredEntry.aliases || []), ...similarProfessions],
       professionCatalog: updatedCatalog
     });
 

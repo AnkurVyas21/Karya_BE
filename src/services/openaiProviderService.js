@@ -13,13 +13,17 @@ const PROFESSION_CLASSIFICATION_SCHEMA = {
   additionalProperties: false,
   properties: {
     profession_name: { type: 'string' },
+    alternative_professions: {
+      type: 'array',
+      items: { type: 'string' }
+    },
     tags: {
       type: 'array',
       items: { type: 'string' }
     },
     confidence: { type: 'number' }
   },
-  required: ['profession_name', 'tags', 'confidence']
+  required: ['profession_name', 'alternative_professions', 'tags', 'confidence']
 };
 
 class OpenAiProviderService {

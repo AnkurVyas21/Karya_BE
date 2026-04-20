@@ -39,6 +39,7 @@ const NEUTRAL_PROFESSION_TOKENS = new Set([
   'provider', 'professional', 'expert', 'specialist', 'best', 'good', 'top',
   'local', 'nearby', 'near', 'online', 'freelance', 'freelancer'
 ]);
+const LOCAL_ALIAS_HINTS = ['wala', 'wali', 'bandhne', 'baja', 'halwai', 'dholi', 'mochi', 'ghodi', 'pagdi', 'safa', 'shaadi', 'shadi', 'baraat', 'barat'];
 
 class ProfessionCatalogService {
   constructor() {
@@ -229,6 +230,40 @@ class ProfessionCatalogService {
       ...(entry.aliases || []),
       ...(entry.tags || [])
     ]);
+  }
+
+  isRomanScriptTerm(value = '') {
+    const text = String(value || '').trim();
+    return Boolean(text) && /^[a-z0-9\s/&+-]+$/i.test(text);
+  }
+
+  getLocalAliasSuggestions(entry = {}, limit = 4) {
+    const canonicalKey = this.normalizeProfessionKey(entry.canonicalName || entry.name || '');
+    if (!canonicalKey) {
+      return [];
+    }
+
+    const aliases = uniqueStrings(entry.aliases || []);
+    const scoredAliases = aliases
+      .map((alias) => {
+        const normalizedAlias = this.normalizeProfessionKey(alias);
+        if (!normalizedAlias || normalizedAlias === canonicalKey || !this.isRomanScriptTerm(alias)) {
+          return null;
+        }
+
+        const tokenScore = LOCAL_ALIAS_HINTS.reduce((total, hint) => (
+          normalizedAlias.includes(hint) ? total + 1 : total
+        ), 0);
+        const compactnessScore = Math.max(0, 4 - Math.min(alias.trim().split(/\s+/).length, 4));
+        return {
+          alias,
+          score: (tokenScore * 3) + compactnessScore
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.score - left.score || left.alias.localeCompare(right.alias));
+
+    return uniqueStrings(scoredAliases.map((item) => item.alias)).slice(0, limit);
   }
 
   inferEntryDomain(entry = {}) {
