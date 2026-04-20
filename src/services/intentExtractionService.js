@@ -79,6 +79,15 @@ const CONTEXT_HINT_TERMS = {
   beauty: ['beauty', 'makeup', 'parlour', 'mehndi', 'bridal']
 };
 
+const DOMAIN_KEYWORD_RULES = {
+  technology: ['website', 'web', 'developer', 'develop', 'software', 'app', 'application', 'frontend', 'backend', 'seo', 'digital marketing', 'ui', 'ux', 'computer'],
+  wedding: ['wedding', 'marriage', 'shaadi', 'shadi', 'baraat', 'barat', 'mehndi', 'pandit', 'ghodi', 'safa', 'band', 'tent', 'decor'],
+  'home services': ['plumber', 'electrician', 'carpenter', 'mason', 'painter', 'cleaner', 'pipe', 'wiring', 'bathroom', 'repair', 'ghar'],
+  medical: ['doctor', 'medical', 'homeopathy', 'homeopath', 'clinic', 'nurse', 'health', 'treatment', 'veterinarian', 'vet'],
+  food: ['caterer', 'halwai', 'cook', 'food', 'khana', 'meal', 'chef', 'tiffin', 'vendor'],
+  transport: ['driver', 'transport', 'delivery', 'mover', 'shift', 'shifting', 'cargo', 'truck', 'tempo', 'gaadi', 'gadi']
+};
+
 class IntentExtractionService {
   async extractIntent(rawInput = '', options = {}) {
     const preprocessed = textNormalizationService.preprocess(rawInput);
@@ -101,6 +110,7 @@ class IntentExtractionService {
       usedFallback: resolved.usedFallback,
       intentOutput: {
         primary_intent: resolved.primary_intent,
+        domain: resolved.domain,
         context: resolved.context,
         keywords: resolved.keywords,
         suggested_professions: resolved.suggested_professions
@@ -131,7 +141,7 @@ class IntentExtractionService {
       'If no supplied category is a close match, return a short English profession_name inferred from the work described.',
       'Do not hallucinate random categories or vague labels like worker, helper, service, businessman, self employed, or professional.',
       'Return JSON only in this exact shape:',
-      '{"profession_name":"","tags":[],"confidence":0,"language":"","city":""}',
+      '{"profession_name":"","tags":[],"confidence":0,"language":"","city":"","domain":""}',
       'Rules:',
       '1. If a supplied catalog category clearly fits, profession_name must be exactly that category name.',
       '2. If no supplied category clearly fits, profession_name should be a short specific English profession title inferred from the sentence.',
@@ -139,7 +149,8 @@ class IntentExtractionService {
       '4. Only leave profession_name empty when the work meaning is genuinely unclear or contradictory.',
       '5. tags should contain short normalized meaning words, not full sentences.',
       '6. city must be extracted only if clearly present in the user input.',
-      '7. Prefer titles like Homeopath, Mover, Gardener, Architect, Astrologer, Street Food Vendor when those meanings are clear.',
+      '7. domain must be one of: technology, wedding, home services, medical, food, transport, or empty.',
+      '8. Prefer titles like Homeopath, Mover, Gardener, Architect, Astrologer, Street Food Vendor when those meanings are clear.',
       `Catalog: ${JSON.stringify(catalogSummary)}`,
       `Input: ${JSON.stringify(preprocessed.raw)}`,
       `Normalized: ${JSON.stringify(preprocessed.embeddingText)}`
@@ -162,10 +173,12 @@ class IntentExtractionService {
   extractWithKeywords(preprocessed, catalogEntries = []) {
     const text = String(preprocessed.embeddingText || preprocessed.raw || '').toLowerCase();
     const detectedContext = this.detectContext(text);
+    const detectedDomain = this.detectDomain(text);
+    const domainCatalogEntries = professionCatalogService.filterEntriesByDomain(catalogEntries, detectedDomain);
     const matchedRules = INTENT_KEYWORD_RULES.filter((rule) => rule.keywords.some((keyword) => text.includes(keyword.toLowerCase())));
-    const inferredCatalogProfessions = professionCatalogService.findProfessionMatchesInTextSync(preprocessed.raw, catalogEntries, 5)
+    const inferredCatalogProfessions = professionCatalogService.findProfessionMatchesInTextSync(preprocessed.raw, domainCatalogEntries, 5)
       .map((entry) => entry.canonicalName);
-    const semanticCatalogProfessions = this.findSemanticCatalogMatches(preprocessed, catalogEntries, detectedContext)
+    const semanticCatalogProfessions = this.findSemanticCatalogMatches(preprocessed, domainCatalogEntries, detectedContext)
       .map((entry) => entry.canonicalName);
     const professions = uniqueStrings([
       ...semanticCatalogProfessions,
@@ -175,6 +188,7 @@ class IntentExtractionService {
 
     return {
       primary_intent: matchedRules[0]?.intent || (professions[0] ? `${professions[0]} service` : ''),
+      domain: detectedDomain,
       context: matchedRules[0]?.context || detectedContext,
       keywords: uniqueStrings([
         ...matchedRules.flatMap((rule) => rule.keywords),
@@ -187,6 +201,8 @@ class IntentExtractionService {
   }
 
   mergeIntentResults(preprocessed, llmResult, fallbackResult, catalogEntries = [], options = {}) {
+    const detectedDomain = this.resolveDomain(preprocessed, llmResult, fallbackResult);
+    const filteredCatalogEntries = professionCatalogService.filterEntriesByDomain(catalogEntries, detectedDomain);
     const llmProfessions = uniqueStrings([
       llmResult?.profession_name || '',
       llmResult?.normalized_category || '',
@@ -194,7 +210,7 @@ class IntentExtractionService {
       ...(llmResult?.suggestedProfessions || [])
     ]);
     const fallbackProfessions = uniqueStrings(fallbackResult?.suggested_professions || []);
-    const catalogMatches = professionCatalogService.findProfessionMatchesInTextSync(preprocessed.raw, catalogEntries, 5)
+    const catalogMatches = professionCatalogService.findProfessionMatchesInTextSync(preprocessed.raw, filteredCatalogEntries, 5)
       .map((entry) => entry.canonicalName);
     const allowedNames = Array.isArray(options.allowedProfessionNames) && options.allowedProfessionNames.length > 0
       ? new Set(options.allowedProfessionNames.map((item) => textNormalizationService.normalizeProfessionKey(item)).filter(Boolean))
@@ -213,6 +229,7 @@ class IntentExtractionService {
 
     return {
       primary_intent: String(llmResult?.profession_name || llmResult?.intent || llmResult?.primary_intent || llmResult?.primaryIntent || fallbackResult.primary_intent || '').trim(),
+      domain: detectedDomain,
       context: String(llmResult?.language || llmResult?.context || fallbackResult.context || '').trim(),
       keywords: uniqueStrings([
         ...(llmResult?.tags || []),
@@ -241,6 +258,44 @@ class IntentExtractionService {
       return 'event';
     }
     return '';
+  }
+
+  detectDomain(text = '') {
+    const normalizedText = textNormalizationService.normalizeProfessionKey(text);
+    if (!normalizedText) {
+      return '';
+    }
+
+    let bestDomain = '';
+    let bestScore = 0;
+
+    Object.entries(DOMAIN_KEYWORD_RULES).forEach(([domain, keywords]) => {
+      const score = keywords.reduce((total, keyword) => (
+        normalizedText.includes(textNormalizationService.normalizeProfessionKey(keyword)) ? total + 1 : total
+      ), 0);
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestDomain = domain;
+      }
+    });
+
+    return bestScore > 0 ? bestDomain : '';
+  }
+
+  resolveDomain(preprocessed, llmResult = null, fallbackResult = null) {
+    const allowedDomains = new Set(['technology', 'wedding', 'home services', 'medical', 'food', 'transport']);
+    const llmDomain = String(llmResult?.domain || '').trim().toLowerCase();
+    if (allowedDomains.has(llmDomain)) {
+      return llmDomain;
+    }
+
+    const fallbackDomain = String(fallbackResult?.domain || '').trim().toLowerCase();
+    if (allowedDomains.has(fallbackDomain)) {
+      return fallbackDomain;
+    }
+
+    return this.detectDomain(preprocessed.embeddingText || preprocessed.raw || '');
   }
 
   findSemanticCatalogMatches(preprocessed, catalogEntries = [], detectedContext = '', limit = 5) {

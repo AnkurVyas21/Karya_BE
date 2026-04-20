@@ -51,10 +51,11 @@ class ProfessionInferenceService {
       allowedProfessionNames: options.allowedProfessionNames || [],
       professionCatalogEntries: entries
     });
+    const scopedEntries = professionCatalogService.filterEntriesByDomain(entries, intent.domain || '');
 
-    const candidateEntries = this.buildCandidateEntries(preprocessed, intent, entries, topN);
+    const candidateEntries = this.buildCandidateEntries(preprocessed, intent, scopedEntries, topN);
     const candidateListBeforeFiltering = candidateEntries.map((entry) => entry.canonicalName);
-    const semanticResult = await this.rankSemanticCandidates(preprocessed, intent, candidateEntries, entries, topN);
+    const semanticResult = await this.rankSemanticCandidates(preprocessed, intent, candidateEntries, scopedEntries, topN);
     const hasSemanticCandidates = semanticResult.candidates.length > 0;
     const fallbackSuggestions = hasSemanticCandidates
       ? []
@@ -84,9 +85,10 @@ class ProfessionInferenceService {
         : 'unknown';
     const contextSuggestions = await contextSuggestionService.suggest({
       context: intent.context,
+      domain: intent.domain,
       keywords: intent.keywords,
       primaryProfession: bestSuggestion?.canonicalName || '',
-      professionCatalogEntries: entries,
+      professionCatalogEntries: scopedEntries,
       limit: 6
     });
 
@@ -96,6 +98,7 @@ class ProfessionInferenceService {
       normalizedInput: preprocessed.normalized,
       intentExtraction: {
         primary_intent: intent.primary_intent,
+        domain: intent.domain,
         context: intent.context,
         keywords: intent.keywords,
         suggested_professions: intent.suggested_professions
@@ -144,6 +147,7 @@ class ProfessionInferenceService {
             selectedScoreBreakdown: bestSuggestion?.scoreBreakdown || null,
             intentExtraction: {
               primary_intent: intent.primary_intent,
+              domain: intent.domain,
               context: intent.context,
               keywords: intent.keywords,
               suggested_professions: intent.suggested_professions
@@ -183,6 +187,7 @@ class ProfessionInferenceService {
       })),
       intent: {
         primary_intent: intent.primary_intent,
+        domain: intent.domain,
         context: intent.context,
         keywords: intent.keywords,
         suggested_professions: intent.suggested_professions

@@ -5,6 +5,15 @@ const ProfessionCatalog = require('../models/ProfessionCatalog');
 const embeddingService = require('./embeddingService');
 const textNormalizationService = require('./textNormalizationService');
 
+const DOMAIN_HINTS = {
+  technology: ['developer', 'web', 'website', 'software', 'app', 'application', 'frontend', 'backend', 'devops', 'seo', 'digital', 'designer', 'ui', 'ux', 'data', 'computer', 'tech'],
+  wedding: ['wedding', 'marriage', 'shaadi', 'shadi', 'baraat', 'barat', 'mehndi', 'mehendi', 'pandit', 'ghodi', 'safa', 'band', 'decor', 'decorator', 'tent', 'florist', 'bridal'],
+  'home services': ['plumber', 'electrician', 'carpenter', 'mason', 'painter', 'cleaner', 'repair', 'house', 'home', 'bathroom', 'pipe', 'wiring', 'furniture'],
+  medical: ['doctor', 'medical', 'homeopathy', 'homeopath', 'clinic', 'nurse', 'physician', 'treatment', 'vet', 'veterinarian', 'health'],
+  food: ['caterer', 'halwai', 'cook', 'food', 'meal', 'kitchen', 'tiffin', 'chef', 'vendor', 'street food'],
+  transport: ['driver', 'mover', 'transport', 'logistics', 'delivery', 'cargo', 'shift', 'shifting', 'vehicle', 'truck', 'tempo', 'gaadi', 'gadi']
+};
+
 const uniqueStrings = (values = []) => {
   const seen = new Set();
   const output = [];
@@ -25,9 +34,32 @@ const uniqueStrings = (values = []) => {
 
 class ProfessionCatalogService {
   async ensureSystemCatalog() {
-    const seedData = PROFESSION_SEED_DATA.length > 0
-      ? PROFESSION_SEED_DATA
-      : DEFAULT_PROFESSIONS.map((profession) => ({ canonicalName: profession }));
+    const mergedByKey = new Map();
+    const addSeed = (profession = {}) => {
+      const canonicalName = this.formatProfessionName(profession.canonicalName || profession.name || profession);
+      if (!canonicalName) {
+        return;
+      }
+
+      const normalizedKey = this.normalizeProfessionKey(canonicalName);
+      const existing = mergedByKey.get(normalizedKey) || {
+        canonicalName,
+        aliases: [],
+        tags: [],
+        relatedProfessions: []
+      };
+
+      mergedByKey.set(normalizedKey, {
+        canonicalName,
+        aliases: uniqueStrings([...(existing.aliases || []), ...(profession.aliases || [])]),
+        tags: uniqueStrings([...(existing.tags || []), ...(profession.tags || [])]),
+        relatedProfessions: uniqueStrings([...(existing.relatedProfessions || []), ...(profession.relatedProfessions || [])])
+      });
+    };
+
+    DEFAULT_PROFESSIONS.forEach((profession) => addSeed({ canonicalName: profession }));
+    PROFESSION_SEED_DATA.forEach((profession) => addSeed(profession));
+    const seedData = [...mergedByKey.values()];
 
     for (const profession of seedData) {
       const canonicalName = this.formatProfessionName(profession.canonicalName || profession);
@@ -147,6 +179,39 @@ class ProfessionCatalogService {
       ...(entry.aliases || []),
       ...(entry.tags || [])
     ]);
+  }
+
+  inferEntryDomain(entry = {}) {
+    const searchable = this.normalizeProfessionKey(this.getSearchTerms(entry).join(' '));
+    if (!searchable) {
+      return '';
+    }
+
+    let bestDomain = '';
+    let bestScore = 0;
+
+    Object.entries(DOMAIN_HINTS).forEach(([domain, hints]) => {
+      const score = hints.reduce((total, hint) => (
+        searchable.includes(this.normalizeProfessionKey(hint)) ? total + 1 : total
+      ), 0);
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestDomain = domain;
+      }
+    });
+
+    return bestScore > 0 ? bestDomain : '';
+  }
+
+  filterEntriesByDomain(entries = [], domain = '') {
+    const normalizedDomain = String(domain || '').trim().toLowerCase();
+    if (!normalizedDomain) {
+      return entries;
+    }
+
+    const filtered = entries.filter((entry) => this.inferEntryDomain(entry) === normalizedDomain);
+    return filtered.length > 0 ? filtered : entries;
   }
 
   stringSimilarity(left = '', right = '') {
