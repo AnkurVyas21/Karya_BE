@@ -31,10 +31,17 @@ const uniqueStrings = (values = []) => {
 
 const INTENT_KEYWORD_RULES = [
   {
-    intent: 'cooking service',
+    intent: 'wedding catering service',
     context: 'wedding',
-    keywords: ['khana', 'catering', 'caterer', 'halwai', 'food', 'cook', 'rasoi', 'order'],
+    keywords: ['catering', 'caterer', 'halwai', 'wedding food', 'baraat food', 'order'],
+    requiredContextTerms: ['wedding', 'marriage', 'shaadi', 'shadi', 'baraat', 'barat', 'bridal'],
     professions: ['Wedding Caterer', 'Caterer', 'Halwai']
+  },
+  {
+    intent: 'cooking service',
+    context: 'food',
+    keywords: ['khana', 'food', 'cook', 'cooking', 'rasoi', 'chef'],
+    professions: ['Caterer']
   },
   {
     intent: 'mehendi service',
@@ -194,7 +201,18 @@ class IntentExtractionService {
     const detectedContext = this.detectContext(text);
     const detectedDomain = this.detectDomain(text);
     const domainCatalogEntries = professionCatalogService.filterEntriesByDomain(catalogEntries, detectedDomain);
-    const matchedRules = INTENT_KEYWORD_RULES.filter((rule) => rule.keywords.some((keyword) => text.includes(keyword.toLowerCase())));
+    const matchedRules = INTENT_KEYWORD_RULES.filter((rule) => {
+      const keywordMatched = rule.keywords.some((keyword) => text.includes(keyword.toLowerCase()));
+      if (!keywordMatched) {
+        return false;
+      }
+
+      if (!Array.isArray(rule.requiredContextTerms) || rule.requiredContextTerms.length === 0) {
+        return true;
+      }
+
+      return rule.requiredContextTerms.some((term) => text.includes(term.toLowerCase()));
+    });
     const inferredCatalogProfessions = professionCatalogService.findProfessionMatchesInTextSync(preprocessed.raw, domainCatalogEntries, 5)
       .map((entry) => entry.canonicalName);
     const semanticCatalogProfessions = this.findSemanticCatalogMatches(preprocessed, domainCatalogEntries, detectedContext)
@@ -402,20 +420,20 @@ class IntentExtractionService {
   }
 
   getProvider() {
-    if (INTENT_PROVIDER === 'gemini' && GEMINI_API_KEY) {
-      return 'gemini';
-    }
     if (INTENT_PROVIDER === 'openai' && openaiProviderService.isConfigured()) {
       return 'openai';
+    }
+    if (INTENT_PROVIDER === 'gemini' && GEMINI_API_KEY) {
+      return 'gemini';
     }
     if (INTENT_PROVIDER === 'ollama') {
       return 'ollama';
     }
-    if (GEMINI_API_KEY) {
-      return 'gemini';
-    }
     if (openaiProviderService.isConfigured()) {
       return 'openai';
+    }
+    if (GEMINI_API_KEY) {
+      return 'gemini';
     }
     if (OLLAMA_BASE_URL) {
       return 'ollama';

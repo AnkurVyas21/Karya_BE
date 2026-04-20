@@ -192,6 +192,8 @@ class ProfessionInferenceService {
         keywords: intent.keywords,
         suggested_professions: intent.suggested_professions
       },
+      providerUsed: intent.providerUsed || '',
+      usedFallback: Boolean(intent.usedFallback),
       debug: {
         candidateSourceUsed: hasSemanticCandidates ? 'semantic' : (fallbackSuggestions.length > 0 ? 'fallback' : 'none'),
         embeddingFailed: semanticResult.embeddingFailed,
