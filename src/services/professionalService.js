@@ -563,7 +563,7 @@ class ProfessionalService {
       andConditions.push({ $or: locationConditions });
     }
 
-    if (!filters.city && !filters.state && filters.query) {
+    if (!filters.city && !filters.state && filters.query && !filters.profession && (!Array.isArray(filters.skills) || filters.skills.length === 0)) {
       const queryTokens = this.extractSearchQueryTokens(filters.query);
       const queryConditions = [];
 

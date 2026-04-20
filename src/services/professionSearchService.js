@@ -20,7 +20,7 @@ class ProfessionSearchService {
         })
       : null;
 
-    const queryInference = queryInput
+    const queryInference = queryInput && !professionInput
       ? await professionInferenceService.inferProfession(queryInput, {
           context: 'search-query',
           log: false,
