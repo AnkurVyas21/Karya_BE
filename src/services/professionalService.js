@@ -140,6 +140,7 @@ class ProfessionalService {
     if ('profession' in mergedProfile) {
       mergedProfile.profession = await professionCatalogService.ensureProfession(mergedProfile.profession, {
         aliases: professionAliases,
+        allowCreate: true,
         source: 'provider-profile',
         preserveInput: true
       });
