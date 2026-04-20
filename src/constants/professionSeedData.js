@@ -86,5 +86,11 @@ module.exports = [
     aliases: ['Turban Tying Service', 'Pagdi Tying Service', '\u0938\u093e\u092b\u093e \u092c\u093e\u0902\u0927\u0928\u0947 \u0935\u093e\u0932\u093e', '\u092a\u0917\u095c\u0940 \u092c\u093e\u0902\u0927\u0928\u0947 \u0935\u093e\u0932\u093e', 'safa bandhne wala', 'pagdi bandhne wala'],
     tags: ['safa', 'pagdi', 'turban tying', 'baraat dress'],
     relatedProfessions: ['Ghodi Service', 'Wedding Band', 'Wedding Caterer']
+  },
+  {
+    canonicalName: 'Web Developer',
+    aliases: ['Website Developer', 'Website Maker', 'Website Builder', 'Web Designer Developer', 'web developer', 'website banane wala', 'website develop karne wala'],
+    tags: ['web developer', 'website development', 'website', 'web', 'developer', 'develop website', 'frontend', 'backend'],
+    relatedProfessions: ['Web Designer', 'SEO Specialist', 'Digital Marketer']
   }
 ];

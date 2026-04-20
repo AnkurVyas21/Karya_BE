@@ -2,7 +2,8 @@ const logger = require('../utils/logger');
 const professionCatalogService = require('./professionCatalogService');
 const textNormalizationService = require('./textNormalizationService');
 
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const OLLAMA_BASE_URL = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/+$/, '');
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:8b';
@@ -390,29 +391,42 @@ class IntentExtractionService {
   }
 
   async askGemini(prompt) {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 250,
-            responseMimeType: 'application/json'
-          }
-        })
-      }
-    );
+    const modelCandidates = uniqueStrings([GEMINI_MODEL, DEFAULT_GEMINI_MODEL]);
+    let lastError = null;
 
-    if (!response.ok) {
-      throw new Error(`Gemini request failed with ${response.status}`);
+    for (const model of modelCandidates) {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': GEMINI_API_KEY
+          },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 250,
+              responseMimeType: 'application/json'
+            }
+          })
+        }
+      );
+
+      if (response.ok) {
+        const payload = await response.json();
+        const text = payload?.candidates?.[0]?.content?.parts?.map((part) => part?.text || '').join('').trim();
+        return this.parseJson(text);
+      }
+
+      lastError = new Error(`Gemini request failed with ${response.status} for model ${model}`);
+      if (response.status !== 404) {
+        throw lastError;
+      }
     }
 
-    const payload = await response.json();
-    const text = payload?.candidates?.[0]?.content?.parts?.map((part) => part?.text || '').join('').trim();
-    return this.parseJson(text);
+    throw lastError || new Error('Gemini request failed');
   }
 
   async askOllama(prompt) {
