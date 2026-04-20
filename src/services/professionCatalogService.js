@@ -32,8 +32,30 @@ const uniqueStrings = (values = []) => {
   return output;
 };
 
+const PROFESSION_CACHE_TTL_MS = Math.max(Number(process.env.PROFESSION_CACHE_TTL_MS || 5 * 60 * 1000) || (5 * 60 * 1000), 1000);
+
 class ProfessionCatalogService {
+  constructor() {
+    this.catalogCache = {
+      seeded: false,
+      seedingPromise: null,
+      entries: null,
+      professions: null,
+      expiresAt: 0
+    };
+  }
+
   async ensureSystemCatalog() {
+    if (this.catalogCache.seeded) {
+      return;
+    }
+
+    if (this.catalogCache.seedingPromise) {
+      await this.catalogCache.seedingPromise;
+      return;
+    }
+
+    this.catalogCache.seedingPromise = (async () => {
     const mergedByKey = new Map();
     const addSeed = (profession = {}) => {
       const canonicalName = this.formatProfessionName(profession.canonicalName || profession.name || profession);
@@ -95,6 +117,14 @@ class ProfessionCatalogService {
         },
         { upsert: true }
       );
+    }
+      this.catalogCache.seeded = true;
+    })();
+
+    try {
+      await this.catalogCache.seedingPromise;
+    } finally {
+      this.catalogCache.seedingPromise = null;
     }
   }
 
@@ -158,19 +188,33 @@ class ProfessionCatalogService {
 
   async getAllProfessionEntries() {
     await this.ensureSystemCatalog();
+    if (this.catalogCache.entries && this.catalogCache.expiresAt > Date.now()) {
+      return this.catalogCache.entries;
+    }
+
     const rows = await ProfessionCatalog.find({})
       .sort({ canonicalName: 1, name: 1 })
       .lean();
 
-    return rows
+    const entries = rows
       .map((row) => this.toEntry(row))
       .filter((entry) => entry.canonicalName);
+    this.catalogCache.entries = entries;
+    this.catalogCache.professions = null;
+    this.catalogCache.expiresAt = Date.now() + PROFESSION_CACHE_TTL_MS;
+    return entries;
   }
 
   async getAllProfessions() {
+    if (this.catalogCache.professions && this.catalogCache.expiresAt > Date.now()) {
+      return this.catalogCache.professions;
+    }
+
     const entries = await this.getAllProfessionEntries();
-    return uniqueStrings(entries.map((entry) => entry.canonicalName))
+    const professions = uniqueStrings(entries.map((entry) => entry.canonicalName))
       .sort((left, right) => left.localeCompare(right));
+    this.catalogCache.professions = professions;
+    return professions;
   }
 
   getSearchTerms(entry = {}) {
@@ -379,6 +423,7 @@ class ProfessionCatalogService {
       update,
       { upsert: true, new: true, setDefaultsOnInsert: true }
     ).lean();
+    this.invalidateCache();
 
     const entry = this.toEntry(updated);
     return this.ensureEmbeddingForEntry(entry);
@@ -435,8 +480,15 @@ class ProfessionCatalogService {
     }
 
     await ProfessionCatalog.findOneAndUpdate({ _id: entry.id }, update);
+    this.invalidateCache();
 
     return entry;
+  }
+
+  invalidateCache() {
+    this.catalogCache.entries = null;
+    this.catalogCache.professions = null;
+    this.catalogCache.expiresAt = 0;
   }
 
   async findBestProfessionMatch(candidate = '') {

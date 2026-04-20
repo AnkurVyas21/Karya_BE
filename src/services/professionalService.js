@@ -211,6 +211,10 @@ class ProfessionalService {
       skills: normalizeList(filters?.skills || [])
     };
 
+    if (this.isBroadSearch(normalizedFilters)) {
+      return this.searchBroadProfessionals(normalizedFilters, page, limit, viewerId);
+    }
+
     const semanticFilters = await professionSearchService.resolveSearchFilters(normalizedFilters);
     const searchFilters = {
       ...normalizedFilters,
@@ -277,6 +281,49 @@ class ProfessionalService {
           growthState
         });
       }),
+      totalDocs,
+      limit: pageSize,
+      page: pageNumber,
+      totalPages,
+      pagingCounter: startIndex + 1,
+      hasPrevPage: pageNumber > 1,
+      hasNextPage: pageNumber < totalPages,
+      prevPage: pageNumber > 1 ? pageNumber - 1 : null,
+      nextPage: pageNumber < totalPages ? pageNumber + 1 : null
+    };
+  }
+
+  async searchBroadProfessionals(filters, page, limit, viewerId = null) {
+    const pageNumber = Math.max(Number(page) || 1, 1);
+    const pageSize = Math.max(Number(limit) || 10, 1);
+    const candidateQuery = this.buildSearchCandidateQuery(filters);
+    const totalDocs = await ProfessionalProfile.countDocuments(candidateQuery);
+    const totalPages = totalDocs > 0 ? Math.ceil(totalDocs / pageSize) : 1;
+    const startIndex = (pageNumber - 1) * pageSize;
+
+    const pagedProfiles = await ProfessionalProfile.find(candidateQuery)
+      .populate('user')
+      .sort({ createdAt: -1 })
+      .skip(startIndex)
+      .limit(pageSize);
+
+    const listableProfiles = pagedProfiles.filter((profile) => isProfessionalProfileListable(profile));
+    const profileIds = listableProfiles.map((profile) => profile._id.toString());
+    const reviewStats = await this.getReviewStatsMap(profileIds);
+    const bookmarkedIds = await this.getBookmarkedProfileIds(viewerId, profileIds);
+    const shownUserIds = listableProfiles.map((profile) => profile.user?._id?.toString()).filter(Boolean);
+    const growthStateMap = await providerGrowthService.getGrowthStatesForUsers(shownUserIds);
+    await providerGrowthService.recordAdImpressions(shownUserIds);
+
+    logger.info(`Broad search performed with filters: ${JSON.stringify(filters)}`);
+
+    return {
+      docs: listableProfiles.map((profile) => buildProfessionalSummary({
+        profile,
+        reviewStats: reviewStats[profile._id.toString()] || {},
+        bookmarkedIds,
+        growthState: growthStateMap.get(profile.user?._id?.toString() || '') || {}
+      })),
       totalDocs,
       limit: pageSize,
       page: pageNumber,
@@ -527,6 +574,16 @@ class ProfessionalService {
     }
 
     return query;
+  }
+
+  isBroadSearch(filters = {}) {
+    return !String(filters.query || '').trim()
+      && !String(filters.profession || '').trim()
+      && !String(filters.location || '').trim()
+      && !String(filters.state || '').trim()
+      && !String(filters.city || '').trim()
+      && !String(filters.town || '').trim()
+      && (!Array.isArray(filters.skills) || filters.skills.length === 0);
   }
 
   scoreProfessionalProfile(profile, filters = {}, growthState = {}) {
