@@ -13,6 +13,7 @@ const {
   submitVerification,
   getGrowthActivity,
   getWebsiteBySlug,
+  getWebsitePreviewBySlug,
   getWebsiteManager,
   saveWebsiteManager,
   updateWebsitePublishStatus,
@@ -74,6 +75,7 @@ router.get('/search', searchProfessionals);
 router.post('/search/ai', aiSearch);
 router.get('/bookmarks', authMiddleware, getBookmarks);
 router.delete('/bookmark/:id', authMiddleware, removeBookmark);
+router.get('/website/preview/:slug', authMiddleware, roleMiddleware(['professional', 'admin']), getWebsitePreviewBySlug);
 router.get('/website/:slug', getWebsiteBySlug);
 router.post('/website/:slug/inquiries', createWebsiteInquiry);
 router.post('/website/:slug/bookings', createWebsiteBooking);

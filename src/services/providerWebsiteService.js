@@ -59,6 +59,7 @@ const isValidIndianPhone = (value = '') => /^[6-9]\d{9}$/.test(String(value || '
 const isValidUpi = (value = '') => !cleanString(value) || /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(cleanString(value));
 const normalizeGallery = (value) => cleanArray(value).slice(0, 20);
 const normalizeVideos = (value) => cleanArray(value).slice(0, 8);
+const toObjectIdString = (value) => (value && typeof value.toString === 'function' ? value.toString() : String(value || ''));
 
 class ProviderWebsiteService {
   async getManager(userId) {
@@ -72,8 +73,12 @@ class ProviderWebsiteService {
       providerGrowthService.getOrCreateState(userId),
       this.getOrCreateWebsite(userId)
     ]);
-    const requestedSlug = slugify(payload.slug || website.slug || website.businessName);
-    const finalSlug = requestedSlug || (state.websiteSlug ? cleanString(state.websiteSlug) : '');
+    const finalSlug = await this.getOrCreateSlug(
+      userId,
+      website,
+      state,
+      payload.slug || website.slug || payload.businessName || website.businessName
+    );
 
     if (payload.phone && !isValidIndianPhone(payload.phone)) {
       throw new Error('Enter a valid 10-digit business phone number');
@@ -86,10 +91,6 @@ class ProviderWebsiteService {
     }
 
     const purchased = providerGrowthService.hasActiveWebsite(state);
-    if (finalSlug) {
-      await this.ensureSlugAvailable(finalSlug, userId, website._id);
-      await this.syncWebsiteSlug(userId, website, state, finalSlug);
-    }
 
     const heroImage = Array.isArray(files.heroImage) && files.heroImage[0]?.path ? files.heroImage[0].path : website.heroImage;
     const logo = Array.isArray(files.logoImage) && files.logoImage[0]?.path ? files.logoImage[0].path : website.logo;
@@ -200,11 +201,11 @@ class ProviderWebsiteService {
       throw new Error('Purchase the website feature before publishing your business page');
     }
 
-    if (nextStatus === 'published' && !website.slug) {
-      const fallbackSlug = slugify(website.businessName) || `business-${String(userId).slice(-6)}`;
-      await this.ensureSlugAvailable(fallbackSlug, userId, website._id);
-      await this.syncWebsiteSlug(userId, website, state, fallbackSlug);
-      website.slug = fallbackSlug;
+    await this.getOrCreateSlug(userId, website, state, website.slug || website.businessName);
+
+    if (nextStatus === 'published') {
+      const services = await ProviderServiceModel.find({ providerId: userId }).lean();
+      this.ensurePublishReady(website, services);
     }
 
     website.isPurchased = providerGrowthService.hasActiveWebsite(state);
@@ -241,6 +242,20 @@ class ProviderWebsiteService {
 
     await ProfessionalProfile.findOneAndUpdate({ user: website.providerId }, { $inc: { viewCount: 1 } });
     return data;
+  }
+
+  async getPreviewWebsiteBySlug(slug, userId) {
+    const cleanSlug = slugify(slug);
+    if (!cleanSlug) {
+      return null;
+    }
+
+    const website = await ProviderWebsite.findOne({ slug: cleanSlug }).lean();
+    if (!website || toObjectIdString(website.providerId) !== toObjectIdString(userId)) {
+      return null;
+    }
+
+    return this.buildPreviewResponse(userId, website);
   }
 
   async createInquiry(slug, payload = {}) {
@@ -374,10 +389,7 @@ class ProviderWebsiteService {
     }
 
     website.isPurchased = providerGrowthService.hasActiveWebsite(state);
-    if (!website.slug && state.websiteSlug) {
-      website.slug = cleanString(state.websiteSlug);
-      await website.save();
-    }
+    await this.getOrCreateSlug(userId, website, state, website.slug || state.websiteSlug || website.businessName);
 
     await ProviderThemeConfig.findOneAndUpdate(
       { providerId: userId },
@@ -545,7 +557,7 @@ class ProviderWebsiteService {
 
     const hasGallery = (website.gallery || []).length >= 3;
     checklist.push({ id: 'gallery', label: 'Uploaded at least 3 gallery photos', completed: hasGallery });
-    if (hasGallery) score += 15;
+    if (hasGallery) score += 10;
 
     const hasHours = (website.businessHours || []).some((item) => item.isOpen && item.openTime && item.closeTime);
     checklist.push({ id: 'hours', label: 'Business hours configured', completed: hasHours });
@@ -554,6 +566,14 @@ class ProviderWebsiteService {
     const hasCtas = website.callEnabled || website.whatsappEnabled || website.inquiryFormEnabled;
     checklist.push({ id: 'cta', label: 'Lead CTA enabled', completed: hasCtas });
     if (hasCtas) score += 10;
+
+    const hasSlug = Boolean(website.slug);
+    checklist.push({ id: 'slug', label: 'Public page slug set', completed: hasSlug });
+    if (hasSlug) score += 10;
+
+    const hasHeroImage = Boolean(website.heroImage);
+    checklist.push({ id: 'hero-image', label: 'Hero image uploaded', completed: hasHeroImage });
+    if (hasHeroImage) score += 5;
 
     return {
       score,
@@ -569,9 +589,22 @@ class ProviderWebsiteService {
       services: 'Add at least 2 services so customers know what you offer.',
       gallery: 'Upload 3 photos to improve trust and conversion.',
       hours: 'Set your business hours to reduce missed leads.',
-      cta: 'Enable call, WhatsApp, or inquiry form to capture leads.'
+      cta: 'Enable call, WhatsApp, or inquiry form to capture leads.',
+      slug: 'Set your slug so your business page is easy to share.',
+      'hero-image': 'Upload a hero image so your page looks complete and trustworthy.'
     };
     return suggestions[id] || 'Complete more setup details to improve your business page.';
+  }
+
+  ensurePublishReady(website, services = []) {
+    const completion = this.computeCompletion({ website, services });
+    const missing = completion.checklist.filter((item) => !item.completed);
+    if (missing.length === 0) {
+      return;
+    }
+
+    const requiredLabels = missing.slice(0, 4).map((item) => item.label.toLowerCase());
+    throw new Error(`Finish these before publishing: ${requiredLabels.join(', ')}`);
   }
 
   async replaceCollection(Model, website, userId, items) {
@@ -653,6 +686,34 @@ class ProviderWebsiteService {
     await Promise.all([website.save(), state.save()]);
   }
 
+  async getOrCreateSlug(userId, website, state, seedValue = '') {
+    const existing = cleanString(website.slug || state.websiteSlug);
+    if (existing) {
+      if (website.slug !== existing || state.websiteSlug !== existing) {
+        await this.syncWebsiteSlug(userId, website, state, existing);
+      }
+      return existing;
+    }
+
+    const user = await User.findById(userId).lean();
+    const base = slugify(seedValue)
+      || slugify([user?.firstName, user?.lastName].filter(Boolean).join(' '))
+      || `business-${String(userId).slice(-6)}`;
+    let candidate = base;
+    let suffix = 2;
+
+    while (
+      await ProviderWebsite.exists({ slug: candidate, _id: { $ne: website._id } })
+      || await ProviderGrowth.exists({ websiteSlug: candidate, user: { $ne: userId } })
+    ) {
+      candidate = `${base}-${suffix}`;
+      suffix += 1;
+    }
+
+    await this.syncWebsiteSlug(userId, website, state, candidate);
+    return candidate;
+  }
+
   async getReviewSummary(userId) {
     const profile = await ProfessionalProfile.findOne({ user: userId }).select('_id');
     if (!profile) {
@@ -698,6 +759,9 @@ class ProviderWebsiteService {
 
     const completion = options.completion || this.computeCompletion({ website, services });
     const publicPath = website.slug ? `/business/${website.slug}` : '';
+    const draftPreviewPath = website.slug ? `/business/preview/${website.slug}` : '';
+    const canOpenLivePage = website.status === 'published' && Boolean(website.isPurchased);
+    const livePublicPath = canOpenLivePage ? publicPath : '';
     const qrCodeDataUrl = publicPath
       ? await QRCode.toDataURL(`https://karya.local${publicPath}`, { margin: 1, width: 180 })
       : '';
@@ -709,6 +773,9 @@ class ProviderWebsiteService {
       canPublish: Boolean(website.isPurchased),
       status: website.status || 'draft',
       publicPath,
+      draftPreviewPath,
+      livePublicPath,
+      canOpenLivePage,
       legacyPublicPath: website.slug ? `/provider/site/${website.slug}` : '',
       publicUrl: publicPath ? `https://karya.local${publicPath}` : '',
       qrCodeDataUrl,
@@ -828,6 +895,23 @@ class ProviderWebsiteService {
         qrCodeDataUrl: website.slug
           ? await QRCode.toDataURL(`https://karya.local/business/${website.slug}`, { margin: 1, width: 180 })
           : ''
+      }
+    };
+  }
+
+  async buildPreviewResponse(userId, websiteSeed = null) {
+    const response = await this.buildPublicResponse(userId, websiteSeed);
+    if (!response) {
+      return null;
+    }
+
+    return {
+      ...response,
+      isPreview: true,
+      website: {
+        ...response.website,
+        isPreview: true,
+        previewNote: 'This is your private draft preview. Customers cannot access it until you publish.'
       }
     };
   }
