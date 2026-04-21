@@ -576,7 +576,7 @@ class ProviderWebsiteService {
     if (hasHeroImage) score += 5;
 
     return {
-      score,
+      score: Math.min(score, 100),
       checklist,
       suggestions: checklist.filter((item) => !item.completed).map((item) => this.toSuggestion(item.id))
     };
