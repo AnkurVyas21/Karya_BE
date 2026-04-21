@@ -104,6 +104,7 @@ app.use('/api/analytics', require('./routes/analytics'));
 app.use('/api/ads', require('./routes/ads'));
 app.use('/api/professional', require('./routes/professional'));
 app.use('/api/messages', require('./routes/messages'));
+app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/subscriptions', require('./routes/subscriptions'));
 app.use('/api/admin', require('./routes/admin'));
 

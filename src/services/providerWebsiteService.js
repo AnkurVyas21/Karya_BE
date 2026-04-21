@@ -7,6 +7,7 @@ const ProviderArticle = require('../models/ProviderArticle');
 const ProviderOffer = require('../models/ProviderOffer');
 const ProviderLead = require('../models/ProviderLead');
 const ProviderBooking = require('../models/ProviderBooking');
+const notificationService = require('./notificationService');
 const ProviderThemeConfig = require('../models/ProviderThemeConfig');
 const ProviderSEOConfig = require('../models/ProviderSEOConfig');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
@@ -258,7 +259,7 @@ class ProviderWebsiteService {
     return this.buildPreviewResponse(userId, website);
   }
 
-  async createInquiry(slug, payload = {}) {
+  async createInquiry(slug, payload = {}, actorUserId = null) {
     const publicWebsite = await this.getPublicWebsiteBySlug(slug);
     if (!publicWebsite) {
       throw new Error('Business page not found');
@@ -291,6 +292,69 @@ class ProviderWebsiteService {
       notes: ''
     });
 
+    const notificationBySource = {
+      callback: {
+        type: 'callback',
+        title: 'New callback request',
+        body: `${cleanString(payload.name) || 'A visitor'} requested a callback for ${publicWebsite.website?.businessName || 'your business page'}.`
+      },
+      inquiry: {
+        type: 'inquiry',
+        title: 'New inquiry received',
+        body: `${cleanString(payload.name) || 'A visitor'} sent an inquiry for ${publicWebsite.website?.businessName || 'your business page'}.`
+      },
+      website: {
+        type: 'inquiry',
+        title: 'New website inquiry',
+        body: `${cleanString(payload.name) || 'A visitor'} contacted you from ${publicWebsite.website?.businessName || 'your business page'}.`
+      },
+      'call-click': {
+        type: 'system',
+        title: 'Someone tapped call',
+        body: `A visitor tapped the call button on ${publicWebsite.website?.businessName || 'your business page'}.`
+      },
+      'whatsapp-click': {
+        type: 'system',
+        title: 'Someone tapped WhatsApp',
+        body: `A visitor tapped the WhatsApp button on ${publicWebsite.website?.businessName || 'your business page'}.`
+      },
+      share: {
+        type: 'system',
+        title: 'Your page was shared',
+        body: `A visitor shared ${publicWebsite.website?.businessName || 'your business page'}.`
+      }
+    };
+    const notificationCopy = notificationBySource[source] || notificationBySource.website;
+    await notificationService.createNotification({
+      userId: website.providerId,
+      type: notificationCopy.type,
+      title: notificationCopy.title,
+      body: notificationCopy.body,
+      linkPath: '/provider/website',
+      metadata: {
+        leadId: lead._id.toString(),
+        slug: website.slug,
+        source
+      }
+    });
+
+    if (actorUserId && ['website', 'inquiry', 'callback'].includes(source)) {
+      const sourceLabel = source === 'callback' ? 'callback request' : source === 'inquiry' ? 'inquiry' : 'website inquiry';
+      await notificationService.createNotification({
+        userId: actorUserId,
+        type: source === 'callback' ? 'callback' : 'inquiry',
+        title: source === 'callback' ? 'Callback request sent' : 'Inquiry sent',
+        body: `Your ${sourceLabel} was sent to ${publicWebsite.website?.businessName || 'this provider'}.`,
+        linkPath: website.slug ? `/business/${website.slug}` : '',
+        metadata: {
+          leadId: lead._id.toString(),
+          providerId: website.providerId.toString(),
+          slug: website.slug,
+          source
+        }
+      });
+    }
+
     return {
       id: lead._id.toString(),
       source: lead.source,
@@ -299,7 +363,7 @@ class ProviderWebsiteService {
     };
   }
 
-  async createBooking(slug, payload = {}) {
+  async createBooking(slug, payload = {}, actorUserId = null) {
     const publicWebsite = await this.getPublicWebsiteBySlug(slug);
     if (!publicWebsite) {
       throw new Error('Business page not found');
@@ -329,6 +393,33 @@ class ProviderWebsiteService {
       paymentStatus: 'pending',
       status: 'new'
     });
+
+    await notificationService.createNotification({
+      userId: website.providerId,
+      type: 'booking',
+      title: 'New booking request',
+      body: `${cleanString(payload.customerName) || 'A customer'} requested a booking for ${publicWebsite.website?.businessName || 'your business page'}.`,
+      linkPath: '/provider/website',
+      metadata: {
+        bookingId: booking._id.toString(),
+        slug: website.slug
+      }
+    });
+
+    if (actorUserId) {
+      await notificationService.createNotification({
+        userId: actorUserId,
+        type: 'booking',
+        title: 'Booking request sent',
+        body: `Your booking request was sent to ${publicWebsite.website?.businessName || 'this provider'}.`,
+        linkPath: website.slug ? `/business/${website.slug}` : '',
+        metadata: {
+          bookingId: booking._id.toString(),
+          providerId: website.providerId.toString(),
+          slug: website.slug
+        }
+      });
+    }
 
     return {
       id: booking._id.toString(),

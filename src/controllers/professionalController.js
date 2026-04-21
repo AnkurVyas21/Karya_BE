@@ -234,7 +234,7 @@ const updateWebsitePublishStatus = async (req, res) => {
 
 const createWebsiteInquiry = async (req, res) => {
   try {
-    const data = await providerWebsiteService.createInquiry(req.params.slug, req.body);
+    const data = await providerWebsiteService.createInquiry(req.params.slug, req.body, req.user?._id);
     res.status(201).json({ success: true, data });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -243,7 +243,7 @@ const createWebsiteInquiry = async (req, res) => {
 
 const createWebsiteBooking = async (req, res) => {
   try {
-    const data = await providerWebsiteService.createBooking(req.params.slug, req.body);
+    const data = await providerWebsiteService.createBooking(req.params.slug, req.body, req.user?._id);
     res.status(201).json({ success: true, data });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });

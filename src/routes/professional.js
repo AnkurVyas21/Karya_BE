@@ -29,6 +29,7 @@ const {
   getDashboardSummary
 } = require('../controllers/professionalController');
 const authMiddleware = require('../middlewares/authMiddleware');
+const optionalAuthMiddleware = require('../middlewares/optionalAuthMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
 const multer = require('multer');
 const upload = multer({ dest: 'uploads/' });
@@ -76,9 +77,9 @@ router.post('/search/ai', aiSearch);
 router.get('/bookmarks', authMiddleware, getBookmarks);
 router.delete('/bookmark/:id', authMiddleware, removeBookmark);
 router.get('/website/preview/:slug', authMiddleware, roleMiddleware(['professional', 'admin']), getWebsitePreviewBySlug);
-router.get('/website/:slug', getWebsiteBySlug);
-router.post('/website/:slug/inquiries', createWebsiteInquiry);
-router.post('/website/:slug/bookings', createWebsiteBooking);
+router.get('/website/:slug', optionalAuthMiddleware, getWebsiteBySlug);
+router.post('/website/:slug/inquiries', optionalAuthMiddleware, createWebsiteInquiry);
+router.post('/website/:slug/bookings', optionalAuthMiddleware, createWebsiteBooking);
 router.get('/:id/ratings', getRatings);
 router.get('/:id', getProfile);
 router.post('/review', authMiddleware, createReview);
