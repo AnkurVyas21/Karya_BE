@@ -32,6 +32,7 @@ const DEFAULT_BOOKING_SLOTS = [
   { label: 'Evening', startTime: '16:00', endTime: '19:00', isActive: true }
 ];
 
+const INDIA_TIME_ZONE = 'Asia/Kolkata';
 const cleanString = (value) => String(value || '').trim();
 const cleanArray = (value) => Array.isArray(value)
   ? value.map((item) => cleanString(item)).filter(Boolean)
@@ -51,6 +52,7 @@ const cleanNumber = (value, fallback = 0) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
+const normalizeIndianPhone = (value = '') => String(value || '').replace(/[^\d]/g, '').slice(-10);
 const slugify = (value = '') => cleanString(value)
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, '-')
@@ -61,6 +63,45 @@ const isValidUpi = (value = '') => !cleanString(value) || /^[a-zA-Z0-9.\-_]{2,25
 const normalizeGallery = (value) => cleanArray(value).slice(0, 20);
 const normalizeVideos = (value) => cleanArray(value).slice(0, 8);
 const toObjectIdString = (value) => (value && typeof value.toString === 'function' ? value.toString() : String(value || ''));
+const normalizeDayLabel = (value = '') => cleanString(value).toLowerCase();
+const parseTimeToMinutes = (value = '') => {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(cleanString(value));
+  if (!match) {
+    return null;
+  }
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+  return (hours * 60) + minutes;
+};
+const getIndiaNowContext = () => {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: INDIA_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+  const parts = formatter.formatToParts(new Date());
+  const pick = (type) => parts.find((item) => item.type === type)?.value || '';
+  return {
+    date: `${pick('year')}-${pick('month')}-${pick('day')}`,
+    weekday: pick('weekday'),
+    minutes: (Number(pick('hour')) * 60) + Number(pick('minute'))
+  };
+};
+const getWeekdayForDate = (dateString = '') => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanString(dateString))) {
+    return '';
+  }
+  const noonUtc = new Date(`${dateString}T12:00:00Z`);
+  return new Intl.DateTimeFormat('en-US', { timeZone: INDIA_TIME_ZONE, weekday: 'long' }).format(noonUtc);
+};
 
 class ProviderWebsiteService {
   async getManager(userId) {
@@ -119,8 +160,8 @@ class ProviderWebsiteService {
     website.about = cleanString(payload.about);
     website.yearsOfExperience = cleanNumber(payload.yearsOfExperience, website.yearsOfExperience);
     website.languages = cleanArray(payload.languages);
-    website.phone = cleanString(payload.phone);
-    website.whatsappNumber = cleanString(payload.whatsappNumber);
+    website.phone = normalizeIndianPhone(payload.phone);
+    website.whatsappNumber = normalizeIndianPhone(payload.whatsappNumber);
     website.email = cleanString(payload.email);
     website.address = cleanString(payload.address);
     website.city = cleanString(payload.city);
@@ -278,13 +319,14 @@ class ProviderWebsiteService {
       }
     }
 
+    const normalizedPhone = normalizeIndianPhone(payload.phone);
     const website = await ProviderWebsite.findOne({ slug: slugify(slug) });
     const lead = await ProviderLead.create({
       providerId: website.providerId,
       websiteId: website._id,
       source,
       name: cleanString(payload.name),
-      phone: cleanString(payload.phone),
+      phone: normalizedPhone,
       email: cleanString(payload.email),
       message: cleanString(payload.message),
       interestedService: cleanString(payload.interestedService),
@@ -378,15 +420,63 @@ class ProviderWebsiteService {
       throw new Error('Enter a valid 10-digit mobile number');
     }
 
+    const bookingDate = cleanString(payload.bookingDate);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(bookingDate)) {
+      throw new Error('Choose a valid booking date');
+    }
+
+    const bookingTime = cleanString(payload.bookingTime);
+    if (!bookingTime) {
+      throw new Error('Choose a booking time slot');
+    }
+
     const website = await ProviderWebsite.findOne({ slug: slugify(slug) });
+    const matchingSlot = (website.bookingSlots || []).find((slot) => slot?.isActive !== false && `${slot.startTime} - ${slot.endTime}` === bookingTime);
+    if (!matchingSlot) {
+      throw new Error('Choose an available booking time slot');
+    }
+
+    const bookingWeekday = getWeekdayForDate(bookingDate);
+    if (!bookingWeekday) {
+      throw new Error('Choose a valid booking date');
+    }
+
+    const workingDays = Array.isArray(website.bookingWorkingDays) ? website.bookingWorkingDays : [];
+    const isWorkingDay = workingDays.length === 0 || workingDays.some((day) => normalizeDayLabel(day) === normalizeDayLabel(bookingWeekday));
+    if (!isWorkingDay) {
+      throw new Error(`${bookingWeekday} is not available for bookings`);
+    }
+
+    const businessHour = Array.isArray(website.businessHours)
+      ? website.businessHours.find((item) => normalizeDayLabel(item?.day) === normalizeDayLabel(bookingWeekday))
+      : null;
+    if (businessHour && businessHour.isOpen === false) {
+      throw new Error(`${bookingWeekday} is marked closed for this business`);
+    }
+
+    const slotStartMinutes = parseTimeToMinutes(matchingSlot.startTime);
+    if (slotStartMinutes === null) {
+      throw new Error('Choose an available booking time slot');
+    }
+
+    const indiaNow = getIndiaNowContext();
+    if (bookingDate < indiaNow.date) {
+      throw new Error('Past booking dates are not allowed');
+    }
+
+    const leadNoticeMinutes = Math.max(0, cleanNumber(website.bookingLeadNoticeHours, 0)) * 60;
+    if (bookingDate === indiaNow.date && slotStartMinutes <= indiaNow.minutes + leadNoticeMinutes) {
+      throw new Error('This time slot is no longer available today');
+    }
+
     const booking = await ProviderBooking.create({
       providerId: website.providerId,
       websiteId: website._id,
       customerName: cleanString(payload.customerName),
-      customerPhone: cleanString(payload.customerPhone),
+      customerPhone: normalizeIndianPhone(payload.customerPhone),
       serviceId: payload.serviceId || null,
-      bookingDate: cleanString(payload.bookingDate),
-      bookingTime: cleanString(payload.bookingTime),
+      bookingDate,
+      bookingTime,
       message: cleanString(payload.message),
       advanceFeeRequired: Boolean(publicWebsite.website.advanceFeeRequired),
       advanceFeeAmount: Number(publicWebsite.website.advanceFeeAmount || 0),
@@ -489,7 +579,7 @@ class ProviderWebsiteService {
         tags: Array.isArray(profile?.tags) ? profile.tags : [],
         about: cleanString(profile?.description),
         yearsOfExperience: cleanNumber(profile?.experience, 0),
-        phone: cleanString(user?.mobile),
+        phone: normalizeIndianPhone(user?.mobile),
         email: cleanString(user?.email),
         address: cleanString(profile?.addressLine),
         city: cleanString(profile?.city),
