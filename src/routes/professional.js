@@ -13,6 +13,11 @@ const {
   submitVerification,
   getGrowthActivity,
   getWebsiteBySlug,
+  getWebsiteManager,
+  saveWebsiteManager,
+  updateWebsitePublishStatus,
+  createWebsiteInquiry,
+  createWebsiteBooking,
   detectProfession,
   getProfessions,
   getMyProfile,
@@ -35,6 +40,7 @@ router.put('/profile', authMiddleware, roleMiddleware(['professional', 'admin'])
 router.get('/dashboard/summary', authMiddleware, roleMiddleware(['professional', 'admin']), getDashboardSummary);
 router.get('/growth/dashboard', authMiddleware, roleMiddleware(['professional', 'admin']), getGrowthDashboard);
 router.get('/growth/activity', authMiddleware, roleMiddleware(['professional', 'admin']), getGrowthActivity);
+router.get('/growth/website-manager', authMiddleware, roleMiddleware(['professional', 'admin']), getWebsiteManager);
 router.post('/growth/activate', authMiddleware, roleMiddleware(['professional']), activateGrowthFeature);
 router.put(
   '/growth/website',
@@ -43,6 +49,19 @@ router.put(
   upload.fields([{ name: 'websiteImages', maxCount: 8 }, { name: 'websiteVideos', maxCount: 3 }, { name: 'backgroundAudio', maxCount: 1 }]),
   updateWebsiteProfile
 );
+router.put(
+  '/growth/website-manager',
+  authMiddleware,
+  roleMiddleware(['professional']),
+  upload.fields([
+    { name: 'heroImage', maxCount: 1 },
+    { name: 'logoImage', maxCount: 1 },
+    { name: 'galleryImages', maxCount: 12 },
+    { name: 'galleryVideos', maxCount: 6 }
+  ]),
+  saveWebsiteManager
+);
+router.patch('/growth/website-manager/publish', authMiddleware, roleMiddleware(['professional']), updateWebsitePublishStatus);
 router.post(
   '/growth/verification',
   authMiddleware,
@@ -56,6 +75,8 @@ router.post('/search/ai', aiSearch);
 router.get('/bookmarks', authMiddleware, getBookmarks);
 router.delete('/bookmark/:id', authMiddleware, removeBookmark);
 router.get('/website/:slug', getWebsiteBySlug);
+router.post('/website/:slug/inquiries', createWebsiteInquiry);
+router.post('/website/:slug/bookings', createWebsiteBooking);
 router.get('/:id/ratings', getRatings);
 router.get('/:id', getProfile);
 router.post('/review', authMiddleware, createReview);

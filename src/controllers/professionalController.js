@@ -1,6 +1,7 @@
 const professionalService = require('../services/professionalService');
 const paymentService = require('../services/paymentService');
 const providerGrowthService = require('../services/providerGrowthService');
+const providerWebsiteService = require('../services/providerWebsiteService');
 const Review = require('../models/Review');
 const Bookmark = require('../models/Bookmark');
 const User = require('../models/User');
@@ -180,12 +181,57 @@ const getGrowthActivity = async (req, res) => {
 
 const getWebsiteBySlug = async (req, res) => {
   try {
-    const data = await providerGrowthService.getWebsiteBySlug(req.params.slug, req.user?._id, professionalService);
+    const data = await providerWebsiteService.getPublicWebsiteBySlug(req.params.slug, req.user?._id);
     if (!data) {
       return res.status(404).json({ success: false, message: 'Website not found' });
     }
 
     res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const getWebsiteManager = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.getManager(req.user._id);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const saveWebsiteManager = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.saveManager(req.user._id, req.body, req.files || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const updateWebsitePublishStatus = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.updatePublishStatus(req.user._id, req.body);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const createWebsiteInquiry = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.createInquiry(req.params.slug, req.body);
+    res.status(201).json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const createWebsiteBooking = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.createBooking(req.params.slug, req.body);
+    res.status(201).json({ success: true, data });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -316,6 +362,11 @@ module.exports = {
   submitVerification,
   getGrowthActivity,
   getWebsiteBySlug,
+  getWebsiteManager,
+  saveWebsiteManager,
+  updateWebsitePublishStatus,
+  createWebsiteInquiry,
+  createWebsiteBooking,
   detectProfession,
   getProfessions,
   getMyProfile,
