@@ -2,6 +2,7 @@ const express = require('express');
 const Joi = require('joi');
 const validationMiddleware = require('../middlewares/validationMiddleware');
 const adminService = require('../services/adminService');
+const approxLocationService = require('../services/approxLocationService');
 
 const router = express.Router();
 
@@ -39,6 +40,27 @@ router.post('/visit', validationMiddleware(trackVisitSchema), async (req, res) =
     });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/location/approx', async (req, res) => {
+  try {
+    const data = await approxLocationService.lookupApproximateLocation(getClientIp(req));
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    res.status(200).json({
+      success: true,
+      data: {
+        country: '',
+        state: '',
+        city: '',
+        town: '',
+        source: 'ip-approx'
+      }
+    });
   }
 });
 
