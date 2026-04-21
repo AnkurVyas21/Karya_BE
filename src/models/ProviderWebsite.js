@@ -4,7 +4,9 @@ const businessHourSchema = new mongoose.Schema({
   day: { type: String, default: '' },
   isOpen: { type: Boolean, default: true },
   openTime: { type: String, default: '' },
-  closeTime: { type: String, default: '' }
+  closeTime: { type: String, default: '' },
+  breakStartTime: { type: String, default: '' },
+  breakEndTime: { type: String, default: '' }
 }, { _id: false });
 
 const testimonialSchema = new mongoose.Schema({

@@ -642,7 +642,9 @@ class ProviderWebsiteService {
       day: cleanString(item.day) || DEFAULT_BUSINESS_HOURS[index]?.day || '',
       isOpen: cleanBoolean(item.isOpen, true),
       openTime: cleanString(item.openTime),
-      closeTime: cleanString(item.closeTime)
+      closeTime: cleanString(item.closeTime),
+      breakStartTime: cleanString(item.breakStartTime),
+      breakEndTime: cleanString(item.breakEndTime)
     })).slice(0, 7);
   }
 
