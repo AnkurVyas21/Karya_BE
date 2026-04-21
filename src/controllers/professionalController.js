@@ -232,6 +232,24 @@ const updateWebsitePublishStatus = async (req, res) => {
   }
 };
 
+const updateWebsiteLeadStatus = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.updateLeadStatus(req.user._id, req.params.id, req.body);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const updateWebsiteBookingStatus = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.updateBookingStatus(req.user._id, req.params.id, req.body);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const createWebsiteInquiry = async (req, res) => {
   try {
     const data = await providerWebsiteService.createInquiry(req.params.slug, req.body, req.user?._id);
@@ -379,6 +397,8 @@ module.exports = {
   getWebsiteManager,
   saveWebsiteManager,
   updateWebsitePublishStatus,
+  updateWebsiteLeadStatus,
+  updateWebsiteBookingStatus,
   createWebsiteInquiry,
   createWebsiteBooking,
   detectProfession,

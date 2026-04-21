@@ -17,6 +17,8 @@ const {
   getWebsiteManager,
   saveWebsiteManager,
   updateWebsitePublishStatus,
+  updateWebsiteLeadStatus,
+  updateWebsiteBookingStatus,
   createWebsiteInquiry,
   createWebsiteBooking,
   detectProfession,
@@ -64,6 +66,8 @@ router.put(
   saveWebsiteManager
 );
 router.patch('/growth/website-manager/publish', authMiddleware, roleMiddleware(['professional']), updateWebsitePublishStatus);
+router.patch('/growth/website-manager/leads/:id', authMiddleware, roleMiddleware(['professional']), updateWebsiteLeadStatus);
+router.patch('/growth/website-manager/bookings/:id', authMiddleware, roleMiddleware(['professional']), updateWebsiteBookingStatus);
 router.post(
   '/growth/verification',
   authMiddleware,

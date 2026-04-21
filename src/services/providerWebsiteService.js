@@ -429,6 +429,45 @@ class ProviderWebsiteService {
     };
   }
 
+  async updateLeadStatus(userId, leadId, payload = {}) {
+    const nextStatus = cleanString(payload.status);
+    const allowedStatuses = ['new', 'contacted', 'qualified', 'closed'];
+    if (!allowedStatuses.includes(nextStatus)) {
+      throw new Error('Invalid lead status');
+    }
+
+    const lead = await ProviderLead.findOne({ _id: leadId, providerId: userId });
+    if (!lead) {
+      throw new Error('Lead not found');
+    }
+
+    lead.status = nextStatus;
+    if ('notes' in payload) {
+      lead.notes = cleanString(payload.notes);
+    }
+    await lead.save();
+
+    return this.getManager(userId);
+  }
+
+  async updateBookingStatus(userId, bookingId, payload = {}) {
+    const nextStatus = cleanString(payload.status);
+    const allowedStatuses = ['new', 'confirmed', 'completed', 'cancelled'];
+    if (!allowedStatuses.includes(nextStatus)) {
+      throw new Error('Invalid booking status');
+    }
+
+    const booking = await ProviderBooking.findOne({ _id: bookingId, providerId: userId });
+    if (!booking) {
+      throw new Error('Booking not found');
+    }
+
+    booking.status = nextStatus;
+    await booking.save();
+
+    return this.getManager(userId);
+  }
+
   async getOrCreateWebsite(userId) {
     const [user, profile, state] = await Promise.all([
       User.findById(userId).lean(),
