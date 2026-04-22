@@ -2,9 +2,8 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
-const fs = require('fs');
 const path = require('path');
-const { resolveUploadFile, getUploadSearchPaths } = require('./utils/uploadPaths');
+const mediaStorageService = require('./services/mediaStorageService');
 
 const app = express();
 const mimeTypesByExtension = {
@@ -76,27 +75,26 @@ app.use(rateLimit({
   max: 100,
   skip: (req) => req.path === '/api/messages/stream' || req.path === '/api/auth/login'
 }));
-app.get('/uploads/:filename', (req, res, next) => {
-  const filename = path.basename(req.params.filename || '');
-  const candidatePaths = getUploadSearchPaths(filename);
-  const filePath = resolveUploadFile(filename);
+app.get('/uploads/*', async (req, res, next) => {
+  const requestedKey = String(req.params[0] || '').trim();
+  const normalizedKey = mediaStorageService.normalizeRequestedKey(requestedKey);
 
-  if (!filename || candidatePaths.length === 0 || !candidatePaths.includes(filePath)) {
+  if (!normalizedKey) {
     return res.status(400).json({ success: false, message: 'Invalid file path' });
   }
 
-  fs.readFile(filePath, (error, fileBuffer) => {
-    if (error) {
-      if (error.code === 'ENOENT') {
-        return res.status(404).json({ success: false, message: 'File not found' });
-      }
-      return next(error);
+  try {
+    const storedObject = await mediaStorageService.getStoredObject(normalizedKey);
+    if (!storedObject?.body) {
+      return res.status(404).json({ success: false, message: 'File not found' });
     }
 
-    res.setHeader('Content-Type', detectMimeType(fileBuffer, filename));
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    res.send(fileBuffer);
-  });
+    res.setHeader('Content-Type', storedObject.contentType || detectMimeType(storedObject.body, path.basename(normalizedKey)));
+    res.setHeader('Cache-Control', storedObject.cacheControl || 'public, max-age=86400');
+    res.send(storedObject.body);
+  } catch (error) {
+    next(error);
+  }
 });
 
 // Routes

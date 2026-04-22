@@ -4,6 +4,7 @@ const multer = require('multer');
 const validationMiddleware = require('../middlewares/validationMiddleware');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
+const persistUploadedFiles = require('../middlewares/persistUploadedFiles');
 const advertisementCreativeService = require('../services/advertisementCreativeService');
 const { getUploadDestination } = require('../utils/uploadPaths');
 
@@ -92,6 +93,7 @@ router.post(
   authMiddleware,
   roleMiddleware(['professional']),
   upload.single('image'),
+  persistUploadedFiles,
   validationMiddleware(createCreativeSchema),
   async (req, res) => {
     try {

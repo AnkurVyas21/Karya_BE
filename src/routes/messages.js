@@ -3,6 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
 const { getUploadDestination } = require('../utils/uploadPaths');
+const persistUploadedFiles = require('../middlewares/persistUploadedFiles');
 const authMiddleware = require('../middlewares/authMiddleware');
 const {
   getConversations,
@@ -33,7 +34,14 @@ const uploadMessageAttachments = (req, res, next) => {
     return;
   }
 
-  upload.array('attachments', 10)(req, res, next);
+  upload.array('attachments', 10)(req, res, (error) => {
+    if (error) {
+      next(error);
+      return;
+    }
+
+    persistUploadedFiles(req, res, next);
+  });
 };
 
 router.get('/stream', streamMessages);

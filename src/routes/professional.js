@@ -33,15 +33,16 @@ const {
 const authMiddleware = require('../middlewares/authMiddleware');
 const optionalAuthMiddleware = require('../middlewares/optionalAuthMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
+const persistUploadedFiles = require('../middlewares/persistUploadedFiles');
 const multer = require('multer');
 const { getUploadDestination } = require('../utils/uploadPaths');
 const upload = multer({ dest: getUploadDestination() });
 
 const router = express.Router();
 
-router.post('/profile', authMiddleware, roleMiddleware(['professional']), upload.fields([{ name: 'profilePicture', maxCount: 1 }, { name: 'certificates', maxCount: 5 }]), createProfile);
+router.post('/profile', authMiddleware, roleMiddleware(['professional']), upload.fields([{ name: 'profilePicture', maxCount: 1 }, { name: 'certificates', maxCount: 5 }]), persistUploadedFiles, createProfile);
 router.get('/profile', authMiddleware, roleMiddleware(['professional', 'admin']), getMyProfile);
-router.put('/profile', authMiddleware, roleMiddleware(['professional', 'admin']), upload.fields([{ name: 'profilePicture', maxCount: 1 }, { name: 'certificates', maxCount: 5 }]), updateProfile);
+router.put('/profile', authMiddleware, roleMiddleware(['professional', 'admin']), upload.fields([{ name: 'profilePicture', maxCount: 1 }, { name: 'certificates', maxCount: 5 }]), persistUploadedFiles, updateProfile);
 router.get('/dashboard/summary', authMiddleware, roleMiddleware(['professional', 'admin']), getDashboardSummary);
 router.get('/growth/dashboard', authMiddleware, roleMiddleware(['professional', 'admin']), getGrowthDashboard);
 router.get('/growth/activity', authMiddleware, roleMiddleware(['professional', 'admin']), getGrowthActivity);
@@ -52,6 +53,7 @@ router.put(
   authMiddleware,
   roleMiddleware(['professional']),
   upload.fields([{ name: 'websiteImages', maxCount: 8 }, { name: 'websiteVideos', maxCount: 3 }, { name: 'backgroundAudio', maxCount: 1 }]),
+  persistUploadedFiles,
   updateWebsiteProfile
 );
 router.put(
@@ -64,6 +66,7 @@ router.put(
     { name: 'galleryImages', maxCount: 12 },
     { name: 'galleryVideos', maxCount: 6 }
   ]),
+  persistUploadedFiles,
   saveWebsiteManager
 );
 router.patch('/growth/website-manager/publish', authMiddleware, roleMiddleware(['professional']), updateWebsitePublishStatus);
@@ -74,6 +77,7 @@ router.post(
   authMiddleware,
   roleMiddleware(['professional']),
   upload.fields([{ name: 'aadhaarDocument', maxCount: 1 }, { name: 'panDocument', maxCount: 1 }]),
+  persistUploadedFiles,
   submitVerification
 );
 router.get('/professions', getProfessions);

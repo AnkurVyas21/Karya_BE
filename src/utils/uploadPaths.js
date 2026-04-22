@@ -4,6 +4,19 @@ const path = require('path');
 const primaryUploadsDir = path.resolve(__dirname, '..', '..', 'uploads');
 const legacyUploadsDir = path.resolve(process.cwd(), 'uploads');
 
+const normalizeUploadKey = (value = '') => {
+  const normalized = String(value || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .trim();
+
+  if (!normalized || normalized.includes('..')) {
+    return '';
+  }
+
+  return normalized;
+};
+
 const ensureUploadsDir = () => {
   if (!fs.existsSync(primaryUploadsDir)) {
     fs.mkdirSync(primaryUploadsDir, { recursive: true });
@@ -13,9 +26,9 @@ const ensureUploadsDir = () => {
 
 const getUploadDestination = () => ensureUploadsDir();
 
-const getUploadSearchPaths = (filename = '') => {
-  const safeFilename = path.basename(filename || '');
-  if (!safeFilename) {
+const getUploadSearchPaths = (key = '') => {
+  const normalizedKey = normalizeUploadKey(key);
+  if (!normalizedKey) {
     return [];
   }
 
@@ -24,11 +37,11 @@ const getUploadSearchPaths = (filename = '') => {
     roots.push(legacyUploadsDir);
   }
 
-  return roots.map((root) => path.join(root, safeFilename));
+  return roots.map((root) => path.resolve(root, normalizedKey));
 };
 
-const resolveUploadFile = (filename = '') => {
-  const matches = getUploadSearchPaths(filename);
+const resolveUploadFile = (key = '') => {
+  const matches = getUploadSearchPaths(key);
   for (const filePath of matches) {
     if (fs.existsSync(filePath)) {
       return filePath;
@@ -40,5 +53,6 @@ const resolveUploadFile = (filename = '') => {
 module.exports = {
   getUploadDestination,
   getUploadSearchPaths,
+  normalizeUploadKey,
   resolveUploadFile
 };
