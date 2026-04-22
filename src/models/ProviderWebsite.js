@@ -30,6 +30,28 @@ const bookingSlotSchema = new mongoose.Schema({
   isActive: { type: Boolean, default: true }
 }, { _id: true });
 
+const websitePaymentFlowSchema = new mongoose.Schema({
+  enabled: { type: Boolean, default: true },
+  paymentModel: {
+    type: String,
+    enum: ['without-online-payment', 'payment-only', 'both'],
+    default: 'without-online-payment'
+  },
+  paymentMethods: [{
+    type: String,
+    enum: ['manual-upi', 'gateway']
+  }],
+  gatewayFeeBearer: {
+    type: String,
+    enum: ['provider', 'customer'],
+    default: 'customer'
+  },
+  gatewayFeePercent: { type: Number, default: 3 },
+  paymentInstructions: { type: String, default: '' },
+  paymentLabel: { type: String, default: '' },
+  chargeAmount: { type: Number, default: 0 }
+}, { _id: false });
+
 const providerWebsiteSchema = new mongoose.Schema({
   providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
   isPurchased: { type: Boolean, default: false },
@@ -85,6 +107,8 @@ const providerWebsiteSchema = new mongoose.Schema({
   advanceBookingFeeEnabled: { type: Boolean, default: false },
   bookingFeeAmount: { type: Number, default: 0 },
   paymentInstructions: { type: String, default: '' },
+  bookingFlow: { type: websitePaymentFlowSchema, default: () => ({}) },
+  productFlow: { type: websitePaymentFlowSchema, default: () => ({ enabled: false }) },
   faqs: [faqSchema],
   testimonials: [testimonialSchema],
   featuredServiceTitle: { type: String, default: '' },

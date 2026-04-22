@@ -19,9 +19,13 @@ const {
   updateWebsitePublishStatus,
   updateWebsiteLeadStatus,
   updateWebsiteBookingStatus,
+  updateWebsiteBookingPayment,
+  updateWebsiteOrderStatus,
+  updateWebsiteOrderPayment,
   deleteProviderAdvertisement,
   createWebsiteInquiry,
   createWebsiteBooking,
+  createWebsiteProductOrder,
   detectProfession,
   getProfessions,
   getMyProfile,
@@ -73,6 +77,9 @@ router.put(
 router.patch('/growth/website-manager/publish', authMiddleware, roleMiddleware(['professional']), updateWebsitePublishStatus);
 router.patch('/growth/website-manager/leads/:id', authMiddleware, roleMiddleware(['professional']), updateWebsiteLeadStatus);
 router.patch('/growth/website-manager/bookings/:id', authMiddleware, roleMiddleware(['professional']), updateWebsiteBookingStatus);
+router.patch('/growth/website-manager/bookings/:id/payment', authMiddleware, roleMiddleware(['professional']), updateWebsiteBookingPayment);
+router.patch('/growth/website-manager/orders/:id', authMiddleware, roleMiddleware(['professional']), updateWebsiteOrderStatus);
+router.patch('/growth/website-manager/orders/:id/payment', authMiddleware, roleMiddleware(['professional']), updateWebsiteOrderPayment);
 router.delete('/growth/advertisements/:id', authMiddleware, roleMiddleware(['professional']), deleteProviderAdvertisement);
 router.post(
   '/growth/verification',
@@ -91,6 +98,7 @@ router.get('/website/preview/:slug', authMiddleware, roleMiddleware(['profession
 router.get('/website/:slug', optionalAuthMiddleware, getWebsiteBySlug);
 router.post('/website/:slug/inquiries', optionalAuthMiddleware, createWebsiteInquiry);
 router.post('/website/:slug/bookings', optionalAuthMiddleware, createWebsiteBooking);
+router.post('/website/:slug/orders', optionalAuthMiddleware, createWebsiteProductOrder);
 router.get('/:id/ratings', getRatings);
 router.get('/:id', getProfile);
 router.post('/review', authMiddleware, createReview);

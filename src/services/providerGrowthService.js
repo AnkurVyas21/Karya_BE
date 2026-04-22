@@ -2,6 +2,7 @@ const ProviderGrowth = require('../models/ProviderGrowth');
 const User = require('../models/User');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
 const AdvertisementCreative = require('../models/AdvertisementCreative');
+const WebsiteTransaction = require('../models/WebsiteTransaction');
 const logger = require('../utils/logger');
 const advertisementCreativeService = require('./advertisementCreativeService');
 
@@ -583,7 +584,10 @@ class ProviderGrowthService {
   }
 
   async getActivity(userId) {
-    const state = await this.getOrCreateState(userId);
+    const [state, transactions] = await Promise.all([
+      this.getOrCreateState(userId),
+      WebsiteTransaction.find({ providerId: userId }).sort({ createdAt: -1 }).lean()
+    ]);
     const items = [];
 
     if (state.boost?.startDate) {
@@ -636,6 +640,21 @@ class ProviderGrowthService {
         reason: cleanString(state.verification.rejectionReason)
       });
     }
+
+    transactions.forEach((transaction) => {
+      items.push({
+        id: transaction._id.toString(),
+        type: transaction.contextType === 'booking' ? 'booking-payment' : 'product-order-payment',
+        label: transaction.contextLabel || 'Website payment',
+        amount: Number(transaction.amountBreakdown?.totalAmount || 0),
+        status: transaction.paymentStatus,
+        createdAt: transaction.createdAt,
+        receiptNumber: cleanString(transaction.receipt?.receiptNumber),
+        paymentChannel: cleanString(transaction.paymentChannel),
+        refundStatus: cleanString(transaction.refundStatus),
+        reason: cleanString(transaction.refund?.note || transaction.manualPayment?.verificationNote)
+      });
+    });
 
     items.sort((left, right) => new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime());
 

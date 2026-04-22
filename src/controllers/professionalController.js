@@ -250,6 +250,33 @@ const updateWebsiteBookingStatus = async (req, res) => {
   }
 };
 
+const updateWebsiteBookingPayment = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.updateBookingPayment(req.user._id, req.params.id, req.body);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const updateWebsiteOrderStatus = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.updateOrderStatus(req.user._id, req.params.id, req.body);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const updateWebsiteOrderPayment = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.updateOrderPayment(req.user._id, req.params.id, req.body);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const deleteProviderAdvertisement = async (req, res) => {
   try {
     const data = await providerGrowthService.deleteAdvertisement(req.user._id, req.params.id);
@@ -271,6 +298,15 @@ const createWebsiteInquiry = async (req, res) => {
 const createWebsiteBooking = async (req, res) => {
   try {
     const data = await providerWebsiteService.createBooking(req.params.slug, req.body, req.user?._id);
+    res.status(201).json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const createWebsiteProductOrder = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.createProductOrder(req.params.slug, req.body, req.user?._id);
     res.status(201).json({ success: true, data });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -408,9 +444,13 @@ module.exports = {
   updateWebsitePublishStatus,
   updateWebsiteLeadStatus,
   updateWebsiteBookingStatus,
+  updateWebsiteBookingPayment,
+  updateWebsiteOrderStatus,
+  updateWebsiteOrderPayment,
   deleteProviderAdvertisement,
   createWebsiteInquiry,
   createWebsiteBooking,
+  createWebsiteProductOrder,
   detectProfession,
   getProfessions,
   getMyProfile,

@@ -3,10 +3,12 @@ const ProviderGrowth = require('../models/ProviderGrowth');
 const ProviderWebsite = require('../models/ProviderWebsite');
 const ProviderServiceModel = require('../models/ProviderService');
 const ProviderProduct = require('../models/ProviderProduct');
+const ProviderProductOrder = require('../models/ProviderProductOrder');
 const ProviderArticle = require('../models/ProviderArticle');
 const ProviderOffer = require('../models/ProviderOffer');
 const ProviderLead = require('../models/ProviderLead');
 const ProviderBooking = require('../models/ProviderBooking');
+const WebsiteTransaction = require('../models/WebsiteTransaction');
 const notificationService = require('./notificationService');
 const ProviderThemeConfig = require('../models/ProviderThemeConfig');
 const ProviderSEOConfig = require('../models/ProviderSEOConfig');
@@ -15,6 +17,8 @@ const Review = require('../models/Review');
 const User = require('../models/User');
 const logger = require('../utils/logger');
 const providerGrowthService = require('./providerGrowthService');
+const websitePaymentService = require('./websitePaymentService');
+const receiptEmailService = require('./receiptEmailService');
 
 const DEFAULT_BUSINESS_HOURS = [
   { day: 'Monday', isOpen: true, openTime: '09:00', closeTime: '18:00' },
@@ -102,6 +106,18 @@ const getWeekdayForDate = (dateString = '') => {
   const noonUtc = new Date(`${dateString}T12:00:00Z`);
   return new Intl.DateTimeFormat('en-US', { timeZone: INDIA_TIME_ZONE, weekday: 'long' }).format(noonUtc);
 };
+const resolvePriceForService = (service = {}, fallbackAmount = 0) => {
+  const price = cleanNumber(service?.price, 0);
+  return price > 0 ? price : cleanNumber(fallbackAmount, 0);
+};
+const toReceiptPayload = (transaction, providerName = '') => ({
+  receiptNumber: transaction?.receipt?.receiptNumber || '',
+  contextLabel: cleanString(transaction?.contextLabel),
+  paymentChannel: cleanString(transaction?.paymentChannel),
+  totalAmount: cleanNumber(transaction?.amountBreakdown?.totalAmount, 0),
+  issuedAt: transaction?.receipt?.issuedAt,
+  providerName: cleanString(providerName)
+});
 
 class ProviderWebsiteService {
   async getManager(userId) {
@@ -202,6 +218,17 @@ class ProviderWebsiteService {
     website.advanceBookingFeeEnabled = cleanBoolean(payload.advanceBookingFeeEnabled, false);
     website.bookingFeeAmount = cleanNumber(payload.bookingFeeAmount, 0);
     website.paymentInstructions = cleanString(payload.paymentInstructions);
+    const paymentSettings = websitePaymentService.normalizeWebsitePaymentSettings(payload, website);
+    website.bookingFlow = {
+      ...paymentSettings.bookingFlow,
+      chargeAmount: paymentSettings.bookingFlow.chargeAmount || website.bookingFeeAmount || 0,
+      paymentInstructions: paymentSettings.bookingFlow.paymentInstructions || website.paymentInstructions || ''
+    };
+    website.productFlow = {
+      ...paymentSettings.productFlow,
+      enabled: cleanBoolean(paymentSettings.productFlow.enabled, website.productsEnabled),
+      paymentInstructions: paymentSettings.productFlow.paymentInstructions || website.paymentInstructions || ''
+    };
     website.faqs = faqs;
     website.testimonials = testimonials;
     website.featuredServiceTitle = cleanString(payload.featuredServiceTitle);
@@ -431,6 +458,9 @@ class ProviderWebsiteService {
     }
 
     const website = await ProviderWebsite.findOne({ slug: slugify(slug) });
+    const selectedService = payload.serviceId
+      ? await ProviderServiceModel.findOne({ _id: payload.serviceId, providerId: website.providerId }).lean()
+      : null;
     const matchingSlot = (website.bookingSlots || []).find((slot) => slot?.isActive !== false && `${slot.startTime} - ${slot.endTime}` === bookingTime);
     if (!matchingSlot) {
       throw new Error('Choose an available booking time slot');
@@ -469,20 +499,96 @@ class ProviderWebsiteService {
       throw new Error('This time slot is no longer available today');
     }
 
+    const bookingFlow = websitePaymentService.normalizeFlowConfig(website.bookingFlow || {}, {
+      enabled: true,
+      paymentModel: website.advanceBookingFeeEnabled ? 'payment-only' : 'without-online-payment',
+      paymentMethods: website.upiId ? ['manual-upi'] : [],
+      gatewayFeeBearer: 'customer',
+      chargeAmount: cleanNumber(website.bookingFeeAmount, 0),
+      paymentInstructions: website.paymentInstructions || ''
+    });
+    const baseAmount = resolvePriceForService(selectedService, bookingFlow.chargeAmount || publicWebsite.website.advanceFeeAmount || 0);
+    const paymentChoice = websitePaymentService.resolveCustomerPaymentChoice(bookingFlow, payload.paymentChoice);
+    if (paymentChoice === 'gateway' && !websitePaymentService.isGatewayConfigured()) {
+      throw new Error('Online gateway payment is not connected yet. Choose manual UPI payment or pay later.');
+    }
+    if (paymentChoice === 'manual-upi' && !cleanString(payload.payerTransactionId)) {
+      throw new Error('Enter the UPI transaction ID after payment');
+    }
+
+    const paymentChannel = paymentChoice === 'pay-later' ? 'none' : paymentChoice;
+    const amountBreakdown = paymentChoice === 'gateway'
+      ? websitePaymentService.calculateGatewayAmounts(baseAmount, bookingFlow.gatewayFeeBearer)
+      : websitePaymentService.calculateManualAmounts(baseAmount);
+    const paymentStatus = paymentChoice === 'pay-later'
+      ? 'not-required'
+      : paymentChoice === 'manual-upi'
+        ? 'verification-pending'
+        : 'pending';
+
     const booking = await ProviderBooking.create({
       providerId: website.providerId,
       websiteId: website._id,
+      customerUserId: actorUserId || null,
       customerName: cleanString(payload.customerName),
       customerPhone: normalizeIndianPhone(payload.customerPhone),
+      customerEmail: cleanString(payload.customerEmail),
       serviceId: payload.serviceId || null,
+      serviceTitle: cleanString(selectedService?.title),
       bookingDate,
       bookingTime,
       message: cleanString(payload.message),
-      advanceFeeRequired: Boolean(publicWebsite.website.advanceFeeRequired),
-      advanceFeeAmount: Number(publicWebsite.website.advanceFeeAmount || 0),
-      paymentStatus: 'pending',
+      advanceFeeRequired: paymentChoice !== 'pay-later' && amountBreakdown.totalAmount > 0,
+      advanceFeeAmount: Number(amountBreakdown.totalAmount || 0),
+      paymentChoice,
+      paymentChannel,
+      paymentStatus,
       status: 'new'
     });
+
+    let transaction = null;
+    if (paymentChoice !== 'pay-later' && amountBreakdown.totalAmount > 0) {
+      const manualPayment = paymentChoice === 'manual-upi'
+        ? await websitePaymentService.buildManualPaymentArtifacts({
+          upiId: website.upiId,
+          payeeName: website.businessName || publicWebsite.fullName || 'Provider',
+          amount: amountBreakdown.totalAmount,
+          note: `${website.businessName || 'Booking'} ${booking._id.toString().slice(-6)}`,
+          paymentInstructions: bookingFlow.paymentInstructions || website.paymentInstructions || ''
+        })
+        : {};
+      if (paymentChoice === 'manual-upi') {
+        manualPayment.payerTransactionId = cleanString(payload.payerTransactionId);
+        manualPayment.submittedAt = new Date();
+      }
+
+      transaction = await WebsiteTransaction.create({
+        providerId: website.providerId,
+        websiteId: website._id,
+        customerUserId: actorUserId || null,
+        customerName: cleanString(payload.customerName),
+        customerPhone: normalizeIndianPhone(payload.customerPhone),
+        customerEmail: cleanString(payload.customerEmail),
+        contextType: 'booking',
+        contextId: booking._id,
+        contextLabel: cleanString(selectedService?.title) || 'Website booking',
+        paymentChannel,
+        paymentStatus,
+        amountBreakdown: {
+          ...amountBreakdown,
+          feeBearer: bookingFlow.gatewayFeeBearer
+        },
+        gateway: paymentChoice === 'gateway' ? {
+          provider: websitePaymentService.buildGatewayMeta().provider,
+          status: 'pending',
+          feePercent: bookingFlow.gatewayFeePercent || 3
+        } : undefined,
+        manualPayment
+      });
+
+      booking.transactionId = transaction._id;
+      await booking.save();
+    }
 
     await notificationService.createNotification({
       userId: website.providerId,
@@ -492,7 +598,8 @@ class ProviderWebsiteService {
       linkPath: '/provider/website',
       metadata: {
         bookingId: booking._id.toString(),
-        slug: website.slug
+        slug: website.slug,
+        transactionId: transaction?._id?.toString?.() || ''
       }
     });
 
@@ -515,7 +622,140 @@ class ProviderWebsiteService {
       id: booking._id.toString(),
       status: booking.status,
       paymentStatus: booking.paymentStatus,
-      createdAt: booking.createdAt
+      paymentChoice: booking.paymentChoice,
+      createdAt: booking.createdAt,
+      transaction: transaction ? this.serializeTransaction(transaction) : null
+    };
+  }
+
+  async createProductOrder(slug, payload = {}, actorUserId = null) {
+    const publicWebsite = await this.getPublicWebsiteBySlug(slug);
+    if (!publicWebsite) {
+      throw new Error('Business page not found');
+    }
+    if (!publicWebsite.website?.productsEnabled || publicWebsite.website?.productFlow?.enabled === false) {
+      throw new Error('Product orders are not enabled for this business page');
+    }
+    if (!cleanString(payload.customerName)) {
+      throw new Error('Customer name is required');
+    }
+    if (!isValidIndianPhone(payload.customerPhone)) {
+      throw new Error('Enter a valid 10-digit mobile number');
+    }
+
+    const website = await ProviderWebsite.findOne({ slug: slugify(slug) });
+    const product = await ProviderProduct.findOne({ _id: payload.productId, providerId: website.providerId, isActive: true }).lean();
+    if (!product) {
+      throw new Error('Product not found');
+    }
+
+    const productFlow = websitePaymentService.normalizeFlowConfig(website.productFlow || {}, {
+      enabled: website.productsEnabled,
+      paymentModel: 'without-online-payment',
+      paymentMethods: website.upiId ? ['manual-upi'] : [],
+      gatewayFeeBearer: 'customer',
+      chargeAmount: 0,
+      paymentInstructions: website.paymentInstructions || ''
+    });
+    const quantity = Math.max(1, Math.min(cleanNumber(payload.quantity, 1), 20));
+    const unitAmount = cleanNumber(product.discountedPrice || product.price, 0);
+    const baseAmount = unitAmount * quantity;
+    const paymentChoice = websitePaymentService.resolveCustomerPaymentChoice(productFlow, payload.paymentChoice);
+    if (paymentChoice === 'gateway' && !websitePaymentService.isGatewayConfigured()) {
+      throw new Error('Online gateway payment is not connected yet. Choose manual UPI payment or pay later.');
+    }
+    if (paymentChoice === 'manual-upi' && !cleanString(payload.payerTransactionId)) {
+      throw new Error('Enter the UPI transaction ID after payment');
+    }
+
+    const paymentChannel = paymentChoice === 'pay-later' ? 'none' : paymentChoice;
+    const amountBreakdown = paymentChoice === 'gateway'
+      ? websitePaymentService.calculateGatewayAmounts(baseAmount, productFlow.gatewayFeeBearer)
+      : websitePaymentService.calculateManualAmounts(baseAmount);
+    const paymentStatus = paymentChoice === 'pay-later'
+      ? 'not-required'
+      : paymentChoice === 'manual-upi'
+        ? 'verification-pending'
+        : 'pending';
+
+    const order = await ProviderProductOrder.create({
+      providerId: website.providerId,
+      websiteId: website._id,
+      productId: product._id,
+      customerUserId: actorUserId || null,
+      customerName: cleanString(payload.customerName),
+      customerPhone: normalizeIndianPhone(payload.customerPhone),
+      customerEmail: cleanString(payload.customerEmail),
+      productTitle: cleanString(product.title),
+      quantity,
+      unitAmount,
+      message: cleanString(payload.message),
+      status: 'new',
+      paymentStatus,
+      paymentChannel,
+      totalAmount: amountBreakdown.totalAmount
+    });
+
+    let transaction = null;
+    if (paymentChoice !== 'pay-later' && amountBreakdown.totalAmount > 0) {
+      const manualPayment = paymentChoice === 'manual-upi'
+        ? await websitePaymentService.buildManualPaymentArtifacts({
+          upiId: website.upiId,
+          payeeName: website.businessName || publicWebsite.fullName || 'Provider',
+          amount: amountBreakdown.totalAmount,
+          note: `${product.title} ${order._id.toString().slice(-6)}`,
+          paymentInstructions: productFlow.paymentInstructions || website.paymentInstructions || ''
+        })
+        : {};
+      if (paymentChoice === 'manual-upi') {
+        manualPayment.payerTransactionId = cleanString(payload.payerTransactionId);
+        manualPayment.submittedAt = new Date();
+      }
+
+      transaction = await WebsiteTransaction.create({
+        providerId: website.providerId,
+        websiteId: website._id,
+        customerUserId: actorUserId || null,
+        customerName: cleanString(payload.customerName),
+        customerPhone: normalizeIndianPhone(payload.customerPhone),
+        customerEmail: cleanString(payload.customerEmail),
+        contextType: 'product-order',
+        contextId: order._id,
+        contextLabel: cleanString(product.title),
+        paymentChannel,
+        paymentStatus,
+        amountBreakdown: {
+          ...amountBreakdown,
+          feeBearer: productFlow.gatewayFeeBearer
+        },
+        gateway: paymentChoice === 'gateway' ? {
+          provider: websitePaymentService.buildGatewayMeta().provider,
+          status: 'pending',
+          feePercent: productFlow.gatewayFeePercent || 3
+        } : undefined,
+        manualPayment
+      });
+    }
+
+    await notificationService.createNotification({
+      userId: website.providerId,
+      type: 'order',
+      title: 'New product order',
+      body: `${cleanString(payload.customerName) || 'A customer'} placed an order for ${product.title}.`,
+      linkPath: '/provider/website',
+      metadata: {
+        orderId: order._id.toString(),
+        slug: website.slug,
+        transactionId: transaction?._id?.toString?.() || ''
+      }
+    });
+
+    return {
+      id: order._id.toString(),
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      createdAt: order.createdAt,
+      transaction: transaction ? this.serializeTransaction(transaction) : null
     };
   }
 
@@ -558,6 +798,116 @@ class ProviderWebsiteService {
     return this.getManager(userId);
   }
 
+  async updateBookingPayment(userId, bookingId, payload = {}) {
+    const booking = await ProviderBooking.findOne({ _id: bookingId, providerId: userId });
+    if (!booking) {
+      throw new Error('Booking not found');
+    }
+    const transaction = booking.transactionId ? await WebsiteTransaction.findById(booking.transactionId) : null;
+    if (!transaction) {
+      throw new Error('Payment record not found for this booking');
+    }
+
+    const action = cleanString(payload.action);
+    if (!['verify', 'refund', 'fail'].includes(action)) {
+      throw new Error('Invalid payment action');
+    }
+
+    if (action === 'verify') {
+      transaction.paymentStatus = 'paid';
+      transaction.manualPayment.payerTransactionId = cleanString(payload.payerTransactionId || transaction.manualPayment?.payerTransactionId);
+      transaction.manualPayment.verificationNote = cleanString(payload.note);
+      transaction.manualPayment.verifiedAt = new Date();
+      transaction.manualPayment.verifiedBy = userId;
+      transaction.receipt.receiptNumber = transaction.receipt.receiptNumber || websitePaymentService.buildReceiptNumber('BK');
+      transaction.receipt.issuedAt = new Date();
+      booking.paymentStatus = 'paid';
+      booking.status = booking.status === 'new' ? 'confirmed' : booking.status;
+      await Promise.all([transaction.save(), booking.save()]);
+      await this.sendReceiptEmails(userId, transaction);
+    } else if (action === 'refund') {
+      transaction.paymentStatus = 'refunded';
+      transaction.refundStatus = 'processed';
+      transaction.refund.processedAt = new Date();
+      transaction.refund.amount = cleanNumber(payload.amount, transaction.amountBreakdown?.totalAmount || 0);
+      transaction.refund.reference = cleanString(payload.reference);
+      transaction.refund.note = cleanString(payload.note);
+      booking.paymentStatus = 'refunded';
+      await Promise.all([transaction.save(), booking.save()]);
+    } else {
+      transaction.paymentStatus = 'failed';
+      transaction.manualPayment.verificationNote = cleanString(payload.note);
+      booking.paymentStatus = 'failed';
+      await Promise.all([transaction.save(), booking.save()]);
+    }
+
+    return this.getManager(userId);
+  }
+
+  async updateOrderStatus(userId, orderId, payload = {}) {
+    const nextStatus = cleanString(payload.status);
+    const allowedStatuses = ['new', 'confirmed', 'completed', 'cancelled'];
+    if (!allowedStatuses.includes(nextStatus)) {
+      throw new Error('Invalid order status');
+    }
+
+    const order = await ProviderProductOrder.findOne({ _id: orderId, providerId: userId });
+    if (!order) {
+      throw new Error('Order not found');
+    }
+
+    order.status = nextStatus;
+    await order.save();
+
+    return this.getManager(userId);
+  }
+
+  async updateOrderPayment(userId, orderId, payload = {}) {
+    const order = await ProviderProductOrder.findOne({ _id: orderId, providerId: userId });
+    if (!order) {
+      throw new Error('Order not found');
+    }
+    const transaction = await WebsiteTransaction.findOne({ providerId: userId, contextType: 'product-order', contextId: order._id });
+    if (!transaction) {
+      throw new Error('Payment record not found for this order');
+    }
+
+    const action = cleanString(payload.action);
+    if (!['verify', 'refund', 'fail'].includes(action)) {
+      throw new Error('Invalid payment action');
+    }
+
+    if (action === 'verify') {
+      transaction.paymentStatus = 'paid';
+      transaction.manualPayment.payerTransactionId = cleanString(payload.payerTransactionId || transaction.manualPayment?.payerTransactionId);
+      transaction.manualPayment.verificationNote = cleanString(payload.note);
+      transaction.manualPayment.verifiedAt = new Date();
+      transaction.manualPayment.verifiedBy = userId;
+      transaction.receipt.receiptNumber = transaction.receipt.receiptNumber || websitePaymentService.buildReceiptNumber('OR');
+      transaction.receipt.issuedAt = new Date();
+      order.paymentStatus = 'paid';
+      order.status = order.status === 'new' ? 'confirmed' : order.status;
+      await Promise.all([transaction.save(), order.save()]);
+      await this.sendReceiptEmails(userId, transaction);
+    } else if (action === 'refund') {
+      transaction.paymentStatus = 'refunded';
+      transaction.refundStatus = 'processed';
+      transaction.refund.processedAt = new Date();
+      transaction.refund.amount = cleanNumber(payload.amount, transaction.amountBreakdown?.totalAmount || 0);
+      transaction.refund.reference = cleanString(payload.reference);
+      transaction.refund.note = cleanString(payload.note);
+      order.paymentStatus = 'refunded';
+      await Promise.all([transaction.save(), order.save()]);
+    } else {
+      transaction.paymentStatus = 'failed';
+      transaction.manualPayment.verificationNote = cleanString(payload.note);
+      order.paymentStatus = 'failed';
+      await Promise.all([transaction.save(), order.save()]);
+    }
+
+    return this.getManager(userId);
+  }
+
   async getOrCreateWebsite(userId) {
     const [user, profile, state] = await Promise.all([
       User.findById(userId).lean(),
@@ -593,6 +943,22 @@ class ProviderWebsiteService {
         productsEnabled: false,
         bookingEnabled: false,
         paymentsEnabled: false,
+        bookingFlow: {
+          enabled: true,
+          paymentModel: 'without-online-payment',
+          paymentMethods: [],
+          gatewayFeeBearer: 'customer',
+          gatewayFeePercent: 3,
+          chargeAmount: 0
+        },
+        productFlow: {
+          enabled: false,
+          paymentModel: 'without-online-payment',
+          paymentMethods: [],
+          gatewayFeeBearer: 'customer',
+          gatewayFeePercent: 3,
+          chargeAmount: 0
+        },
         offersEnabled: false,
         articlesEnabled: false,
         reviewsEnabled: true,
@@ -963,7 +1329,7 @@ class ProviderWebsiteService {
 
   async buildManagerResponse(userId, websiteDoc, options = {}) {
     const website = websiteDoc.toObject ? websiteDoc.toObject() : websiteDoc;
-    const [themeConfig, seoConfig, services, products, offers, articles, leads, bookings, profile, user, reviewSummary, leadCount, bookingCount] = await Promise.all([
+    const [themeConfig, seoConfig, services, products, offers, articles, leads, bookings, orders, transactions, profile, user, reviewSummary, leadCount, bookingCount] = await Promise.all([
       ProviderThemeConfig.findOne({ providerId: userId }).lean(),
       ProviderSEOConfig.findOne({ providerId: userId }).lean(),
       ProviderServiceModel.find({ providerId: userId }).sort({ sortOrder: 1, createdAt: 1 }).lean(),
@@ -972,6 +1338,8 @@ class ProviderWebsiteService {
       ProviderArticle.find({ providerId: userId }).sort({ createdAt: -1 }).lean(),
       ProviderLead.find({ providerId: userId }).sort({ createdAt: -1 }).limit(30).lean(),
       ProviderBooking.find({ providerId: userId }).sort({ createdAt: -1 }).limit(30).lean(),
+      ProviderProductOrder.find({ providerId: userId }).sort({ createdAt: -1 }).limit(30).lean(),
+      WebsiteTransaction.find({ providerId: userId }).sort({ createdAt: -1 }).limit(60).lean(),
       ProfessionalProfile.findOne({ user: userId }).lean(),
       User.findById(userId).lean(),
       options.reviewSummary ? Promise.resolve(options.reviewSummary) : this.getReviewSummary(userId),
@@ -1018,6 +1386,23 @@ class ProviderWebsiteService {
       },
       website: {
         ...website,
+        bookingFlow: websitePaymentService.normalizeFlowConfig(website.bookingFlow || {}, {
+          enabled: true,
+          paymentModel: website.advanceBookingFeeEnabled ? 'payment-only' : 'without-online-payment',
+          paymentMethods: website.upiId ? ['manual-upi'] : [],
+          gatewayFeeBearer: 'customer',
+          chargeAmount: website.bookingFeeAmount || 0,
+          paymentInstructions: website.paymentInstructions || ''
+        }),
+        productFlow: websitePaymentService.normalizeFlowConfig(website.productFlow || {}, {
+          enabled: website.productsEnabled,
+          paymentModel: 'without-online-payment',
+          paymentMethods: website.upiId ? ['manual-upi'] : [],
+          gatewayFeeBearer: 'customer',
+          chargeAmount: 0,
+          paymentInstructions: website.paymentInstructions || ''
+        }),
+        gatewayMeta: websitePaymentService.buildGatewayMeta(),
         phone: website.phone || cleanString(user?.mobile),
         email: website.email || cleanString(user?.email),
         category: website.category || cleanString(profile?.profession)
@@ -1028,6 +1413,8 @@ class ProviderWebsiteService {
       articles: articles.map((item) => ({ ...item, id: item._id.toString() })),
       leads: leads.map((item) => ({ ...item, id: item._id.toString() })),
       bookings: bookings.map((item) => ({ ...item, id: item._id.toString() })),
+      orders: orders.map((item) => ({ ...item, id: item._id.toString() })),
+      transactions: transactions.map((item) => this.serializeTransaction(item)),
       themeConfig: themeConfig || {},
       seoConfig: seoConfig || {},
       reviewSummary,
@@ -1095,6 +1482,7 @@ class ProviderWebsiteService {
         legacyPublicPath: website.slug ? `/provider/site/${website.slug}` : '',
         inquiryEndpoint: `/api/professional/website/${website.slug}/inquiries`,
         bookingEndpoint: `/api/professional/website/${website.slug}/bookings`,
+        orderEndpoint: `/api/professional/website/${website.slug}/orders`,
         services,
         products,
         offers: activeOffers,
@@ -1114,11 +1502,79 @@ class ProviderWebsiteService {
         advanceFeeRequired: Boolean(website.advanceBookingFeeEnabled),
         advanceFeeAmount: Number(website.bookingFeeAmount || 0),
         paymentInstructions: website.paymentInstructions || '',
+        bookingFlow: websitePaymentService.normalizeFlowConfig(website.bookingFlow || {}, {
+          enabled: true,
+          paymentModel: website.advanceBookingFeeEnabled ? 'payment-only' : 'without-online-payment',
+          paymentMethods: website.upiId ? ['manual-upi'] : [],
+          gatewayFeeBearer: 'customer',
+          chargeAmount: website.bookingFeeAmount || 0,
+          paymentInstructions: website.paymentInstructions || ''
+        }),
+        productFlow: websitePaymentService.normalizeFlowConfig(website.productFlow || {}, {
+          enabled: website.productsEnabled,
+          paymentModel: 'without-online-payment',
+          paymentMethods: website.upiId ? ['manual-upi'] : [],
+          gatewayFeeBearer: 'customer',
+          chargeAmount: 0,
+          paymentInstructions: website.paymentInstructions || ''
+        }),
+        gatewayMeta: websitePaymentService.buildGatewayMeta(),
         qrCodeDataUrl: website.slug
           ? await QRCode.toDataURL(`https://karya.local/business/${website.slug}`, { margin: 1, width: 180 })
           : ''
       }
     };
+  }
+
+  serializeTransaction(item) {
+    if (!item) {
+      return null;
+    }
+    return {
+      ...item,
+      id: item._id?.toString?.() || String(item.id || ''),
+      contextId: item.contextId?.toString?.() || String(item.contextId || ''),
+      providerId: item.providerId?.toString?.() || String(item.providerId || ''),
+      websiteId: item.websiteId?.toString?.() || String(item.websiteId || ''),
+      customerUserId: item.customerUserId?.toString?.() || String(item.customerUserId || '')
+    };
+  }
+
+  async sendReceiptEmails(providerUserId, transaction) {
+    if (!transaction?.receipt?.receiptNumber) {
+      return;
+    }
+
+    const provider = await User.findById(providerUserId).lean();
+    const recipients = [
+      cleanString(transaction.customerEmail),
+      cleanString(provider?.email)
+    ].filter(Boolean);
+    if (recipients.length === 0) {
+      return;
+    }
+
+    const receipt = toReceiptPayload(transaction, [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim());
+    const mailed = await receiptEmailService.sendReceipt({
+      to: recipients,
+      subject: `Receipt ${receipt.receiptNumber} for ${receipt.contextLabel || 'Website payment'}`,
+      html: `
+        <div style="font-family:Arial,sans-serif;line-height:1.5;color:#1f2937">
+          <h2 style="margin-bottom:12px">Payment receipt</h2>
+          <p>Receipt number: <strong>${receipt.receiptNumber}</strong></p>
+          <p>Item: <strong>${receipt.contextLabel || 'Website payment'}</strong></p>
+          <p>Payment method: <strong>${receipt.paymentChannel}</strong></p>
+          <p>Total paid: <strong>Rs ${receipt.totalAmount}</strong></p>
+          <p>Issued at: <strong>${receipt.issuedAt ? new Date(receipt.issuedAt).toLocaleString('en-IN') : ''}</strong></p>
+          <p>Provider: <strong>${receipt.providerName || 'Provider'}</strong></p>
+        </div>
+      `
+    });
+
+    if (mailed) {
+      transaction.receipt.emailedAt = new Date();
+      await transaction.save();
+    }
   }
 
   async buildPreviewResponse(userId, websiteSeed = null) {
