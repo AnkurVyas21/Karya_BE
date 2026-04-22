@@ -15,9 +15,12 @@ const advertisementCreativeSchema = new mongoose.Schema({
   imageWidth: { type: Number, default: 0 },
   imageHeight: { type: Number, default: 0 },
 
-  status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending', index: true },
+  status: { type: String, enum: ['pending', 'approved', 'rejected', 'deleted'], default: 'pending', index: true },
   rejectionReason: { type: String, default: '' },
   approvedAt: { type: Date, default: null },
+  deletedAt: { type: Date, default: null },
+  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  deletionNote: { type: String, default: '' },
 
   versions: [{
     imagePath: { type: String, default: '' },

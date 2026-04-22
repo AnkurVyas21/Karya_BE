@@ -15,6 +15,10 @@ class AdvertisementCreativeService {
     return cleanString(value).slice(0, 1200);
   }
 
+  cleanDeletionNote(value = '') {
+    return cleanString(value).slice(0, 500);
+  }
+
   cleanPauseNote(value = '') {
     return cleanString(value).slice(0, 500);
   }
@@ -197,6 +201,8 @@ class AdvertisementCreativeService {
           status: pack.status,
           createdAt: pack.createdAt || null,
           completedAt: pack.completedAt || null,
+          deletedAt: pack.deletedAt || null,
+          deletionNote: pack.deletionNote || '',
           paused: Boolean(pack.paused),
           pausedAt: pack.pausedAt || null,
           pauseNote: pack.pauseNote || '',
@@ -220,7 +226,7 @@ class AdvertisementCreativeService {
   async listForAdmin({ status = '' } = {}) {
     const normalizedStatus = cleanString(status).toLowerCase();
     const match = {};
-    if (['pending', 'approved', 'rejected'].includes(normalizedStatus)) {
+    if (['pending', 'approved', 'rejected', 'deleted'].includes(normalizedStatus)) {
       match.status = normalizedStatus;
     }
 
@@ -241,6 +247,8 @@ class AdvertisementCreativeService {
       status: item.status,
       rejectionReason: item.rejectionReason || '',
       approvedAt: item.approvedAt || null,
+      deletedAt: item.deletedAt || null,
+      deletionNote: item.deletionNote || '',
       createdAt: item.createdAt,
       views: Number(item.views || 0),
       clicks: Number(item.clicks || 0),
@@ -283,6 +291,8 @@ class AdvertisementCreativeService {
       status: creative.status,
       rejectionReason: creative.rejectionReason || '',
       approvedAt: creative.approvedAt || null,
+      deletedAt: creative.deletedAt || null,
+      deletionNote: creative.deletionNote || '',
       createdAt: creative.createdAt,
       updatedAt: creative.updatedAt,
       views: Number(creative.views || 0),
@@ -384,6 +394,10 @@ class AdvertisementCreativeService {
       throw new Error('Ad creative not found');
     }
 
+    if (creative.status === 'deleted') {
+      throw new Error('Deleted ads cannot be moderated');
+    }
+
     if (creative.status === 'approved' && nextStatus !== 'approved') {
       throw new Error('Approved ads cannot be reverted');
     }
@@ -391,10 +405,88 @@ class AdvertisementCreativeService {
     creative.status = nextStatus;
     creative.rejectionReason = nextStatus === 'rejected' ? cleanString(rejectionReason) : '';
     creative.approvedAt = nextStatus === 'approved' ? new Date() : null;
+    creative.deletedAt = null;
+    creative.deletedBy = null;
+    creative.deletionNote = '';
 
     await creative.save();
     logger.info(`Ad creative ${creativeId} status changed to ${nextStatus}`);
     return creative.toObject();
+  }
+
+  async deleteForProvider({ userId, advertisementId, note = '' }) {
+    return this.deleteCampaign({
+      userId,
+      advertisementId,
+      actorId: userId,
+      actorRole: 'provider',
+      note
+    });
+  }
+
+  async deleteForAdmin({ creativeId, adminId, note = '' }) {
+    const creative = await AdvertisementCreative.findById(creativeId);
+    if (!creative) {
+      throw new Error('Ad creative not found');
+    }
+
+    return this.deleteCampaign({
+      userId: creative.user,
+      advertisementId: creative.advertisementId,
+      actorId: adminId || null,
+      actorRole: 'admin',
+      note
+    });
+  }
+
+  async deleteCampaign({ userId, advertisementId, actorId = null, actorRole = 'provider', note = '' }) {
+    const growth = await ProviderGrowth.findOne({ user: userId });
+    if (!growth) {
+      throw new Error('Provider campaign not found');
+    }
+
+    const pack = (growth.advertisements || []).find((item) => String(item._id) === String(advertisementId));
+    if (!pack) {
+      throw new Error('Advertisement pack not found');
+    }
+
+    if (String(pack.status || '').toLowerCase() === 'deleted') {
+      throw new Error('This ad campaign is already deleted');
+    }
+
+    const now = new Date();
+    const deletionNote = this.cleanDeletionNote(note)
+      || (actorRole === 'admin'
+        ? 'Deleted by admin. This campaign is not refundable.'
+        : 'Deleted by provider. This campaign is not refundable.');
+
+    pack.status = 'deleted';
+    pack.paused = false;
+    pack.pausedAt = null;
+    pack.pausedBy = null;
+    pack.pauseNote = '';
+    pack.deletedAt = now;
+    pack.deletedBy = actorId || null;
+    pack.deletionNote = deletionNote;
+    await growth.save();
+
+    await AdvertisementCreative.updateMany(
+      { user: userId, advertisementId: String(advertisementId) },
+      {
+        $set: {
+          status: 'deleted',
+          deletedAt: now,
+          deletedBy: actorId || null,
+          deletionNote,
+          approvedAt: null,
+          rejectionReason: ''
+        }
+      }
+    );
+
+    logger.info(`Advertisement ${advertisementId} deleted by ${actorRole} for user ${userId}`);
+    const campaignMap = await this.getCampaignMapForAdvertisementIds([String(advertisementId)]);
+    return campaignMap.get(String(advertisementId)) || null;
   }
 
   async getActiveCreatives({ city = '', state = '', placement = 'home', globalOnly = false, localOnly = false, debug = false, limit = 5 } = {}) {

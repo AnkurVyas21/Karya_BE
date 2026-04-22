@@ -218,11 +218,43 @@ class ProviderGrowthService {
     ]);
 
     const websiteSlug = state.websiteSlug || (state.website?.active ? await this.ensureWebsiteSlug(state, userId) : '');
-    const visibleAds = (state.advertisements || []).filter((item) => item.status === 'active' || item.status === 'scheduled');
+    const allAdvertisements = Array.isArray(state.advertisements) ? state.advertisements : [];
+    const visibleAds = allAdvertisements.filter((item) => item.status === 'active' || item.status === 'scheduled');
+    const historyAds = allAdvertisements
+      .filter((item) => item.status === 'completed' || item.status === 'deleted')
+      .sort((left, right) => {
+        const leftTime = new Date(left.deletedAt || left.completedAt || left.createdAt || 0).getTime();
+        const rightTime = new Date(right.deletedAt || right.completedAt || right.createdAt || 0).getTime();
+        return rightTime - leftTime;
+      });
     const activeAds = visibleAds.filter((item) => item.status === 'active');
     const runningAds = activeAds.filter((item) => !item.paused);
     const usedImpressions = activeAds.reduce((sum, item) => sum + Number(item.impressionsUsed || 0), 0);
     const totalImpressions = activeAds.reduce((sum, item) => sum + Number(item.impressionsTotal || 0), 0);
+
+    const toAdvertisementRow = (item) => ({
+      id: item._id.toString(),
+      level: item.level,
+      city: cleanString(item.city),
+      state: cleanString(item.state),
+      planId: item.planId,
+      planName: item.planName,
+      amount: item.amount,
+      impressionsTotal: item.impressionsTotal,
+      impressionsUsed: item.impressionsUsed,
+      impressionsRemaining: Math.max(Number(item.impressionsTotal || 0) - Number(item.impressionsUsed || 0), 0),
+      expiresAt: getAdRunStart(item) ? addDays(new Date(getAdRunStart(item)), 30) : null,
+      startsAt: getAdRunStart(item),
+      status: item.status,
+      paused: Boolean(item.paused),
+      pausedAt: item.pausedAt || null,
+      pauseNote: cleanString(item.pauseNote),
+      deletedAt: item.deletedAt || null,
+      deletionNote: cleanString(item.deletionNote),
+      completedAt: item.completedAt || null,
+      creative: creativeMap.get(String(item._id)) || null,
+      createdAt: item.createdAt
+    });
 
     return {
       freeSignup: {
@@ -270,26 +302,10 @@ class ProviderGrowthService {
         usedImpressions,
         remainingImpressions: Math.max(totalImpressions - usedImpressions, 0),
         status: runningAds.length > 0 ? 'Running' : activeAds.length > 0 ? 'Paused' : 'Not active',
-        items: visibleAds.map((item) => ({
-          id: item._id.toString(),
-          level: item.level,
-          city: cleanString(item.city),
-          state: cleanString(item.state),
-          planId: item.planId,
-          planName: item.planName,
-          amount: item.amount,
-          impressionsTotal: item.impressionsTotal,
-          impressionsUsed: item.impressionsUsed,
-          impressionsRemaining: Math.max(Number(item.impressionsTotal || 0) - Number(item.impressionsUsed || 0), 0),
-          expiresAt: getAdRunStart(item) ? addDays(new Date(getAdRunStart(item)), 30) : null,
-          startsAt: getAdRunStart(item),
-          status: item.status,
-          paused: Boolean(item.paused),
-          pausedAt: item.pausedAt || null,
-          pauseNote: cleanString(item.pauseNote),
-          creative: creativeMap.get(String(item._id)) || null,
-          createdAt: item.createdAt
-        }))
+        deletedCount: historyAds.filter((item) => item.status === 'deleted').length,
+        historyCount: historyAds.length,
+        items: visibleAds.map(toAdvertisementRow),
+        historyItems: historyAds.map(toAdvertisementRow)
       },
       verification: {
         ...VERIFICATION_PLAN,
@@ -504,6 +520,26 @@ class ProviderGrowthService {
     await state.save();
     await this.ensureWebsiteSlug(state, userId);
     logger.info(`Website content updated for provider ${userId}`);
+    return this.getDashboard(userId);
+  }
+
+  async deleteAdvertisement(userId, advertisementId) {
+    const state = await this.getOrCreateState(userId);
+    const item = (state.advertisements || []).find((ad) => String(ad._id) === String(advertisementId));
+    if (!item) {
+      throw new Error('Advertisement pack not found');
+    }
+
+    if (String(item.status || '').toLowerCase() === 'deleted') {
+      throw new Error('This ad has already been deleted');
+    }
+
+    await advertisementCreativeService.deleteForProvider({
+      userId,
+      advertisementId,
+      note: 'Deleted by provider. This campaign is not refundable and has been removed from live placements.'
+    });
+
     return this.getDashboard(userId);
   }
 

@@ -250,6 +250,15 @@ const updateWebsiteBookingStatus = async (req, res) => {
   }
 };
 
+const deleteProviderAdvertisement = async (req, res) => {
+  try {
+    const data = await providerGrowthService.deleteAdvertisement(req.user._id, req.params.id);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const createWebsiteInquiry = async (req, res) => {
   try {
     const data = await providerWebsiteService.createInquiry(req.params.slug, req.body, req.user?._id);
@@ -399,6 +408,7 @@ module.exports = {
   updateWebsitePublishStatus,
   updateWebsiteLeadStatus,
   updateWebsiteBookingStatus,
+  deleteProviderAdvertisement,
   createWebsiteInquiry,
   createWebsiteBooking,
   detectProfession,

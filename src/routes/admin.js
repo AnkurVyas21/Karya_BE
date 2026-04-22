@@ -116,6 +116,19 @@ router.post('/ads/:id/message', async (req, res) => {
   }
 });
 
+router.delete('/ads/:id', async (req, res) => {
+  try {
+    const data = await advertisementCreativeService.deleteForAdmin({
+      creativeId: req.params.id,
+      adminId: req.user?._id,
+      note: req.body?.note || 'Deleted by admin. This campaign is not refundable and has been removed from live placements.'
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 router.patch('/ban/:id', async (req, res) => {
   try {
     await User.findByIdAndUpdate(req.params.id, { isBanned: true });

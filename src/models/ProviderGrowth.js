@@ -9,7 +9,7 @@ const advertisementSchema = new mongoose.Schema({
   amount: { type: Number, default: 0 },
   impressionsTotal: { type: Number, default: 0 },
   impressionsUsed: { type: Number, default: 0 },
-  status: { type: String, enum: ['active', 'scheduled', 'completed'], default: 'active' },
+  status: { type: String, enum: ['active', 'scheduled', 'completed', 'deleted'], default: 'active' },
   startsAt: { type: Date, default: null },
   extendFromAdId: { type: String, default: '' },
   paused: { type: Boolean, default: false },
@@ -17,7 +17,10 @@ const advertisementSchema = new mongoose.Schema({
   pausedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   pauseNote: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now },
-  completedAt: { type: Date, default: null }
+  completedAt: { type: Date, default: null },
+  deletedAt: { type: Date, default: null },
+  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  deletionNote: { type: String, default: '' }
 }, { _id: true });
 
 const providerGrowthSchema = new mongoose.Schema({

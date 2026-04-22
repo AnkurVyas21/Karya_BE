@@ -19,6 +19,7 @@ const {
   updateWebsitePublishStatus,
   updateWebsiteLeadStatus,
   updateWebsiteBookingStatus,
+  deleteProviderAdvertisement,
   createWebsiteInquiry,
   createWebsiteBooking,
   detectProfession,
@@ -72,6 +73,7 @@ router.put(
 router.patch('/growth/website-manager/publish', authMiddleware, roleMiddleware(['professional']), updateWebsitePublishStatus);
 router.patch('/growth/website-manager/leads/:id', authMiddleware, roleMiddleware(['professional']), updateWebsiteLeadStatus);
 router.patch('/growth/website-manager/bookings/:id', authMiddleware, roleMiddleware(['professional']), updateWebsiteBookingStatus);
+router.delete('/growth/advertisements/:id', authMiddleware, roleMiddleware(['professional']), deleteProviderAdvertisement);
 router.post(
   '/growth/verification',
   authMiddleware,
