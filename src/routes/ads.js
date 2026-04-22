@@ -5,9 +5,10 @@ const validationMiddleware = require('../middlewares/validationMiddleware');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
 const advertisementCreativeService = require('../services/advertisementCreativeService');
+const { getUploadDestination } = require('../utils/uploadPaths');
 
 const router = express.Router();
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ dest: getUploadDestination() });
 
 const toBoolean = (value, fallback = false) => {
   if (typeof value === 'boolean') {

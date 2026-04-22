@@ -4,9 +4,9 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs');
 const path = require('path');
+const { resolveUploadFile, getUploadSearchPaths } = require('./utils/uploadPaths');
 
 const app = express();
-const uploadsDir = path.resolve(process.cwd(), 'uploads');
 const mimeTypesByExtension = {
   '.avif': 'image/avif',
   '.gif': 'image/gif',
@@ -78,9 +78,10 @@ app.use(rateLimit({
 }));
 app.get('/uploads/:filename', (req, res, next) => {
   const filename = path.basename(req.params.filename || '');
-  const filePath = path.join(uploadsDir, filename);
+  const candidatePaths = getUploadSearchPaths(filename);
+  const filePath = resolveUploadFile(filename);
 
-  if (!filePath.startsWith(uploadsDir)) {
+  if (!filename || candidatePaths.length === 0 || !candidatePaths.includes(filePath)) {
     return res.status(400).json({ success: false, message: 'Invalid file path' });
   }
 

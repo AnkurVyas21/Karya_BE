@@ -34,7 +34,8 @@ const authMiddleware = require('../middlewares/authMiddleware');
 const optionalAuthMiddleware = require('../middlewares/optionalAuthMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
 const multer = require('multer');
-const upload = multer({ dest: 'uploads/' });
+const { getUploadDestination } = require('../utils/uploadPaths');
+const upload = multer({ dest: getUploadDestination() });
 
 const router = express.Router();
 

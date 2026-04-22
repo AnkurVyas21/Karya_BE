@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
+const { getUploadDestination } = require('../utils/uploadPaths');
 const authMiddleware = require('../middlewares/authMiddleware');
 const {
   getConversations,
@@ -18,7 +19,7 @@ const {
 const router = express.Router();
 
 const storage = multer.diskStorage({
-  destination: 'uploads/',
+  destination: getUploadDestination(),
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname || '');
     cb(null, `${Date.now()}-${crypto.randomUUID()}${ext}`);
