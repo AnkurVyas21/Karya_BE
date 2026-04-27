@@ -1444,10 +1444,7 @@ class ProviderWebsiteService {
       providerGrowthService.getOrCreateState(userId)
     ]);
 
-    const activeOffers = offers.filter((item) => {
-      const now = new Date();
-      return (!item.startDate || new Date(item.startDate) <= now) && (!item.endDate || new Date(item.endDate) >= now);
-    });
+    const activeOffers = offers;
 
     const responseTime = reviewSummary.totalReviews > 4 ? 'Usually replies within 30 minutes' : 'Usually replies within a few hours';
     const bookingSuccess = `${Math.min(90 + Math.floor((reviewSummary.totalReviews || 0) / 2), 99)}% booking response`;
