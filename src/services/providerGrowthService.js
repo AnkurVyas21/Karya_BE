@@ -21,7 +21,7 @@ const BOOST_PLAN = {
 
 const WEBSITE_PLAN = {
   id: 'website',
-  name: 'Personal Website',
+  name: 'Business Website Manager',
   price: 299,
   billing: 'monthly',
   tagline: 'Create a digital shop that looks polished and trustworthy.',
@@ -33,6 +33,12 @@ const WEBSITE_PLAN = {
     'Boost Visibility included automatically'
   ]
 };
+
+const WEBSITE_BILLING_OPTIONS = [
+  { id: 'website-1m', durationMonths: 1, monthlyPrice: 299 },
+  { id: 'website-6m', durationMonths: 6, monthlyPrice: 249 },
+  { id: 'website-12m', durationMonths: 12, monthlyPrice: 199 }
+];
 
 const VERIFICATION_PLAN = {
   id: 'verification',
@@ -281,6 +287,10 @@ class ProviderGrowthService {
       },
       website: {
         ...WEBSITE_PLAN,
+        billingOptions: WEBSITE_BILLING_OPTIONS.map((option) => ({
+          ...option,
+          total: option.monthlyPrice * option.durationMonths
+        })),
         status: this.getWebsiteStatus(state),
         active: this.hasActiveWebsite(state),
         expiresAt: state.website?.expiryDate || null,
@@ -370,13 +380,16 @@ class ProviderGrowthService {
     }
 
     if (feature === 'website') {
+      const requestedMonths = Number(payload.durationMonths || 1);
+      const selectedPlan = WEBSITE_BILLING_OPTIONS.find((option) => option.durationMonths === requestedMonths) || WEBSITE_BILLING_OPTIONS[0];
+      const durationDays = selectedPlan.durationMonths * 30;
       state.website.active = true;
       state.website.startDate = now;
-      state.website.expiryDate = addDays(now, 30);
-      state.website.monthlyPrice = WEBSITE_PLAN.price;
+      state.website.expiryDate = addDays(now, durationDays);
+      state.website.monthlyPrice = selectedPlan.monthlyPrice;
       state.boost.active = true;
       state.boost.startDate = now;
-      state.boost.expiryDate = addDays(now, 30);
+      state.boost.expiryDate = addDays(now, durationDays);
       if (!state.website.headline || !state.website.description) {
         const profile = await ProfessionalProfile.findOne({ user: userId }).lean();
         state.website.headline = state.website.headline || cleanString(profile?.profession || 'My Service Website');
