@@ -10,7 +10,7 @@ const BOOST_PLAN = {
   id: 'boost',
   name: 'Boost Visibility',
   price: 99,
-  billing: 'monthly',
+  billing: 'weekly',
   tagline: 'Get up to 3X more visibility and reach more customers.',
   benefits: [
     'Priority ranking in search results',
@@ -33,6 +33,18 @@ const WEBSITE_PLAN = {
     'Boost Visibility included automatically'
   ]
 };
+
+const BOOST_REACH_OPTIONS = [
+  { id: 'city', label: 'City visibility', weekPrice: 99 },
+  { id: 'state', label: 'State visibility', weekPrice: 199 },
+  { id: 'global', label: 'Global visibility', weekPrice: 399 }
+];
+
+const BOOST_DURATION_OPTIONS = [
+  { id: 'week', label: '1 week', multiplier: 1, durationDays: 7, durationMonths: 0 },
+  { id: 'month', label: '1 month', multiplier: 2, durationDays: 30, durationMonths: 1 },
+  { id: '12months', label: '12 months', multiplier: 12, durationDays: 360, durationMonths: 12 }
+];
 
 const WEBSITE_BILLING_OPTIONS = [
   { id: 'website-1m', durationMonths: 1, monthlyPrice: 299 },
@@ -281,6 +293,14 @@ class ProviderGrowthService {
       },
       boost: {
         ...BOOST_PLAN,
+        reachOptions: BOOST_REACH_OPTIONS,
+        durationOptions: BOOST_DURATION_OPTIONS,
+        selectedReach: cleanString(state.boost?.reach) || 'city',
+        selectedDuration: cleanString(state.boost?.durationId) || 'week',
+        amount: Number(state.boost?.amount || BOOST_PLAN.price),
+        city: cleanString(state.boost?.city),
+        state: cleanString(state.boost?.state),
+        durationDays: Number(state.boost?.durationDays || 7),
         status: this.getBoostStatus(state),
         active: this.hasActiveBoost(state),
         expiresAt: state.boost?.expiryDate || null
@@ -370,10 +390,19 @@ class ProviderGrowthService {
     const now = new Date();
 
     if (feature === 'boost') {
+      const selectedReach = BOOST_REACH_OPTIONS.find((option) => option.id === cleanString(payload.reach).toLowerCase()) || BOOST_REACH_OPTIONS[0];
+      const selectedDuration = BOOST_DURATION_OPTIONS.find((option) => option.id === cleanString(payload.durationId).toLowerCase()) || BOOST_DURATION_OPTIONS[0];
+      const amount = selectedReach.weekPrice * selectedDuration.multiplier;
       state.boost.active = true;
       state.boost.startDate = now;
-      state.boost.expiryDate = addDays(now, 30);
-      state.boost.monthlyPrice = BOOST_PLAN.price;
+      state.boost.expiryDate = addDays(now, selectedDuration.durationDays);
+      state.boost.monthlyPrice = selectedDuration.durationMonths > 0 ? Math.round(amount / selectedDuration.durationMonths) : amount;
+      state.boost.amount = amount;
+      state.boost.reach = selectedReach.id;
+      state.boost.city = selectedReach.id === 'city' ? cleanString(payload.city) : '';
+      state.boost.state = selectedReach.id === 'city' || selectedReach.id === 'state' ? cleanString(payload.state) : '';
+      state.boost.durationId = selectedDuration.id;
+      state.boost.durationDays = selectedDuration.durationDays;
       await state.save();
       logger.info(`Boost activated for provider ${userId}`);
       return this.getDashboard(userId);
@@ -608,7 +637,7 @@ class ProviderGrowthService {
         id: `boost-${state.boost.startDate.getTime()}`,
         type: 'boost',
         label: BOOST_PLAN.name,
-        amount: BOOST_PLAN.price,
+        amount: Number(state.boost.amount || BOOST_PLAN.price),
         status: this.hasActiveBoost(state) ? 'active' : 'expired',
         createdAt: state.boost.startDate,
         expiresAt: state.boost.expiryDate

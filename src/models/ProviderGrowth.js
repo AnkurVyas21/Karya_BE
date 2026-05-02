@@ -32,7 +32,13 @@ const providerGrowthSchema = new mongoose.Schema({
     active: { type: Boolean, default: false },
     startDate: { type: Date, default: null },
     expiryDate: { type: Date, default: null },
-    monthlyPrice: { type: Number, default: 99 }
+    monthlyPrice: { type: Number, default: 99 },
+    amount: { type: Number, default: 99 },
+    reach: { type: String, enum: ['city', 'state', 'global'], default: 'city' },
+    city: { type: String, default: '' },
+    state: { type: String, default: '' },
+    durationId: { type: String, default: 'week' },
+    durationDays: { type: Number, default: 7 }
   },
   website: {
     active: { type: Boolean, default: false },
