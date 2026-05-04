@@ -29,7 +29,7 @@ class ReceiptEmailService {
     return this.transporter;
   }
 
-  async sendReceipt({ to = [], subject = '', html = '' }) {
+  async sendReceipt({ to = [], subject = '', html = '', replyTo = '' }) {
     const recipients = (Array.isArray(to) ? to : [to]).map((item) => String(item || '').trim()).filter(Boolean);
     if (recipients.length === 0) {
       return false;
@@ -42,12 +42,16 @@ class ReceiptEmailService {
     }
 
     try {
-      await transporter.sendMail({
+      const mailOptions = {
         from: String(process.env.SMTP_FROM || process.env.SMTP_USER || '').trim(),
         to: recipients.join(', '),
         subject,
         html
-      });
+      };
+      if (String(replyTo || '').trim()) {
+        mailOptions.replyTo = String(replyTo || '').trim();
+      }
+      await transporter.sendMail(mailOptions);
       return true;
     } catch (error) {
       logger.warn(`Receipt email failed: ${error.message}`);
