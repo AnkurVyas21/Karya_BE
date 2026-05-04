@@ -110,6 +110,13 @@ const resolvePriceForService = (service = {}, fallbackAmount = 0) => {
   const price = cleanNumber(service?.price, 0);
   return price > 0 ? price : cleanNumber(fallbackAmount, 0);
 };
+const resolveBookingPaymentDue = (website = {}, service = {}, bookingFlow = {}) => {
+  const advanceAmount = cleanNumber(website.bookingFeeAmount, 0);
+  if (cleanBoolean(website.advanceBookingFeeEnabled, false) && advanceAmount > 0) {
+    return advanceAmount;
+  }
+  return resolvePriceForService(service, bookingFlow.chargeAmount || 0);
+};
 const toReceiptPayload = (transaction, providerName = '') => ({
   receiptNumber: transaction?.receipt?.receiptNumber || '',
   contextLabel: cleanString(transaction?.contextLabel),
@@ -518,7 +525,7 @@ class ProviderWebsiteService {
       chargeAmount: cleanNumber(website.bookingFeeAmount, 0),
       paymentInstructions: website.paymentInstructions || ''
     });
-    const baseAmount = resolvePriceForService(selectedService, bookingFlow.chargeAmount || publicWebsite.website.advanceFeeAmount || 0);
+    const baseAmount = resolveBookingPaymentDue(website, selectedService, bookingFlow);
     const paymentChoice = websitePaymentService.resolveCustomerPaymentChoice(bookingFlow, payload.paymentChoice);
     if (paymentChoice === 'gateway' && !websitePaymentService.isGatewayConfigured()) {
       throw new Error('Online gateway payment is not connected yet. Choose manual UPI payment or pay later.');
@@ -1218,7 +1225,7 @@ class ProviderWebsiteService {
       return '';
     }
 
-    const amount = cleanNumber(website.bookingFlow?.chargeAmount, cleanNumber(website.bookingFeeAmount, 0));
+    const amount = resolveBookingPaymentDue(website, {}, website.bookingFlow || {});
     const upiUri = websitePaymentService.buildUpiUri({
       upiId,
       payeeName: website.businessName || 'Provider',
