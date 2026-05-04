@@ -29,6 +29,48 @@ class ReceiptEmailService {
     return this.transporter;
   }
 
+  async sendWithResend({ to = [], subject = '', html = '', replyTo = '' }) {
+    const apiKey = String(process.env.RESEND_API_KEY || '').trim();
+    const from = String(process.env.RESEND_FROM || '').trim();
+    const recipients = (Array.isArray(to) ? to : [to]).map((item) => String(item || '').trim()).filter(Boolean);
+
+    if (!apiKey || !from || recipients.length === 0) {
+      return false;
+    }
+
+    try {
+      const body = {
+        from,
+        to: recipients,
+        subject,
+        html
+      };
+      if (String(replyTo || '').trim()) {
+        body.reply_to = String(replyTo || '').trim();
+      }
+
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        logger.warn(`Receipt email via Resend failed: ${payload.message || payload.error || response.status}`);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      logger.warn(`Receipt email via Resend failed: ${error.message}`);
+      return false;
+    }
+  }
+
   async sendReceipt({ to = [], subject = '', html = '', replyTo = '' }) {
     const recipients = (Array.isArray(to) ? to : [to]).map((item) => String(item || '').trim()).filter(Boolean);
     if (recipients.length === 0) {
@@ -37,8 +79,11 @@ class ReceiptEmailService {
 
     const transporter = this.getTransporter();
     if (!transporter) {
-      logger.warn('Receipt email skipped because SMTP is not configured');
-      return false;
+      const sentWithResend = await this.sendWithResend({ to: recipients, subject, html, replyTo });
+      if (!sentWithResend) {
+        logger.warn('Receipt email skipped because neither SMTP nor Resend is configured');
+      }
+      return sentWithResend;
     }
 
     try {
