@@ -104,6 +104,8 @@ const providerWebsiteSchema = new mongoose.Schema({
   bookingBufferMinutes: { type: Number, default: 0 },
   bookingLeadNoticeHours: { type: Number, default: 0 },
   upiId: { type: String, default: '' },
+  upiQrCodeImage: { type: String, default: '' },
+  upiQrCodeSource: { type: String, enum: ['auto', 'custom'], default: 'auto' },
   advanceBookingFeeEnabled: { type: Boolean, default: false },
   bookingFeeAmount: { type: Number, default: 0 },
   paymentInstructions: { type: String, default: '' },

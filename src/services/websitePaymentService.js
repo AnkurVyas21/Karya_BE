@@ -144,10 +144,13 @@ class WebsitePaymentService {
     const params = new URLSearchParams({
       pa: safeUpiId,
       pn: cleanString(payeeName),
-      am: String(roundCurrency(amount)),
       cu: 'INR',
       tn: cleanString(note)
     });
+    const safeAmount = roundCurrency(amount);
+    if (safeAmount > 0) {
+      params.set('am', String(safeAmount));
+    }
     return `upi://pay?${params.toString()}`;
   }
 

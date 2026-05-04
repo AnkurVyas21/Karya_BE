@@ -152,6 +152,7 @@ class ProviderWebsiteService {
 
     const heroImage = Array.isArray(files.heroImage) && files.heroImage[0]?.path ? files.heroImage[0].path : website.heroImage;
     const logo = Array.isArray(files.logoImage) && files.logoImage[0]?.path ? files.logoImage[0].path : website.logo;
+    const uploadedUpiQrCodeImage = Array.isArray(files.upiQrCodeImage) && files.upiQrCodeImage[0]?.path ? files.upiQrCodeImage[0].path : '';
     const uploadedGallery = Array.isArray(files.galleryImages) ? files.galleryImages.map((item) => item.path).filter(Boolean) : [];
     const uploadedVideos = Array.isArray(files.galleryVideos) ? files.galleryVideos.map((item) => item.path).filter(Boolean) : [];
 
@@ -229,6 +230,16 @@ class ProviderWebsiteService {
       enabled: cleanBoolean(paymentSettings.productFlow.enabled, website.productsEnabled),
       paymentInstructions: paymentSettings.productFlow.paymentInstructions || website.paymentInstructions || ''
     };
+    if (!website.upiId) {
+      website.upiQrCodeImage = '';
+      website.upiQrCodeSource = 'auto';
+    } else if (uploadedUpiQrCodeImage) {
+      website.upiQrCodeImage = uploadedUpiQrCodeImage;
+      website.upiQrCodeSource = 'custom';
+    } else if (website.upiQrCodeSource !== 'custom') {
+      website.upiQrCodeImage = await this.buildWebsiteUpiQrCode(website);
+      website.upiQrCodeSource = website.upiQrCodeImage ? 'auto' : 'auto';
+    }
     website.faqs = faqs;
     website.testimonials = testimonials;
     website.featuredServiceTitle = cleanString(payload.featuredServiceTitle);
@@ -558,6 +569,9 @@ class ProviderWebsiteService {
         })
         : {};
       if (paymentChoice === 'manual-upi') {
+        if (website.upiQrCodeImage) {
+          manualPayment.qrCodeDataUrl = website.upiQrCodeImage;
+        }
         manualPayment.payerTransactionId = cleanString(payload.payerTransactionId);
         manualPayment.submittedAt = new Date();
       }
@@ -708,6 +722,9 @@ class ProviderWebsiteService {
         })
         : {};
       if (paymentChoice === 'manual-upi') {
+        if (website.upiQrCodeImage) {
+          manualPayment.qrCodeDataUrl = website.upiQrCodeImage;
+        }
         manualPayment.payerTransactionId = cleanString(payload.payerTransactionId);
         manualPayment.submittedAt = new Date();
       }
@@ -1195,6 +1212,22 @@ class ProviderWebsiteService {
     throw new Error(`Finish these before publishing: ${requiredLabels.join(', ')}`);
   }
 
+  async buildWebsiteUpiQrCode(website = {}) {
+    const upiId = cleanString(website.upiId);
+    if (!upiId) {
+      return '';
+    }
+
+    const amount = cleanNumber(website.bookingFlow?.chargeAmount, cleanNumber(website.bookingFeeAmount, 0));
+    const upiUri = websitePaymentService.buildUpiUri({
+      upiId,
+      payeeName: website.businessName || 'Provider',
+      amount,
+      note: `${website.businessName || 'Website'} booking payment`
+    });
+    return upiUri ? QRCode.toDataURL(upiUri, { margin: 1, width: 240 }) : '';
+  }
+
   async replaceCollection(Model, website, userId, items) {
     await Model.deleteMany({ websiteId: website._id });
     if (!items.length) {
@@ -1355,6 +1388,7 @@ class ProviderWebsiteService {
     const qrCodeDataUrl = publicPath
       ? await QRCode.toDataURL(`https://karya.local${publicPath}`, { margin: 1, width: 180 })
       : '';
+    const upiQrCodeImage = website.upiQrCodeImage || await this.buildWebsiteUpiQrCode(website);
 
     return {
       providerId: userId,
@@ -1386,6 +1420,7 @@ class ProviderWebsiteService {
       },
       website: {
         ...website,
+        upiQrCodeImage,
         bookingFlow: websitePaymentService.normalizeFlowConfig(website.bookingFlow || {}, {
           enabled: true,
           paymentModel: website.advanceBookingFeeEnabled ? 'payment-only' : 'without-online-payment',
@@ -1448,6 +1483,7 @@ class ProviderWebsiteService {
 
     const responseTime = reviewSummary.totalReviews > 4 ? 'Usually replies within 30 minutes' : 'Usually replies within a few hours';
     const bookingSuccess = `${Math.min(90 + Math.floor((reviewSummary.totalReviews || 0) / 2), 99)}% booking response`;
+    const upiQrCodeImage = website.upiQrCodeImage || await this.buildWebsiteUpiQrCode(website);
 
     return {
       id: website._id.toString(),
@@ -1475,6 +1511,7 @@ class ProviderWebsiteService {
       pincode: website.pincode || cleanString(profile?.pincode),
       website: {
         ...website,
+        upiQrCodeImage,
         publicPath: website.slug ? `/business/${website.slug}` : '',
         legacyPublicPath: website.slug ? `/provider/site/${website.slug}` : '',
         inquiryEndpoint: `/api/professional/website/${website.slug}/inquiries`,
