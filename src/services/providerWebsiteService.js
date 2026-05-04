@@ -110,9 +110,10 @@ const resolvePriceForService = (service = {}, fallbackAmount = 0) => {
   const price = cleanNumber(service?.price, 0);
   return price > 0 ? price : cleanNumber(fallbackAmount, 0);
 };
+const hasAdvanceBookingFee = (website = {}) => cleanNumber(website.bookingFeeAmount, 0) > 0;
 const resolveBookingPaymentDue = (website = {}, service = {}, bookingFlow = {}) => {
   const advanceAmount = cleanNumber(website.bookingFeeAmount, 0);
-  if (cleanBoolean(website.advanceBookingFeeEnabled, false) && advanceAmount > 0) {
+  if (advanceAmount > 0) {
     return advanceAmount;
   }
   return resolvePriceForService(service, bookingFlow.chargeAmount || 0);
@@ -125,6 +126,27 @@ const toReceiptPayload = (transaction, providerName = '') => ({
   issuedAt: transaction?.receipt?.issuedAt,
   providerName: cleanString(providerName)
 });
+const normalizeBookingFlowForWebsite = (website = {}) => {
+  const flow = websitePaymentService.normalizeFlowConfig(website.bookingFlow || {}, {
+    enabled: true,
+    paymentModel: hasAdvanceBookingFee(website) ? 'payment-only' : 'without-online-payment',
+    paymentMethods: website.upiId ? ['manual-upi'] : [],
+    gatewayFeeBearer: 'customer',
+    chargeAmount: website.bookingFeeAmount || 0,
+    paymentInstructions: website.paymentInstructions || ''
+  });
+  if (hasAdvanceBookingFee(website) && website.upiId) {
+    return {
+      ...flow,
+      paymentModel: 'payment-only',
+      paymentMethods: ['manual-upi'],
+      manualPaymentEnabled: true,
+      gatewayPaymentEnabled: false,
+      chargeAmount: cleanNumber(website.bookingFeeAmount, 0)
+    };
+  }
+  return flow;
+};
 
 class ProviderWebsiteService {
   async getManager(userId) {
@@ -223,8 +245,8 @@ class ProviderWebsiteService {
     website.bookingBufferMinutes = cleanNumber(payload.bookingBufferMinutes, 0);
     website.bookingLeadNoticeHours = cleanNumber(payload.bookingLeadNoticeHours, 0);
     website.upiId = cleanString(payload.upiId);
-    website.advanceBookingFeeEnabled = cleanBoolean(payload.advanceBookingFeeEnabled, false);
     website.bookingFeeAmount = cleanNumber(payload.bookingFeeAmount, 0);
+    website.advanceBookingFeeEnabled = cleanBoolean(payload.advanceBookingFeeEnabled, false) || hasAdvanceBookingFee(website);
     website.paymentInstructions = cleanString(payload.paymentInstructions);
     const paymentSettings = websitePaymentService.normalizeWebsitePaymentSettings(payload, website);
     website.bookingFlow = {
@@ -232,6 +254,14 @@ class ProviderWebsiteService {
       chargeAmount: paymentSettings.bookingFlow.chargeAmount || website.bookingFeeAmount || 0,
       paymentInstructions: paymentSettings.bookingFlow.paymentInstructions || website.paymentInstructions || ''
     };
+    if (hasAdvanceBookingFee(website) && website.upiId) {
+      website.bookingFlow = {
+        ...website.bookingFlow,
+        paymentModel: 'payment-only',
+        paymentMethods: ['manual-upi'],
+        chargeAmount: website.bookingFeeAmount
+      };
+    }
     website.productFlow = {
       ...paymentSettings.productFlow,
       enabled: cleanBoolean(paymentSettings.productFlow.enabled, website.productsEnabled),
@@ -517,14 +547,7 @@ class ProviderWebsiteService {
       throw new Error('This time slot is no longer available today');
     }
 
-    const bookingFlow = websitePaymentService.normalizeFlowConfig(website.bookingFlow || {}, {
-      enabled: true,
-      paymentModel: website.advanceBookingFeeEnabled ? 'payment-only' : 'without-online-payment',
-      paymentMethods: website.upiId ? ['manual-upi'] : [],
-      gatewayFeeBearer: 'customer',
-      chargeAmount: cleanNumber(website.bookingFeeAmount, 0),
-      paymentInstructions: website.paymentInstructions || ''
-    });
+    const bookingFlow = normalizeBookingFlowForWebsite(website);
     const baseAmount = resolveBookingPaymentDue(website, selectedService, bookingFlow);
     const paymentChoice = websitePaymentService.resolveCustomerPaymentChoice(bookingFlow, payload.paymentChoice);
     if (paymentChoice === 'gateway' && !websitePaymentService.isGatewayConfigured()) {
@@ -576,7 +599,7 @@ class ProviderWebsiteService {
         })
         : {};
       if (paymentChoice === 'manual-upi') {
-        if (website.upiQrCodeImage) {
+        if (website.upiQrCodeSource === 'custom' && website.upiQrCodeImage) {
           manualPayment.qrCodeDataUrl = website.upiQrCodeImage;
         }
         manualPayment.payerTransactionId = cleanString(payload.payerTransactionId);
@@ -729,7 +752,7 @@ class ProviderWebsiteService {
         })
         : {};
       if (paymentChoice === 'manual-upi') {
-        if (website.upiQrCodeImage) {
+        if (website.upiQrCodeSource === 'custom' && website.upiQrCodeImage) {
           manualPayment.qrCodeDataUrl = website.upiQrCodeImage;
         }
         manualPayment.payerTransactionId = cleanString(payload.payerTransactionId);
@@ -1395,7 +1418,9 @@ class ProviderWebsiteService {
     const qrCodeDataUrl = publicPath
       ? await QRCode.toDataURL(`https://karya.local${publicPath}`, { margin: 1, width: 180 })
       : '';
-    const upiQrCodeImage = website.upiQrCodeImage || await this.buildWebsiteUpiQrCode(website);
+    const upiQrCodeImage = website.upiQrCodeSource === 'custom' && website.upiQrCodeImage
+      ? website.upiQrCodeImage
+      : await this.buildWebsiteUpiQrCode(website);
 
     return {
       providerId: userId,
@@ -1428,14 +1453,7 @@ class ProviderWebsiteService {
       website: {
         ...website,
         upiQrCodeImage,
-        bookingFlow: websitePaymentService.normalizeFlowConfig(website.bookingFlow || {}, {
-          enabled: true,
-          paymentModel: website.advanceBookingFeeEnabled ? 'payment-only' : 'without-online-payment',
-          paymentMethods: website.upiId ? ['manual-upi'] : [],
-          gatewayFeeBearer: 'customer',
-          chargeAmount: website.bookingFeeAmount || 0,
-          paymentInstructions: website.paymentInstructions || ''
-        }),
+        bookingFlow: normalizeBookingFlowForWebsite(website),
         productFlow: websitePaymentService.normalizeFlowConfig(website.productFlow || {}, {
           enabled: website.productsEnabled,
           paymentModel: 'without-online-payment',
@@ -1490,7 +1508,9 @@ class ProviderWebsiteService {
 
     const responseTime = reviewSummary.totalReviews > 4 ? 'Usually replies within 30 minutes' : 'Usually replies within a few hours';
     const bookingSuccess = `${Math.min(90 + Math.floor((reviewSummary.totalReviews || 0) / 2), 99)}% booking response`;
-    const upiQrCodeImage = website.upiQrCodeImage || await this.buildWebsiteUpiQrCode(website);
+    const upiQrCodeImage = website.upiQrCodeSource === 'custom' && website.upiQrCodeImage
+      ? website.upiQrCodeImage
+      : await this.buildWebsiteUpiQrCode(website);
 
     return {
       id: website._id.toString(),
@@ -1540,17 +1560,10 @@ class ProviderWebsiteService {
           { label: 'Response time', value: responseTime },
           { label: 'Booking success', value: bookingSuccess }
         ],
-        advanceFeeRequired: Boolean(website.advanceBookingFeeEnabled),
+        advanceFeeRequired: hasAdvanceBookingFee(website),
         advanceFeeAmount: Number(website.bookingFeeAmount || 0),
         paymentInstructions: website.paymentInstructions || '',
-        bookingFlow: websitePaymentService.normalizeFlowConfig(website.bookingFlow || {}, {
-          enabled: true,
-          paymentModel: website.advanceBookingFeeEnabled ? 'payment-only' : 'without-online-payment',
-          paymentMethods: website.upiId ? ['manual-upi'] : [],
-          gatewayFeeBearer: 'customer',
-          chargeAmount: website.bookingFeeAmount || 0,
-          paymentInstructions: website.paymentInstructions || ''
-        }),
+        bookingFlow: normalizeBookingFlowForWebsite(website),
         productFlow: websitePaymentService.normalizeFlowConfig(website.productFlow || {}, {
           enabled: website.productsEnabled,
           paymentModel: 'without-online-payment',
