@@ -41,7 +41,7 @@ const roleMiddleware = require('../middlewares/roleMiddleware');
 const persistUploadedFiles = require('../middlewares/persistUploadedFiles');
 const multer = require('multer');
 const { getUploadDestination } = require('../utils/uploadPaths');
-const upload = multer({ dest: getUploadDestination() });
+const upload = multer({ dest: getUploadDestination(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const router = express.Router();
 

@@ -9,7 +9,7 @@ const advertisementCreativeService = require('../services/advertisementCreativeS
 const { getUploadDestination } = require('../utils/uploadPaths');
 
 const router = express.Router();
-const upload = multer({ dest: getUploadDestination() });
+const upload = multer({ dest: getUploadDestination(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const toBoolean = (value, fallback = false) => {
   if (typeof value === 'boolean') {

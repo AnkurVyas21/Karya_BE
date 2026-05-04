@@ -28,8 +28,9 @@ const loginRateLimiter = rateLimit({
 });
 
 const signupSchema = Joi.object({
-  firstName: Joi.string().required(),
-  lastName: Joi.string().required(),
+  fullName: Joi.string().min(2).optional(),
+  firstName: Joi.string().optional(),
+  lastName: Joi.string().allow('').optional(),
   email: Joi.string().email().required(),
   mobile: Joi.string().required(),
   password: Joi.string().min(6).required(),

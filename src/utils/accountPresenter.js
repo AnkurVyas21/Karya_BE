@@ -16,9 +16,11 @@ const composeLocation = ({ town = '', area = '', city = '', state = '', location
 const sanitizeUser = (user) => {
   const plain = typeof user?.toObject === 'function' ? user.toObject() : { ...(user || {}) };
   delete plain.password;
+  const fullName = [plain.firstName, plain.lastName].map((value) => toCleanString(value)).filter(Boolean).join(' ');
 
   return {
     ...plain,
+    fullName,
     email: toVisibleEmail(plain.email),
     mobile: toVisibleMobile(plain.mobile)
   };

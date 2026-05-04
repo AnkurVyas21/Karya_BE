@@ -14,6 +14,7 @@ const professionInferenceService = require('./professionInferenceService');
 class AuthService {
   async signup(userData) {
     const {
+      fullName,
       firstName,
       lastName,
       email,
@@ -41,6 +42,10 @@ class AuthService {
 
     const normalizedEmail = this.normalizeEmail(email);
     const normalizedMobile = this.normalizeMobile(mobile);
+    const normalizedFullName = toCleanString(fullName) || [firstName, lastName].map((value) => toCleanString(value)).filter(Boolean).join(' ');
+    if (!normalizedFullName) {
+      throw new Error('Full name is required');
+    }
     await this.ensureContactUniqueness({ email: normalizedEmail, mobile: normalizedMobile });
 
     const normalizedSocialAccount = socialAccount
@@ -63,8 +68,8 @@ class AuthService {
     
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new User({
-      firstName: toCleanString(firstName),
-      lastName: toCleanString(lastName),
+      firstName: normalizedFullName,
+      lastName: '',
       email: normalizedEmail,
       mobile: normalizedMobile,
       password: hashedPassword,

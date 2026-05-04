@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { Readable } = require('stream');
 const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
+const sharp = require('sharp');
 const { getUploadDestination, normalizeUploadKey, resolveUploadFile } = require('../utils/uploadPaths');
 
 const R2_ACCOUNT_ID = String(process.env.R2_ACCOUNT_ID || '').trim();
@@ -14,6 +15,18 @@ const R2_PUBLIC_BASE_URL = String(process.env.R2_PUBLIC_BASE_URL || '').trim().r
 const R2_KEY_PREFIX = String(process.env.R2_KEY_PREFIX || 'media').trim().replace(/^\/+|\/+$/g, '');
 
 let r2Client = null;
+
+const IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/avif', 'image/heic', 'image/heif']);
+const IMAGE_PRESETS = {
+  heroImage: { width: 1800, quality: 82 },
+  websiteImages: { width: 1800, quality: 82 },
+  galleryImages: { width: 1400, quality: 78 },
+  image: { width: 1600, quality: 82 },
+  profilePicture: { width: 720, quality: 74 },
+  logoImage: { width: 720, quality: 78 },
+  upiQrCodeImage: { width: 640, quality: 90 },
+  default: { width: 1200, quality: 76 }
+};
 
 const streamToBuffer = async (body) => {
   if (!body) {
@@ -56,7 +69,7 @@ class MediaStorageService {
   }
 
   buildObjectKey(file = {}) {
-    const ext = path.extname(file.originalname || file.filename || file.path || '').toLowerCase();
+    const ext = file.optimizedExtension || path.extname(file.originalname || file.filename || file.path || '').toLowerCase();
     const unique = `${Date.now()}-${crypto.randomUUID().replace(/-/g, '')}${ext}`;
     return normalizeUploadKey(R2_KEY_PREFIX ? `${R2_KEY_PREFIX}/${unique}` : unique);
   }
@@ -74,23 +87,66 @@ class MediaStorageService {
     return `/uploads/${normalizedKey}`;
   }
 
+  isCompressibleImage(file = {}) {
+    return IMAGE_MIME_TYPES.has(String(file.mimetype || '').toLowerCase());
+  }
+
+  imagePresetFor(file = {}) {
+    return IMAGE_PRESETS[file.fieldname] || IMAGE_PRESETS.default;
+  }
+
+  async optimizeImageFile(file = {}) {
+    if (!file?.path || !this.isCompressibleImage(file)) {
+      return file;
+    }
+
+    const preset = this.imagePresetFor(file);
+    const inputPath = path.resolve(file.path);
+    const outputPath = `${inputPath}.webp`;
+
+    await sharp(inputPath, { failOn: 'none' })
+      .rotate()
+      .resize({ width: preset.width, withoutEnlargement: true })
+      .webp({ quality: preset.quality, effort: 5 })
+      .toFile(outputPath);
+
+    const optimizedStats = await fsp.stat(outputPath);
+    const originalStats = await fsp.stat(inputPath).catch(() => ({ size: file.size || 0 }));
+
+    if (originalStats.size && optimizedStats.size >= originalStats.size) {
+      await fsp.unlink(outputPath).catch(() => undefined);
+      return file;
+    }
+
+    await fsp.unlink(inputPath).catch(() => undefined);
+    return {
+      ...file,
+      path: outputPath,
+      filename: `${path.basename(file.filename || inputPath)}.webp`,
+      mimetype: 'image/webp',
+      size: optimizedStats.size,
+      optimizedExtension: '.webp'
+    };
+  }
+
   async persistUploadedFile(file = {}) {
     if (!file?.path) {
       return file;
     }
 
-    const normalizedLocalPath = path.resolve(file.path);
-    const fallbackKey = normalizeUploadKey(path.basename(file.filename || normalizedLocalPath));
+    const preparedFile = await this.optimizeImageFile(file);
+    const normalizedLocalPath = path.resolve(preparedFile.path);
+    const fallbackKey = normalizeUploadKey(path.basename(preparedFile.filename || normalizedLocalPath));
 
     if (!this.isR2Enabled()) {
       return {
-        ...file,
+        ...preparedFile,
         path: this.buildPublicPath(fallbackKey),
         storageKey: fallbackKey
       };
     }
 
-    const key = this.buildObjectKey(file);
+    const key = this.buildObjectKey(preparedFile);
     const client = this.getR2Client();
     const body = await fsp.readFile(normalizedLocalPath);
 
@@ -98,13 +154,13 @@ class MediaStorageService {
       Bucket: R2_BUCKET,
       Key: key,
       Body: body,
-      ContentType: file.mimetype || 'application/octet-stream'
+      ContentType: preparedFile.mimetype || 'application/octet-stream'
     }));
 
     await fsp.unlink(normalizedLocalPath).catch(() => undefined);
 
     return {
-      ...file,
+      ...preparedFile,
       path: this.buildPublicPath(key),
       storageKey: key
     };
