@@ -260,7 +260,7 @@ class SocialAuthService {
           type: 'signup_required',
           provider,
           profile: normalizedProfile,
-          message: `No Karya account was linked to this ${config.label} profile. Please complete signup.`
+          message: `No Nasdiya account was linked to this ${config.label} profile. Please complete signup.`
         }
       };
     }
