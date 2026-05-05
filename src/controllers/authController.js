@@ -33,8 +33,12 @@ const login = async (req, res) => {
 const verifyOTP = async (req, res) => {
   try {
     const { otp, type, identifier } = req.body;
-    await authService.verifyOTP(identifier, otp, type);
-    res.json({ success: true, message: 'Verified' });
+    const { user, token } = await authService.verifyOTP(identifier, otp, type);
+    res.json({
+      success: true,
+      message: 'Verified',
+      data: { user, token }
+    });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }

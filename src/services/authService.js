@@ -438,9 +438,13 @@ class AuthService {
       throw new Error('Invalid or expired OTP');
     }
     await OTPVerification.deleteOne({ _id: otpRecord._id });
-    await User.findByIdAndUpdate(user._id, { isVerified: true });
+    const verifiedUser = await User.findByIdAndUpdate(
+      user._id,
+      { isVerified: true },
+      { new: true }
+    );
     logger.info(`OTP verified for user: ${user._id}, type: ${type}`);
-    return true;
+    return this.buildAuthenticatedSession(verifiedUser);
   }
 
   async sendOTP(user, type) {

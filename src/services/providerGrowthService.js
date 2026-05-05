@@ -283,10 +283,12 @@ class ProviderGrowthService {
       },
       profileOverview: {
         fullName: [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim(),
+        mobile: cleanString(user?.mobile),
         profession: profile?.profession || '',
         location: profile?.location || '',
         city: cleanString(profile?.city),
         state: cleanString(profile?.state),
+        profilePicture: cleanString(profile?.profilePicture),
         profileViews: Number(profile?.viewCount || 0),
         websiteUrlPath: websiteSlug ? `/provider/site/${websiteSlug}` : '',
         isProfileComplete: Boolean(profile?.profession && (profile?.location || profile?.city || profile?.state))
