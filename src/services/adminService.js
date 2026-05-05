@@ -4,6 +4,8 @@ const ProfessionalProfile = require('../models/ProfessionalProfile');
 const Subscription = require('../models/Subscription');
 const SiteVisit = require('../models/SiteVisit');
 const AdvertisementCreative = require('../models/AdvertisementCreative');
+const ProviderGrowth = require('../models/ProviderGrowth');
+const advertisementCreativeService = require('./advertisementCreativeService');
 const professionCatalogService = require('./professionCatalogService');
 const paymentService = require('./paymentService');
 const logger = require('../utils/logger');
@@ -16,6 +18,10 @@ const DEFAULT_ADMIN_LAST_NAME = String(process.env.ADMIN_LAST_NAME || 'Admin').t
 const IST_OFFSET_MINUTES = 330;
 
 const getFullName = (entity = {}) => [entity.firstName, entity.lastName].filter(Boolean).join(' ').trim();
+
+const toObjectIdString = (value) => value?._id ? value._id.toString() : String(value || '');
+
+const cleanString = (value) => String(value || '').trim();
 
 const normalizeDateInput = (value) => String(value || '').trim();
 
@@ -356,12 +362,17 @@ class AdminService {
     const profiles = await ProfessionalProfile.find({})
       .populate('user')
       .sort({ createdAt: -1 });
+    const userIds = profiles.filter((profile) => profile.user).map((profile) => profile.user._id);
+    const growthStates = await ProviderGrowth.find({ user: { $in: userIds } }).lean();
+    const growthByUserId = new Map(growthStates.map((state) => [toObjectIdString(state.user), state]));
 
     const items = profiles
       .filter((profile) => profile.user)
       .map((profile) => {
         const user = profile.user;
         const completionState = getProfileCompletionState(user, profile);
+        const growth = growthByUserId.get(user._id.toString()) || {};
+        const verification = growth.verification || {};
 
         return {
           id: profile._id.toString(),
@@ -379,6 +390,16 @@ class AdminService {
           baseCharge: Number(profile.charges?.baseCharge || 0),
           visitingCharge: Number(profile.charges?.visitingCharge || 0),
           isVerified: Boolean(user.isVerified),
+          verificationStatus: cleanString(verification.status || 'not_started'),
+          verificationStatusLabel: this.getVerificationLabel(verification),
+          verificationPending: verification.status === 'pending',
+          verifiedBadge: Boolean(verification.badgeActive && verification.status === 'approved'),
+          verificationSubmittedAt: verification.submittedAt || null,
+          verificationReviewedAt: verification.reviewedAt || null,
+          verificationFeePaid: Boolean(verification.feePaid),
+          hasVerificationDocuments: Boolean(verification.aadhaarDocument || verification.panDocument),
+          websiteActive: Boolean(growth.website?.active),
+          boostActive: Boolean(growth.boost?.active),
           isBanned: Boolean(user.isBanned),
           isListed: completionState.isListed,
           createdAt: profile.createdAt || user.createdAt
@@ -394,11 +415,195 @@ class AdminService {
         listed,
         unlisted: Math.max(total - listed, 0),
         verified: items.filter((item) => item.isVerified).length,
+        verifiedBadges: items.filter((item) => item.verifiedBadge).length,
+        pendingVerification: items.filter((item) => item.verificationPending).length,
         banned: items.filter((item) => item.isBanned).length,
         totalProfileViews: items.reduce((sum, item) => sum + item.viewCount, 0)
       },
       items
     };
+  }
+
+  getVerificationLabel(verification = {}) {
+    const status = cleanString(verification.status || 'not_started');
+    if (status === 'approved' && verification.badgeActive) return 'Verified badge active';
+    if (status === 'approved') return 'Approved';
+    if (status === 'pending') return 'Pending review';
+    if (status === 'rejected') return 'Rejected';
+    if (verification.feePaid) return 'Payment completed';
+    return 'Not started';
+  }
+
+  async resolveProviderProfile(providerId) {
+    const id = cleanString(providerId);
+    let profile = await ProfessionalProfile.findOne({ user: id }).populate('user').lean();
+    if (!profile) {
+      profile = await ProfessionalProfile.findById(id).populate('user').lean();
+    }
+
+    if (!profile || !profile.user) {
+      throw new Error('Provider not found');
+    }
+
+    return { profile, user: profile.user };
+  }
+
+  async getProviderDetails(providerId) {
+    const { profile, user } = await this.resolveProviderProfile(providerId);
+    const [growthState, creatives] = await Promise.all([
+      ProviderGrowth.findOne({ user: user._id }).lean(),
+      AdvertisementCreative.find({ user: user._id })
+        .populate('professionalProfile')
+        .sort({ createdAt: -1 })
+        .lean()
+    ]);
+    const growth = growthState || {};
+    const verification = growth.verification || {};
+    const completionState = getProfileCompletionState(user, profile);
+    const campaignMap = await advertisementCreativeService.getCampaignMapForAdvertisementIds(
+      creatives.map((item) => item.advertisementId)
+    );
+
+    return {
+      provider: {
+        id: profile._id.toString(),
+        userId: user._id.toString(),
+        fullName: getFullName(user) || 'Unnamed Provider',
+        firstName: user.firstName || '',
+        lastName: user.lastName || '',
+        email: toVisibleEmail(user.email),
+        mobile: toVisibleMobile(user.mobile),
+        profession: profile.profession || 'Profession pending',
+        description: cleanString(profile.description),
+        profilePicture: cleanString(profile.profilePicture),
+        location: composeLocation(profile),
+        country: cleanString(profile.country),
+        state: cleanString(profile.state),
+        city: cleanString(profile.city),
+        town: cleanString(profile.town),
+        area: cleanString(profile.area),
+        pincode: cleanString(profile.pincode),
+        serviceAreas: Array.isArray(profile.serviceAreas) ? profile.serviceAreas : [],
+        skills: Array.isArray(profile.skills) ? profile.skills : [],
+        tags: Array.isArray(profile.tags) ? profile.tags : [],
+        experience: Number(profile.experience || 0),
+        charges: {
+          baseCharge: Number(profile.charges?.baseCharge || 0),
+          visitingCharge: Number(profile.charges?.visitingCharge || 0),
+          nightCharge: Number(profile.charges?.nightCharge || 0),
+          emergencyCharge: Number(profile.charges?.emergencyCharge || 0)
+        },
+        viewCount: Number(profile.viewCount || 0),
+        isVerified: Boolean(user.isVerified),
+        isBanned: Boolean(user.isBanned),
+        isListed: completionState.isListed,
+        createdAt: profile.createdAt || user.createdAt
+      },
+      growth: {
+        website: {
+          active: Boolean(growth.website?.active),
+          status: Boolean(growth.website?.active) ? 'active' : 'not_active',
+          slug: cleanString(growth.websiteSlug),
+          urlPath: growth.websiteSlug ? `/provider/site/${growth.websiteSlug}` : '',
+          headline: cleanString(growth.website?.headline),
+          galleryImageCount: Array.isArray(growth.website?.galleryImages) ? growth.website.galleryImages.length : 0,
+          galleryVideoCount: Array.isArray(growth.website?.galleryVideos) ? growth.website.galleryVideos.length : 0,
+          bookingEnabled: growth.website?.bookingEnabled !== false
+        },
+        boost: {
+          active: Boolean(growth.boost?.active),
+          reach: cleanString(growth.boost?.reach),
+          city: cleanString(growth.boost?.city),
+          state: cleanString(growth.boost?.state),
+          startDate: growth.boost?.startDate || null,
+          expiryDate: growth.boost?.expiryDate || null,
+          amount: Number(growth.boost?.amount || 0)
+        }
+      },
+      verification: {
+        status: cleanString(verification.status || 'not_started'),
+        statusLabel: this.getVerificationLabel(verification),
+        badgeActive: Boolean(verification.badgeActive && verification.status === 'approved'),
+        feePaid: Boolean(verification.feePaid),
+        paidAt: verification.paidAt || null,
+        aadhaarDocument: cleanString(verification.aadhaarDocument),
+        panDocument: cleanString(verification.panDocument),
+        rejectionReason: cleanString(verification.rejectionReason),
+        reviewerNotes: cleanString(verification.reviewerNotes),
+        submittedAt: verification.submittedAt || null,
+        reviewedAt: verification.reviewedAt || null,
+        nameMatch: Boolean(verification.nameMatch),
+        mobileMatch: Boolean(verification.mobileMatch)
+      },
+      ads: creatives.map((item) => ({
+        id: item._id.toString(),
+        advertisementId: item.advertisementId,
+        level: cleanString(item.level),
+        city: cleanString(item.city),
+        state: cleanString(item.state),
+        status: cleanString(item.status),
+        rejectionReason: cleanString(item.rejectionReason),
+        approvedAt: item.approvedAt || null,
+        deletedAt: item.deletedAt || null,
+        deletionNote: cleanString(item.deletionNote),
+        createdAt: item.createdAt,
+        views: Number(item.views || 0),
+        clicks: Number(item.clicks || 0),
+        lastAdminMessage: advertisementCreativeService.getLastAdminMessage(item),
+        adminMessages: Array.isArray(item.adminMessages) ? item.adminMessages.map((msg) => ({
+          adminId: msg?.adminId || null,
+          message: cleanString(msg?.message),
+          createdAt: msg?.createdAt || null
+        })) : [],
+        imagePath: cleanString(item.imagePath),
+        campaign: campaignMap.get(String(item.advertisementId)) || null,
+        profession: item.professionalProfile?.profession || profile.profession || ''
+      }))
+    };
+  }
+
+  async setProviderVerification(providerId, payload = {}) {
+    const { user } = await this.resolveProviderProfile(providerId);
+    const action = cleanString(payload.action).toLowerCase();
+    const state = await ProviderGrowth.findOneAndUpdate(
+      { user: user._id },
+      { $setOnInsert: { user: user._id } },
+      { upsert: true, new: true }
+    );
+
+    state.verification = state.verification || {};
+    const note = cleanString(payload.note || payload.reviewerNotes);
+    const reason = cleanString(payload.reason || payload.rejectionReason);
+    const now = new Date();
+
+    if (action === 'approve') {
+      if (!state.verification.aadhaarDocument) {
+        throw new Error('Aadhaar document is required before approving verification');
+      }
+      state.verification.status = 'approved';
+      state.verification.badgeActive = true;
+      state.verification.reviewedAt = now;
+      state.verification.rejectionReason = '';
+      state.verification.reviewerNotes = note || 'Verification approved by admin.';
+    } else if (action === 'reject') {
+      state.verification.status = 'rejected';
+      state.verification.badgeActive = false;
+      state.verification.reviewedAt = now;
+      state.verification.rejectionReason = reason || 'Rejected by admin';
+      state.verification.reviewerNotes = note || 'Verification rejected by admin.';
+    } else if (action === 'revoke') {
+      state.verification.status = 'not_started';
+      state.verification.badgeActive = false;
+      state.verification.reviewedAt = now;
+      state.verification.rejectionReason = reason || '';
+      state.verification.reviewerNotes = note || 'Verified badge revoked by admin.';
+    } else {
+      throw new Error('Invalid verification action');
+    }
+
+    await state.save();
+    logger.info(`Provider verification ${action} for user ${user._id}`);
+    return this.getProviderDetails(user._id.toString());
   }
 
   async getTransactions() {

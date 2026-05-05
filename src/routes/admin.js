@@ -39,6 +39,24 @@ router.get('/providers', async (_req, res) => {
   }
 });
 
+router.get('/providers/:id', async (req, res) => {
+  try {
+    const data = await adminService.getProviderDetails(req.params.id);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/providers/:id/verification', async (req, res) => {
+  try {
+    const data = await adminService.setProviderVerification(req.params.id, req.body || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/transactions', async (_req, res) => {
   try {
     const data = await adminService.getTransactions();
