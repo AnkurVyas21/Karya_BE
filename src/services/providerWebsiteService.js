@@ -248,6 +248,7 @@ class ProviderWebsiteService {
     website.bookingSlots = bookingSlots;
     website.bookingBufferMinutes = cleanNumber(payload.bookingBufferMinutes, 0);
     website.bookingLeadNoticeHours = cleanNumber(payload.bookingLeadNoticeHours, 0);
+    website.bookingClosedDates = this.normalizeBookingClosedDates(payload.bookingClosedDates || website.bookingClosedDates);
     website.upiId = cleanString(payload.upiId);
     website.bookingFeeAmount = cleanNumber(payload.bookingFeeAmount, 0);
     website.advanceBookingFeeEnabled = cleanBoolean(payload.advanceBookingFeeEnabled, false) || hasAdvanceBookingFee(website);
@@ -513,10 +514,6 @@ class ProviderWebsiteService {
     const selectedService = payload.serviceId
       ? await ProviderServiceModel.findOne({ _id: payload.serviceId, providerId: website.providerId }).lean()
       : null;
-    const matchingSlot = (website.bookingSlots || []).find((slot) => slot?.isActive !== false && `${slot.startTime} - ${slot.endTime}` === bookingTime);
-    if (!matchingSlot) {
-      throw new Error('Choose an available booking time slot');
-    }
 
     const bookingWeekday = getWeekdayForDate(bookingDate);
     if (!bookingWeekday) {
@@ -528,6 +525,10 @@ class ProviderWebsiteService {
     if (!isWorkingDay) {
       throw new Error(`${bookingWeekday} is not available for bookings`);
     }
+    const closedDates = Array.isArray(website.bookingClosedDates) ? website.bookingClosedDates : [];
+    if (closedDates.includes(bookingDate)) {
+      throw new Error(`The business is closed for bookings on ${bookingDate}`);
+    }
 
     const businessHour = Array.isArray(website.businessHours)
       ? website.businessHours.find((item) => normalizeDayLabel(item?.day) === normalizeDayLabel(bookingWeekday))
@@ -536,9 +537,21 @@ class ProviderWebsiteService {
       throw new Error(`${bookingWeekday} is marked closed for this business`);
     }
 
-    const slotStartMinutes = parseTimeToMinutes(matchingSlot.startTime);
-    if (slotStartMinutes === null) {
+    const [requestedStart = '', requestedEnd = ''] = bookingTime.split(' - ').map((item) => cleanString(item));
+    const slotStartMinutes = parseTimeToMinutes(requestedStart);
+    const slotEndMinutes = parseTimeToMinutes(requestedEnd);
+    const openMinutes = parseTimeToMinutes(businessHour?.openTime);
+    const closeMinutes = parseTimeToMinutes(businessHour?.closeTime);
+    if (slotStartMinutes === null || slotEndMinutes === null || openMinutes === null || closeMinutes === null || slotEndMinutes <= slotStartMinutes) {
       throw new Error('Choose an available booking time slot');
+    }
+    if (slotStartMinutes < openMinutes || slotEndMinutes > closeMinutes) {
+      throw new Error('Choose a booking time within business working hours');
+    }
+    const breakStart = parseTimeToMinutes(businessHour?.breakStartTime);
+    const breakEnd = parseTimeToMinutes(businessHour?.breakEndTime);
+    if (breakStart !== null && breakEnd !== null && breakEnd > breakStart && slotStartMinutes < breakEnd && slotEndMinutes > breakStart) {
+      throw new Error('The selected booking time overlaps with business break time');
     }
 
     const indiaNow = getIndiaNowContext();
@@ -1077,6 +1090,12 @@ class ProviderWebsiteService {
       }))
       .filter((item) => item.label || item.startTime || item.endTime)
       .slice(0, 12);
+  }
+
+  normalizeBookingClosedDates(dates = []) {
+    return cleanArray(dates)
+      .filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item))
+      .slice(0, 60);
   }
 
   normalizeFaqs(faqs = []) {
