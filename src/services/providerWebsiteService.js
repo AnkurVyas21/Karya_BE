@@ -110,13 +110,46 @@ const resolvePriceForService = (service = {}, fallbackAmount = 0) => {
   const price = cleanNumber(service?.price, 0);
   return price > 0 ? price : cleanNumber(fallbackAmount, 0);
 };
-const hasAdvanceBookingFee = (website = {}) => cleanNumber(website.bookingFeeAmount, 0) > 0;
+const hasAdvanceBookingFee = (website = {}) => cleanBoolean(website.advanceBookingFeeEnabled, false) && cleanNumber(website.bookingFeeAmount, 0) > 0;
 const resolveBookingPaymentDue = (website = {}, service = {}, bookingFlow = {}) => {
   const advanceAmount = cleanNumber(website.bookingFeeAmount, 0);
-  if (advanceAmount > 0) {
-    return advanceAmount;
+  if (hasAdvanceBookingFee(website)) {
+    const servicePrice = resolvePriceForService(service, 0);
+    return servicePrice > 0 ? Math.min(advanceAmount, servicePrice) : advanceAmount;
   }
   return resolvePriceForService(service, bookingFlow.chargeAmount || 0);
+};
+const isTimeInWindow = (timeMinutes, startMinutes, endMinutes) => {
+  if (timeMinutes === null || startMinutes === null || endMinutes === null || startMinutes === endMinutes) {
+    return false;
+  }
+  return startMinutes < endMinutes
+    ? timeMinutes >= startMinutes && timeMinutes < endMinutes
+    : timeMinutes >= startMinutes || timeMinutes < endMinutes;
+};
+const resolveBookingTimeCharges = (website = {}, bookingStartMinutes = null, baseAmount = 0) => {
+  const rules = website.extraChargeRules || website.extraCharges || {};
+  const night = rules.night || {};
+  const emergency = rules.emergency || {};
+  let nightAmount = 0;
+  let emergencyAmount = 0;
+
+  if (cleanBoolean(night.enabled, false) && isTimeInWindow(bookingStartMinutes, parseTimeToMinutes(night.startTime), parseTimeToMinutes(night.endTime))) {
+    const amount = cleanNumber(night.amount, 0);
+    const waiveAbove = cleanNumber(night.waiveOrderAbove ?? night.waiveAboveAmount, 0);
+    nightAmount = waiveAbove > 0 && baseAmount >= waiveAbove ? 0 : Math.max(0, amount);
+  }
+  if (cleanBoolean(emergency.enabled, false)) {
+    const amount = cleanNumber(emergency.amount, 0);
+    const waiveAbove = cleanNumber(emergency.waiveOrderAbove ?? emergency.waiveAboveAmount, 0);
+    emergencyAmount = waiveAbove > 0 && baseAmount >= waiveAbove ? 0 : Math.max(0, amount);
+  }
+
+  return {
+    nightAmount,
+    emergencyAmount,
+    total: Number((nightAmount + emergencyAmount).toFixed(2))
+  };
 };
 const toReceiptPayload = (transaction, providerName = '') => ({
   receiptNumber: transaction?.receipt?.receiptNumber || '',
@@ -135,13 +168,16 @@ const normalizeBookingFlowForWebsite = (website = {}) => {
     chargeAmount: website.bookingFeeAmount || 0,
     paymentInstructions: website.paymentInstructions || ''
   });
-  if (hasAdvanceBookingFee(website) && website.upiId) {
+  if (hasAdvanceBookingFee(website)) {
+    const methods = Array.isArray(flow.paymentMethods) && flow.paymentMethods.length
+      ? flow.paymentMethods
+      : (website.upiId ? ['manual-upi'] : []);
     return {
       ...flow,
       paymentModel: 'payment-only',
-      paymentMethods: ['manual-upi'],
-      manualPaymentEnabled: true,
-      gatewayPaymentEnabled: false,
+      paymentMethods: methods,
+      manualPaymentEnabled: methods.includes('manual-upi'),
+      gatewayPaymentEnabled: methods.includes('gateway'),
       chargeAmount: cleanNumber(website.bookingFeeAmount, 0)
     };
   }
@@ -251,7 +287,7 @@ class ProviderWebsiteService {
     website.bookingClosedDates = this.normalizeBookingClosedDates(payload.bookingClosedDates || website.bookingClosedDates);
     website.upiId = cleanString(payload.upiId);
     website.bookingFeeAmount = cleanNumber(payload.bookingFeeAmount, 0);
-    website.advanceBookingFeeEnabled = cleanBoolean(payload.advanceBookingFeeEnabled, false) || hasAdvanceBookingFee(website);
+    website.advanceBookingFeeEnabled = cleanBoolean(payload.advanceBookingFeeEnabled, false);
     website.paymentInstructions = cleanString(payload.paymentInstructions);
     const paymentSettings = websitePaymentService.normalizeWebsitePaymentSettings(payload, website);
     website.bookingFlow = {
@@ -566,6 +602,8 @@ class ProviderWebsiteService {
 
     const bookingFlow = normalizeBookingFlowForWebsite(website);
     const baseAmount = resolveBookingPaymentDue(website, selectedService, bookingFlow);
+    const timeCharges = resolveBookingTimeCharges(website, slotStartMinutes, baseAmount);
+    const payableAmount = Number((baseAmount + timeCharges.total).toFixed(2));
     const paymentChoice = websitePaymentService.resolveCustomerPaymentChoice(bookingFlow, payload.paymentChoice);
     if (paymentChoice === 'gateway' && !websitePaymentService.isGatewayConfigured()) {
       throw new Error('Online gateway payment is not connected yet. Choose manual UPI payment or pay later.');
@@ -576,8 +614,8 @@ class ProviderWebsiteService {
 
     const paymentChannel = paymentChoice === 'pay-later' ? 'none' : paymentChoice;
     const amountBreakdown = paymentChoice === 'gateway'
-      ? websitePaymentService.calculateGatewayAmounts(baseAmount, bookingFlow.gatewayFeeBearer)
-      : websitePaymentService.calculateManualAmounts(baseAmount);
+      ? websitePaymentService.calculateGatewayAmounts(payableAmount, bookingFlow.gatewayFeeBearer)
+      : websitePaymentService.calculateManualAmounts(payableAmount);
     const paymentStatus = paymentChoice === 'pay-later'
       ? 'not-required'
       : paymentChoice === 'manual-upi'
@@ -637,6 +675,9 @@ class ProviderWebsiteService {
         paymentStatus,
         amountBreakdown: {
           ...amountBreakdown,
+          bookingBaseAmount: baseAmount,
+          nightChargeAmount: timeCharges.nightAmount,
+          emergencyChargeAmount: timeCharges.emergencyAmount,
           feeBearer: bookingFlow.gatewayFeeBearer
         },
         gateway: paymentChoice === 'gateway' ? {
