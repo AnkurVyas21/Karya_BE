@@ -127,7 +127,7 @@ const isTimeInWindow = (timeMinutes, startMinutes, endMinutes) => {
     ? timeMinutes >= startMinutes && timeMinutes < endMinutes
     : timeMinutes >= startMinutes || timeMinutes < endMinutes;
 };
-const resolveBookingTimeCharges = (website = {}, bookingStartMinutes = null, baseAmount = 0) => {
+const resolveBookingTimeCharges = (website = {}, bookingStartMinutes = null, baseAmount = 0, bookingDate = '') => {
   const rules = website.extraChargeRules || website.extraCharges || {};
   const night = rules.night || {};
   const emergency = rules.emergency || {};
@@ -139,7 +139,14 @@ const resolveBookingTimeCharges = (website = {}, bookingStartMinutes = null, bas
     const waiveAbove = cleanNumber(night.waiveOrderAbove ?? night.waiveAboveAmount, 0);
     nightAmount = waiveAbove > 0 && baseAmount >= waiveAbove ? 0 : Math.max(0, amount);
   }
-  if (cleanBoolean(emergency.enabled, false)) {
+  const indiaNow = getIndiaNowContext();
+  const emergencyWindowMinutes = Math.max(0, cleanNumber(website.bookingBufferMinutes, 0));
+  const isEmergencyBooking = cleanString(bookingDate) === indiaNow.date
+    && emergencyWindowMinutes > 0
+    && bookingStartMinutes !== null
+    && bookingStartMinutes > indiaNow.minutes
+    && bookingStartMinutes <= indiaNow.minutes + emergencyWindowMinutes;
+  if (cleanBoolean(emergency.enabled, false) && isEmergencyBooking) {
     const amount = cleanNumber(emergency.amount, 0);
     const waiveAbove = cleanNumber(emergency.waiveOrderAbove ?? emergency.waiveAboveAmount, 0);
     emergencyAmount = waiveAbove > 0 && baseAmount >= waiveAbove ? 0 : Math.max(0, amount);
@@ -611,7 +618,7 @@ class ProviderWebsiteService {
 
     const bookingFlow = normalizeBookingFlowForWebsite(website);
     const baseAmount = resolveBookingPaymentDue(website, selectedService, bookingFlow);
-    const timeCharges = resolveBookingTimeCharges(website, slotStartMinutes, baseAmount);
+    const timeCharges = resolveBookingTimeCharges(website, slotStartMinutes, baseAmount, bookingDate);
     const payableAmount = Number((baseAmount + timeCharges.total).toFixed(2));
     const paymentChoice = websitePaymentService.resolveCustomerPaymentChoice(bookingFlow, payload.paymentChoice);
     if (paymentChoice === 'gateway' && !websitePaymentService.isGatewayConfigured()) {
@@ -663,9 +670,6 @@ class ProviderWebsiteService {
         })
         : {};
       if (paymentChoice === 'manual-upi') {
-        if (website.upiQrCodeSource === 'custom' && website.upiQrCodeImage) {
-          manualPayment.qrCodeDataUrl = website.upiQrCodeImage;
-        }
         manualPayment.payerTransactionId = cleanString(payload.payerTransactionId);
         manualPayment.submittedAt = new Date();
       }
@@ -819,9 +823,6 @@ class ProviderWebsiteService {
         })
         : {};
       if (paymentChoice === 'manual-upi') {
-        if (website.upiQrCodeSource === 'custom' && website.upiQrCodeImage) {
-          manualPayment.qrCodeDataUrl = website.upiQrCodeImage;
-        }
         manualPayment.payerTransactionId = cleanString(payload.payerTransactionId);
         manualPayment.submittedAt = new Date();
       }
