@@ -205,6 +205,15 @@ const getWebsitePreviewBySlug = async (req, res) => {
   }
 };
 
+const getWebsiteBookingSlots = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.getBookingSlots(req.params.slug, req.query.date);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const getWebsiteManager = async (req, res) => {
   try {
     const data = await providerWebsiteService.getManager(req.user._id);
@@ -439,6 +448,7 @@ module.exports = {
   getGrowthActivity,
   getWebsiteBySlug,
   getWebsitePreviewBySlug,
+  getWebsiteBookingSlots,
   getWebsiteManager,
   saveWebsiteManager,
   updateWebsitePublishStatus,

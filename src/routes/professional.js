@@ -14,6 +14,7 @@ const {
   getGrowthActivity,
   getWebsiteBySlug,
   getWebsitePreviewBySlug,
+  getWebsiteBookingSlots,
   getWebsiteManager,
   saveWebsiteManager,
   updateWebsitePublishStatus,
@@ -97,6 +98,7 @@ router.post('/search/ai', aiSearch);
 router.get('/bookmarks', authMiddleware, getBookmarks);
 router.delete('/bookmark/:id', authMiddleware, removeBookmark);
 router.get('/website/preview/:slug', authMiddleware, roleMiddleware(['professional', 'admin']), getWebsitePreviewBySlug);
+router.get('/website/:slug/booking-slots', optionalAuthMiddleware, getWebsiteBookingSlots);
 router.get('/website/:slug', optionalAuthMiddleware, getWebsiteBySlug);
 router.post('/website/:slug/inquiries', optionalAuthMiddleware, createWebsiteInquiry);
 router.post('/website/:slug/bookings', optionalAuthMiddleware, createWebsiteBooking);

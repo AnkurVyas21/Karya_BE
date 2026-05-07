@@ -80,6 +80,12 @@ const parseTimeToMinutes = (value = '') => {
   }
   return (hours * 60) + minutes;
 };
+const minutesToTime = (value = 0) => {
+  const normalized = Math.max(0, Math.min(1440, Number(value) || 0));
+  const hours = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+};
 const getIndiaNowContext = () => {
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: INDIA_TIME_ZONE,
@@ -139,14 +145,7 @@ const resolveBookingTimeCharges = (website = {}, bookingStartMinutes = null, bas
     const waiveAbove = cleanNumber(night.waiveOrderAbove ?? night.waiveAboveAmount, 0);
     nightAmount = waiveAbove > 0 && baseAmount >= waiveAbove ? 0 : Math.max(0, amount);
   }
-  const indiaNow = getIndiaNowContext();
-  const emergencyWindowMinutes = Math.max(0, cleanNumber(website.bookingBufferMinutes, 0));
-  const isEmergencyBooking = cleanString(bookingDate) === indiaNow.date
-    && emergencyWindowMinutes > 0
-    && bookingStartMinutes !== null
-    && bookingStartMinutes > indiaNow.minutes
-    && bookingStartMinutes <= indiaNow.minutes + emergencyWindowMinutes;
-  if (cleanBoolean(emergency.enabled, false) && isEmergencyBooking) {
+  if (cleanBoolean(emergency.enabled, false) && isEmergencyBookingTime(website, bookingStartMinutes, bookingDate)) {
     const amount = cleanNumber(emergency.amount, 0);
     const waiveAbove = cleanNumber(emergency.waiveOrderAbove ?? emergency.waiveAboveAmount, 0);
     emergencyAmount = waiveAbove > 0 && baseAmount >= waiveAbove ? 0 : Math.max(0, amount);
@@ -157,6 +156,15 @@ const resolveBookingTimeCharges = (website = {}, bookingStartMinutes = null, bas
     emergencyAmount,
     total: Number((nightAmount + emergencyAmount).toFixed(2))
   };
+};
+const isEmergencyBookingTime = (website = {}, bookingStartMinutes = null, bookingDate = '') => {
+  const indiaNow = getIndiaNowContext();
+  const emergencyWindowMinutes = Math.max(0, cleanNumber(website.bookingBufferMinutes, 0));
+  return cleanString(bookingDate) === indiaNow.date
+    && emergencyWindowMinutes > 0
+    && bookingStartMinutes !== null
+    && bookingStartMinutes > indiaNow.minutes
+    && bookingStartMinutes <= indiaNow.minutes + emergencyWindowMinutes;
 };
 const toReceiptPayload = (transaction, providerName = '') => ({
   receiptNumber: transaction?.receipt?.receiptNumber || '',
@@ -534,6 +542,94 @@ class ProviderWebsiteService {
       source: lead.source,
       status: lead.status,
       createdAt: lead.createdAt
+    };
+  }
+
+  async getBookingSlots(slug, dateString = '') {
+    const website = await ProviderWebsite.findOne({ slug: slugify(slug) }).lean();
+    if (!website || !website.published || !website.bookingEnabled) {
+      throw new Error('Booking is not available for this business page');
+    }
+
+    const bookingDate = cleanString(dateString);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(bookingDate)) {
+      throw new Error('Choose a valid booking date');
+    }
+
+    const indiaNow = getIndiaNowContext();
+    const bookingWeekday = getWeekdayForDate(bookingDate);
+    const workingDays = Array.isArray(website.bookingWorkingDays) ? website.bookingWorkingDays : [];
+    const closedDates = Array.isArray(website.bookingClosedDates) ? website.bookingClosedDates : [];
+    const businessHour = Array.isArray(website.businessHours)
+      ? website.businessHours.find((item) => normalizeDayLabel(item?.day) === normalizeDayLabel(bookingWeekday))
+      : null;
+    const openMinutes = parseTimeToMinutes(businessHour?.openTime);
+    const closeMinutes = parseTimeToMinutes(businessHour?.closeTime);
+    const breakStart = parseTimeToMinutes(businessHour?.breakStartTime);
+    const breakEnd = parseTimeToMinutes(businessHour?.breakEndTime);
+    const leadNoticeMinutes = Math.max(0, cleanNumber(website.bookingLeadNoticeHours, 0)) * 60;
+    const minBookableMinutes = bookingDate === indiaNow.date ? indiaNow.minutes + leadNoticeMinutes : -1;
+    const isWorkingDay = workingDays.length === 0 || workingDays.some((day) => normalizeDayLabel(day) === normalizeDayLabel(bookingWeekday));
+    const dayClosedReason = bookingDate < indiaNow.date
+      ? 'past date'
+      : closedDates.includes(bookingDate)
+        ? 'closed date'
+        : !isWorkingDay
+          ? 'booking off-day'
+          : !businessHour || businessHour.isOpen === false
+            ? 'business closed'
+            : openMinutes === null || closeMinutes === null || closeMinutes <= openMinutes
+              ? 'working hours unavailable'
+              : '';
+
+    const existingBookings = await ProviderBooking.find({
+      websiteId: website._id,
+      bookingDate,
+      status: { $ne: 'cancelled' }
+    }).select('bookingTime').lean();
+    const bookedTimes = new Set(existingBookings.map((item) => cleanString(item.bookingTime)).filter(Boolean));
+    const rules = website.extraChargeRules || website.extraCharges || {};
+    const night = rules.night || {};
+    const nightStart = parseTimeToMinutes(night.startTime);
+    const nightEnd = parseTimeToMinutes(night.endTime);
+    const slots = [];
+
+    for (let start = 0; start < 1440; start += 30) {
+      const end = start + 30;
+      const value = `${minutesToTime(start)} - ${minutesToTime(end)}`;
+      const overlapsBreak = breakStart !== null && breakEnd !== null && breakEnd > breakStart && start < breakEnd && end > breakStart;
+      const outsideWorkingHours = !dayClosedReason && (start < openMinutes || end > closeMinutes);
+      const alreadyPassed = !dayClosedReason && bookingDate === indiaNow.date && start <= indiaNow.minutes;
+      const booked = bookedTimes.has(value);
+      const reason = dayClosedReason
+        || (outsideWorkingHours ? 'outside working hours' : '')
+        || (overlapsBreak ? 'break time' : '')
+        || (alreadyPassed ? 'time passed' : '')
+        || (booked ? 'already booked' : '');
+      slots.push({
+        label: value,
+        startTime: minutesToTime(start),
+        endTime: minutesToTime(end),
+        value,
+        disabled: !!reason,
+        reason,
+        isEmergency: !reason && isEmergencyBookingTime(website, start, bookingDate),
+        isNight: !reason && cleanBoolean(night.enabled, false) && isTimeInWindow(start, nightStart, nightEnd)
+      });
+    }
+
+    return {
+      date: bookingDate,
+      weekday: bookingWeekday,
+      workingHours: businessHour ? {
+        openTime: businessHour.openTime || '',
+        closeTime: businessHour.closeTime || '',
+        breakStartTime: businessHour.breakStartTime || '',
+        breakEndTime: businessHour.breakEndTime || ''
+      } : null,
+      minBookableTime: minBookableMinutes >= 0 ? minutesToTime(Math.min(1440, minBookableMinutes)) : '',
+      emergencyWindowMinutes: Math.max(0, cleanNumber(website.bookingBufferMinutes, 0)),
+      slots
     };
   }
 
