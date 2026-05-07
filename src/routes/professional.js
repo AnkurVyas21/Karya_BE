@@ -67,6 +67,7 @@ router.put(
   roleMiddleware(['professional']),
   upload.fields([
     { name: 'heroImage', maxCount: 1 },
+    { name: 'aboutImage', maxCount: 1 },
     { name: 'logoImage', maxCount: 1 },
     { name: 'upiQrCodeImage', maxCount: 1 },
     { name: 'galleryImages', maxCount: 12 },

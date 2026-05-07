@@ -180,6 +180,9 @@ class ProviderWebsiteService {
     const purchased = providerGrowthService.hasActiveWebsite(state);
 
     const heroImage = Array.isArray(files.heroImage) && files.heroImage[0]?.path ? files.heroImage[0].path : website.heroImage;
+    const aboutImage = Array.isArray(files.aboutImage) && files.aboutImage[0]?.path
+      ? files.aboutImage[0].path
+      : cleanString(payload.aboutImage) || website.aboutImage;
     const logo = Array.isArray(files.logoImage) && files.logoImage[0]?.path ? files.logoImage[0].path : website.logo;
     const uploadedUpiQrCodeImage = Array.isArray(files.upiQrCodeImage) && files.upiQrCodeImage[0]?.path ? files.upiQrCodeImage[0].path : '';
     const uploadedGallery = Array.isArray(files.galleryImages) ? files.galleryImages.map((item) => item.path).filter(Boolean) : [];
@@ -220,6 +223,7 @@ class ProviderWebsiteService {
     };
     website.businessHours = businessHours;
     website.heroImage = heroImage || '';
+    website.aboutImage = aboutImage || '';
     website.logo = logo || '';
     website.gallery = [...normalizeGallery(payload.gallery), ...uploadedGallery].slice(0, 20);
     website.videos = [...normalizeVideos(payload.videos), ...uploadedVideos].slice(0, 8);
@@ -984,6 +988,7 @@ class ProviderWebsiteService {
         pincode: cleanString(profile?.pincode),
         serviceAreas: Array.isArray(profile?.serviceAreas) ? profile.serviceAreas : [],
         businessHours: DEFAULT_BUSINESS_HOURS,
+        aboutImage: '',
         gallery: [],
         videos: [],
         servicesEnabled: true,

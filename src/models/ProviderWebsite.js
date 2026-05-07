@@ -79,6 +79,7 @@ const providerWebsiteSchema = new mongoose.Schema({
   },
   businessHours: [businessHourSchema],
   heroImage: { type: String, default: '' },
+  aboutImage: { type: String, default: '' },
   logo: { type: String, default: '' },
   gallery: [{ type: String }],
   videos: [{ type: String }],
