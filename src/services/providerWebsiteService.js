@@ -295,12 +295,20 @@ class ProviderWebsiteService {
       chargeAmount: paymentSettings.bookingFlow.chargeAmount || website.bookingFeeAmount || 0,
       paymentInstructions: paymentSettings.bookingFlow.paymentInstructions || website.paymentInstructions || ''
     };
-    if (hasAdvanceBookingFee(website) && website.upiId) {
+    if (hasAdvanceBookingFee(website)) {
+      const methods = Array.isArray(paymentSettings.bookingFlow.paymentMethods) && paymentSettings.bookingFlow.paymentMethods.length
+        ? paymentSettings.bookingFlow.paymentMethods
+        : (website.upiId ? ['manual-upi'] : []);
       website.bookingFlow = {
         ...website.bookingFlow,
         paymentModel: 'payment-only',
-        paymentMethods: ['manual-upi'],
+        paymentMethods: methods,
         chargeAmount: website.bookingFeeAmount
+      };
+    } else if (website.bookingFlow.paymentModel === 'payment-only') {
+      website.bookingFlow = {
+        ...website.bookingFlow,
+        paymentModel: 'without-online-payment'
       };
     }
     website.productFlow = {
