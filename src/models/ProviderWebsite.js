@@ -52,6 +52,29 @@ const websitePaymentFlowSchema = new mongoose.Schema({
   chargeAmount: { type: Number, default: 0 }
 }, { _id: false });
 
+const extraChargeRuleSchema = new mongoose.Schema({
+  convenience: {
+    enabled: { type: Boolean, default: false },
+    freeKm: { type: Number, default: 0 },
+    perKm: { type: Number, default: 0 },
+    waiveOrderAbove: { type: Number, default: 0 },
+    waiveDistanceKm: { type: Number, default: 0 }
+  },
+  night: {
+    enabled: { type: Boolean, default: false },
+    startTime: { type: String, default: '' },
+    endTime: { type: String, default: '' },
+    amount: { type: Number, default: 0 },
+    waiveOrderAbove: { type: Number, default: 0 }
+  },
+  emergency: {
+    enabled: { type: Boolean, default: false },
+    amount: { type: Number, default: 0 },
+    waiveOrderAbove: { type: Number, default: 0 }
+  },
+  note: { type: String, default: '' }
+}, { _id: false });
+
 const providerWebsiteSchema = new mongoose.Schema({
   providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
   isPurchased: { type: Boolean, default: false },
@@ -113,6 +136,7 @@ const providerWebsiteSchema = new mongoose.Schema({
   paymentInstructions: { type: String, default: '' },
   bookingFlow: { type: websitePaymentFlowSchema, default: () => ({}) },
   productFlow: { type: websitePaymentFlowSchema, default: () => ({ enabled: false }) },
+  extraChargeRules: { type: extraChargeRuleSchema, default: () => ({}) },
   faqs: [faqSchema],
   testimonials: [testimonialSchema],
   featuredServiceTitle: { type: String, default: '' },

@@ -289,6 +289,7 @@ class ProviderWebsiteService {
     website.bookingFeeAmount = cleanNumber(payload.bookingFeeAmount, 0);
     website.advanceBookingFeeEnabled = cleanBoolean(payload.advanceBookingFeeEnabled, false);
     website.paymentInstructions = cleanString(payload.paymentInstructions);
+    website.extraChargeRules = this.normalizeExtraChargeRules(payload.extraChargeRules || website.extraChargeRules || {});
     const paymentSettings = websitePaymentService.normalizeWebsitePaymentSettings(payload, website);
     website.bookingFlow = {
       ...paymentSettings.bookingFlow,
@@ -1139,6 +1140,34 @@ class ProviderWebsiteService {
       }))
       .filter((item) => item.label || item.startTime || item.endTime)
       .slice(0, 12);
+  }
+
+  normalizeExtraChargeRules(rules = {}) {
+    const convenience = rules.convenience || rules.distance || {};
+    const night = rules.night || {};
+    const emergency = rules.emergency || {};
+    return {
+      convenience: {
+        enabled: cleanBoolean(convenience.enabled, false),
+        freeKm: cleanNumber(convenience.freeKm ?? convenience.startsAfterKm, 0),
+        perKm: cleanNumber(convenience.perKm ?? convenience.amountPerKm, 0),
+        waiveOrderAbove: cleanNumber(convenience.waiveOrderAbove ?? convenience.waiveAboveAmount, 0),
+        waiveDistanceKm: cleanNumber(convenience.waiveDistanceKm, 0)
+      },
+      night: {
+        enabled: cleanBoolean(night.enabled, false),
+        startTime: cleanString(night.startTime),
+        endTime: cleanString(night.endTime),
+        amount: cleanNumber(night.amount, 0),
+        waiveOrderAbove: cleanNumber(night.waiveOrderAbove ?? night.waiveAboveAmount, 0)
+      },
+      emergency: {
+        enabled: cleanBoolean(emergency.enabled, false),
+        amount: cleanNumber(emergency.amount, 0),
+        waiveOrderAbove: cleanNumber(emergency.waiveOrderAbove ?? emergency.waiveAboveAmount, 0)
+      },
+      note: cleanString(rules.note)
+    };
   }
 
   normalizeBookingClosedDates(dates = []) {
