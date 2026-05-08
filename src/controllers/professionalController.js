@@ -207,7 +207,9 @@ const getWebsitePreviewBySlug = async (req, res) => {
 
 const getWebsiteBookingSlots = async (req, res) => {
   try {
-    const data = await providerWebsiteService.getBookingSlots(req.params.slug, req.query.date);
+    const data = await providerWebsiteService.getBookingSlots(req.params.slug, req.query.date, {
+      serviceId: req.query.serviceId
+    });
     res.json({ success: true, data });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });

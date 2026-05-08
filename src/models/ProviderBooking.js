@@ -7,10 +7,15 @@ const providerBookingSchema = new mongoose.Schema({
   customerName: { type: String, required: true },
   customerPhone: { type: String, required: true },
   customerEmail: { type: String, default: '' },
+  customerAddress: { type: String, default: '' },
   serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProviderService', default: null },
   serviceTitle: { type: String, default: '' },
   bookingDate: { type: String, default: '' },
   bookingTime: { type: String, default: '' },
+  bookingStartTime: { type: String, default: '' },
+  bookingEndTime: { type: String, default: '' },
+  bookingDurationMinutes: { type: Number, default: 30 },
+  bookingGapMinutes: { type: Number, default: 0 },
   message: { type: String, default: '' },
   advanceFeeRequired: { type: Boolean, default: false },
   advanceFeeAmount: { type: Number, default: 0 },
@@ -22,7 +27,11 @@ const providerBookingSchema = new mongoose.Schema({
     default: 'pending'
   },
   transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'WebsiteTransaction', default: null, index: true },
-  status: { type: String, enum: ['new', 'confirmed', 'completed', 'cancelled'], default: 'new' }
+  status: {
+    type: String,
+    enum: ['new', 'pending_approval', 'confirmed', 'payment_pending', 'rejected', 'completed', 'cancelled'],
+    default: 'pending_approval'
+  }
 }, { timestamps: true });
 
 module.exports = mongoose.model('ProviderBooking', providerBookingSchema);

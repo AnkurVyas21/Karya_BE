@@ -13,6 +13,15 @@ const providerServiceSchema = new mongoose.Schema({
   image: { type: String, default: '' },
   isFeatured: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
+  availableForBooking: { type: Boolean, default: true },
+  bookingDurationMinutes: { type: Number, default: 0 },
+  bookingGapMinutes: { type: Number, default: 0 },
+  bookingCapacity: { type: Number, default: 0 },
+  bookingConfirmationType: {
+    type: String,
+    enum: ['auto_confirm', 'provider_approval', 'payment_first', 'call_whatsapp', ''],
+    default: ''
+  },
   sortOrder: { type: Number, default: 0 }
 }, { timestamps: true });
 

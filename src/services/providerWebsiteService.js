@@ -68,6 +68,10 @@ const normalizeGallery = (value) => cleanArray(value).slice(0, 20);
 const normalizeVideos = (value) => cleanArray(value).slice(0, 8);
 const toObjectIdString = (value) => (value && typeof value.toString === 'function' ? value.toString() : String(value || ''));
 const normalizeDayLabel = (value = '') => cleanString(value).toLowerCase();
+const clampNumber = (value, fallback = 0, min = 0, max = Number.MAX_SAFE_INTEGER) => {
+  const parsed = cleanNumber(value, fallback);
+  return Math.min(Math.max(parsed, min), max);
+};
 const parseTimeToMinutes = (value = '') => {
   const match = /^(\d{1,2}):(\d{2})$/.exec(cleanString(value));
   if (!match) {
@@ -118,8 +122,104 @@ const resolvePriceForService = (service = {}, fallbackAmount = 0) => {
 };
 const hasAdvanceBookingFee = (website = {}) => cleanBoolean(website.advanceBookingFeeEnabled, false) && cleanNumber(website.bookingFeeAmount, 0) > 0;
 const resolveLeadNoticeMinutes = (website = {}) => {
+  if (website.bookingMinimumAdvanceMinutes !== undefined && website.bookingMinimumAdvanceMinutes !== null && website.bookingMinimumAdvanceMinutes !== '') {
+    return clampNumber(website.bookingMinimumAdvanceMinutes, 60, 0, 43200);
+  }
   const value = Math.max(0, cleanNumber(website.bookingLeadNoticeHours, 0));
   return value > 24 ? value : value * 60;
+};
+const resolveBookingSlotDuration = (website = {}, service = null) => {
+  const serviceDuration = cleanNumber(service?.bookingDurationMinutes, 0);
+  return clampNumber(serviceDuration > 0 ? serviceDuration : website.bookingSlotDurationMinutes, 30, 5, 480);
+};
+const resolveBookingGapMinutes = (website = {}, service = null) => {
+  const serviceGap = cleanNumber(service?.bookingGapMinutes, -1);
+  return clampNumber(serviceGap >= 0 ? serviceGap : website.bookingGapAfterMinutes, 0, 0, 240);
+};
+const resolveBookingLimitType = (website = {}) => {
+  const value = cleanString(website.bookingLimitType || 'per_slot');
+  return ['per_slot', 'per_day', 'per_service', 'manual_no_limit'].includes(value) ? value : 'per_slot';
+};
+const resolveCapacityPerSlot = (website = {}, service = null) => {
+  const limitType = resolveBookingLimitType(website);
+  if (limitType === 'manual_no_limit' || limitType === 'per_day') {
+    return 0;
+  }
+  const serviceCapacity = cleanNumber(service?.bookingCapacity, 0);
+  return clampNumber(limitType === 'per_service' && serviceCapacity > 0 ? serviceCapacity : website.bookingCapacityPerSlot, 1, 1, 100);
+};
+const resolveDailyBookingLimit = (website = {}) => clampNumber(website.bookingDailyLimit, 0, 0, 1000);
+const resolveMaximumAdvanceDays = (website = {}) => clampNumber(website.bookingMaximumAdvanceDays, 30, 0, 365);
+const resolveBookingConfirmationType = (website = {}, service = null) => {
+  const serviceType = cleanString(service?.bookingConfirmationType);
+  const value = serviceType || cleanString(website.bookingConfirmationType || 'provider_approval');
+  return ['auto_confirm', 'provider_approval', 'payment_first', 'call_whatsapp'].includes(value) ? value : 'provider_approval';
+};
+const resolveBookingStatus = (website = {}, service = null, paymentChoice = 'pay-later') => {
+  const confirmationType = resolveBookingConfirmationType(website, service);
+  if (confirmationType === 'auto_confirm' && paymentChoice === 'pay-later') {
+    return 'confirmed';
+  }
+  if (confirmationType === 'payment_first' || paymentChoice !== 'pay-later') {
+    return 'payment_pending';
+  }
+  return 'pending_approval';
+};
+const parseBookingTimeRange = (booking = {}) => {
+  const [startLabel = '', endLabel = ''] = cleanString(booking.bookingTime).split(' - ').map((item) => cleanString(item));
+  const startTime = cleanString(booking.bookingStartTime) || startLabel;
+  const start = parseTimeToMinutes(startTime);
+  const storedEnd = parseTimeToMinutes(booking.bookingEndTime);
+  const rangeEnd = parseTimeToMinutes(endLabel);
+  const durationEnd = start !== null ? start + clampNumber(booking.bookingDurationMinutes, 30, 5, 480) : null;
+  const end = storedEnd !== null ? storedEnd : rangeEnd !== null ? rangeEnd : durationEnd;
+  return start !== null && end !== null && end > start ? { start, end } : null;
+};
+const rangesOverlap = (leftStart, leftEnd, rightStart, rightEnd) => leftStart < rightEnd && leftEnd > rightStart;
+const dateToUtcTime = (dateString = '') => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanString(dateString))) {
+    return null;
+  }
+  return new Date(`${dateString}T00:00:00Z`).getTime();
+};
+const dateDiffDays = (left = '', right = '') => {
+  const leftTime = dateToUtcTime(left);
+  const rightTime = dateToUtcTime(right);
+  if (leftTime === null || rightTime === null) {
+    return 0;
+  }
+  return Math.round((leftTime - rightTime) / 86400000);
+};
+const minutesUntilBooking = (bookingDate = '', bookingStartMinutes = 0, nowContext = getIndiaNowContext()) => {
+  return (dateDiffDays(bookingDate, nowContext.date) * 1440) + bookingStartMinutes - nowContext.minutes;
+};
+const addDaysToDateString = (dateString = '', days = 0) => {
+  const time = dateToUtcTime(dateString);
+  if (time === null) {
+    return '';
+  }
+  return new Date(time + (days * 86400000)).toISOString().slice(0, 10);
+};
+const normalizeClosedDateEntries = (website = {}) => {
+  const detailEntries = Array.isArray(website.bookingClosedDateDetails)
+    ? website.bookingClosedDateDetails
+      .map((item) => ({
+        date: cleanString(item?.date),
+        reason: cleanString(item?.reason)
+      }))
+      .filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item.date))
+    : [];
+  const legacyEntries = Array.isArray(website.bookingClosedDates)
+    ? website.bookingClosedDates
+      .map((date) => ({ date: cleanString(date), reason: '' }))
+      .filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item.date))
+    : [];
+  const merged = new Map();
+  [...legacyEntries, ...detailEntries].forEach((item) => {
+    const existing = merged.get(item.date) || {};
+    merged.set(item.date, { date: item.date, reason: item.reason || existing.reason || '' });
+  });
+  return Array.from(merged.values()).sort((left, right) => left.date.localeCompare(right.date));
 };
 const resolveBookingPaymentDue = (website = {}, service = {}, bookingFlow = {}) => {
   const advanceAmount = cleanNumber(website.bookingFeeAmount, 0);
@@ -163,12 +263,12 @@ const resolveBookingTimeCharges = (website = {}, bookingStartMinutes = null, bas
 };
 const isEmergencyBookingTime = (website = {}, bookingStartMinutes = null, bookingDate = '') => {
   const indiaNow = getIndiaNowContext();
-  const emergencyWindowMinutes = Math.max(0, cleanNumber(website.bookingBufferMinutes, 0));
-  return cleanString(bookingDate) === indiaNow.date
-    && emergencyWindowMinutes > 0
+  const emergency = (website.extraChargeRules || website.extraCharges || {}).emergency || {};
+  const emergencyWindowMinutes = Math.max(0, cleanNumber(emergency.windowMinutes ?? website.bookingBufferMinutes, 0));
+  return emergencyWindowMinutes > 0
     && bookingStartMinutes !== null
-    && bookingStartMinutes > indiaNow.minutes
-    && bookingStartMinutes <= indiaNow.minutes + emergencyWindowMinutes;
+    && minutesUntilBooking(cleanString(bookingDate), bookingStartMinutes, indiaNow) > 0
+    && minutesUntilBooking(cleanString(bookingDate), bookingStartMinutes, indiaNow) <= emergencyWindowMinutes;
 };
 const toReceiptPayload = (transaction, providerName = '') => ({
   receiptNumber: transaction?.receipt?.receiptNumber || '',
@@ -299,11 +399,25 @@ class ProviderWebsiteService {
     website.emergencyAvailability = cleanBoolean(payload.emergencyAvailability, false);
     website.requestCallbackMessage = cleanString(payload.requestCallbackMessage);
     website.bookingIntro = cleanString(payload.bookingIntro);
+    website.bookingConfirmationType = payload.bookingConfirmationType !== undefined
+      ? resolveBookingConfirmationType(payload, null)
+      : resolveBookingConfirmationType(website, null);
+    website.bookingPaymentOption = ['no_online_payment', 'pay_later', 'upi_payment', 'payment_screenshot_required', 'gateway_payment'].includes(cleanString(payload.bookingPaymentOption))
+      ? cleanString(payload.bookingPaymentOption)
+      : website.bookingPaymentOption || 'pay_later';
     website.bookingWorkingDays = cleanArray(payload.bookingWorkingDays);
     website.bookingSlots = bookingSlots;
+    website.bookingSlotDurationMinutes = clampNumber(payload.bookingSlotDurationMinutes, website.bookingSlotDurationMinutes || 30, 5, 480);
+    website.bookingGapAfterMinutes = clampNumber(payload.bookingGapAfterMinutes, website.bookingGapAfterMinutes || 0, 0, 240);
+    website.bookingMinimumAdvanceMinutes = clampNumber(payload.bookingMinimumAdvanceMinutes ?? payload.bookingLeadNoticeMinutes, resolveLeadNoticeMinutes(website), 0, 43200);
+    website.bookingMaximumAdvanceDays = clampNumber(payload.bookingMaximumAdvanceDays, website.bookingMaximumAdvanceDays ?? 30, 0, 365);
+    website.bookingLimitType = resolveBookingLimitType(payload);
+    website.bookingCapacityPerSlot = clampNumber(payload.bookingCapacityPerSlot, website.bookingCapacityPerSlot || 1, 1, 100);
+    website.bookingDailyLimit = clampNumber(payload.bookingDailyLimit, website.bookingDailyLimit || 0, 0, 1000);
     website.bookingBufferMinutes = cleanNumber(payload.bookingBufferMinutes, 0);
     website.bookingLeadNoticeHours = cleanNumber(payload.bookingLeadNoticeHours, 0);
     website.bookingClosedDates = this.normalizeBookingClosedDates(payload.bookingClosedDates || website.bookingClosedDates);
+    website.bookingClosedDateDetails = this.normalizeBookingClosedDateDetails(payload.bookingClosedDateDetails || website.bookingClosedDateDetails || website.bookingClosedDates);
     website.upiId = cleanString(payload.upiId);
     website.bookingFeeAmount = cleanNumber(payload.bookingFeeAmount, 0);
     website.advanceBookingFeeEnabled = cleanBoolean(payload.advanceBookingFeeEnabled, false);
@@ -315,6 +429,27 @@ class ProviderWebsiteService {
       chargeAmount: paymentSettings.bookingFlow.chargeAmount || website.bookingFeeAmount || 0,
       paymentInstructions: paymentSettings.bookingFlow.paymentInstructions || website.paymentInstructions || ''
     };
+    if (['upi_payment', 'payment_screenshot_required'].includes(website.bookingPaymentOption) && !website.bookingFlow.paymentMethods.includes('manual-upi')) {
+      website.bookingFlow = {
+        ...website.bookingFlow,
+        paymentModel: 'both',
+        paymentMethods: Array.from(new Set([...website.bookingFlow.paymentMethods, 'manual-upi']))
+      };
+    }
+    if (website.bookingPaymentOption === 'gateway_payment' && !website.bookingFlow.paymentMethods.includes('gateway')) {
+      website.bookingFlow = {
+        ...website.bookingFlow,
+        paymentModel: 'both',
+        paymentMethods: Array.from(new Set([...website.bookingFlow.paymentMethods, 'gateway']))
+      };
+    }
+    if (website.bookingPaymentOption === 'no_online_payment') {
+      website.bookingFlow = {
+        ...website.bookingFlow,
+        paymentModel: 'without-online-payment',
+        paymentMethods: []
+      };
+    }
     if (hasAdvanceBookingFee(website)) {
       const methods = Array.isArray(paymentSettings.bookingFlow.paymentMethods) && paymentSettings.bookingFlow.paymentMethods.length
         ? paymentSettings.bookingFlow.paymentMethods
@@ -549,7 +684,7 @@ class ProviderWebsiteService {
     };
   }
 
-  async getBookingSlots(slug, dateString = '') {
+  async getBookingSlots(slug, dateString = '', options = {}) {
     const cleanSlug = slugify(slug);
     if (!cleanSlug) {
       throw new Error('Booking is not available for this business page');
@@ -569,10 +704,21 @@ class ProviderWebsiteService {
       throw new Error('Choose a valid booking date');
     }
 
+    const selectedService = cleanString(options.serviceId)
+      ? await ProviderServiceModel.findOne({ _id: options.serviceId, providerId: website.providerId, isActive: true }).lean()
+      : null;
+    if (cleanString(options.serviceId) && !selectedService) {
+      throw new Error('Selected service is not available for booking');
+    }
+    if (selectedService && selectedService.availableForBooking === false) {
+      throw new Error('Selected service is not available for booking');
+    }
+
     const indiaNow = getIndiaNowContext();
     const bookingWeekday = getWeekdayForDate(bookingDate);
     const workingDays = Array.isArray(website.bookingWorkingDays) ? website.bookingWorkingDays : [];
-    const closedDates = Array.isArray(website.bookingClosedDates) ? website.bookingClosedDates : [];
+    const closedEntries = normalizeClosedDateEntries(website);
+    const closedDate = closedEntries.find((item) => item.date === bookingDate);
     const businessHour = Array.isArray(website.businessHours)
       ? website.businessHours.find((item) => normalizeDayLabel(item?.day) === normalizeDayLabel(bookingWeekday))
       : null;
@@ -581,12 +727,20 @@ class ProviderWebsiteService {
     const breakStart = parseTimeToMinutes(businessHour?.breakStartTime);
     const breakEnd = parseTimeToMinutes(businessHour?.breakEndTime);
     const leadNoticeMinutes = resolveLeadNoticeMinutes(website);
+    const slotDurationMinutes = resolveBookingSlotDuration(website, selectedService);
+    const gapAfterBookingMinutes = resolveBookingGapMinutes(website, selectedService);
+    const maxAdvanceDays = resolveMaximumAdvanceDays(website);
+    const maxBookableDate = addDaysToDateString(indiaNow.date, maxAdvanceDays);
+    const capacityPerSlot = resolveCapacityPerSlot(website, selectedService);
+    const dailyBookingLimit = resolveDailyBookingLimit(website);
     const minBookableMinutes = bookingDate === indiaNow.date ? indiaNow.minutes + leadNoticeMinutes : -1;
     const isWorkingDay = workingDays.length === 0 || workingDays.some((day) => normalizeDayLabel(day) === normalizeDayLabel(bookingWeekday));
     const dayClosedReason = bookingDate < indiaNow.date
       ? 'past date'
-      : closedDates.includes(bookingDate)
-        ? 'closed date'
+      : maxBookableDate && bookingDate > maxBookableDate
+        ? 'outside advance booking period'
+        : closedDate
+        ? closedDate.reason || 'closed date'
         : !isWorkingDay
           ? 'booking off-day'
           : !businessHour || businessHour.isOpen === false
@@ -598,34 +752,57 @@ class ProviderWebsiteService {
     const existingBookings = await ProviderBooking.find({
       websiteId: website._id,
       bookingDate,
-      status: { $ne: 'cancelled' }
-    }).select('bookingTime').lean();
-    const bookedTimes = new Set(existingBookings.map((item) => cleanString(item.bookingTime)).filter(Boolean));
+      status: { $nin: ['cancelled', 'rejected'] }
+    }).select('bookingTime bookingStartTime bookingEndTime bookingDurationMinutes bookingGapMinutes serviceId status').lean();
+    const dailyLimitReached = dailyBookingLimit > 0 && existingBookings.length >= dailyBookingLimit;
     const rules = website.extraChargeRules || website.extraCharges || {};
     const night = rules.night || {};
     const nightStart = parseTimeToMinutes(night.startTime);
     const nightEnd = parseTimeToMinutes(night.endTime);
     const slots = [];
 
-    for (let start = 0; start < 1440; start += 30) {
-      const end = start + 30;
+    for (let start = 0; start < 1440; start += slotDurationMinutes) {
+      const end = start + slotDurationMinutes;
       const value = `${minutesToTime(start)} - ${minutesToTime(end)}`;
       const overlapsBreak = breakStart !== null && breakEnd !== null && breakEnd > breakStart && start < breakEnd && end > breakStart;
       const outsideWorkingHours = !dayClosedReason && (start < openMinutes || end > closeMinutes);
       const alreadyPassed = !dayClosedReason && bookingDate === indiaNow.date && start <= indiaNow.minutes;
-      const underLeadNotice = !dayClosedReason && bookingDate === indiaNow.date && !alreadyPassed && start <= minBookableMinutes;
-      const booked = bookedTimes.has(value);
+      const underLeadNotice = !dayClosedReason && minutesUntilBooking(bookingDate, start, indiaNow) <= leadNoticeMinutes;
+      const overlappingBookings = existingBookings.filter((booking) => {
+        const range = parseBookingTimeRange(booking);
+        if (!range) {
+          return false;
+        }
+        const existingGap = clampNumber(booking.bookingGapMinutes, gapAfterBookingMinutes, 0, 240);
+        return rangesOverlap(start, end + gapAfterBookingMinutes, range.start, range.end + existingGap);
+      });
+      const serviceOverlappingBookings = selectedService
+        ? overlappingBookings.filter((booking) => toObjectIdString(booking.serviceId) === toObjectIdString(selectedService._id))
+        : [];
+      const serviceCapacity = selectedService && cleanNumber(selectedService.bookingCapacity, 0) > 0
+        ? clampNumber(selectedService.bookingCapacity, 1, 1, 100)
+        : 0;
+      const slotFull = capacityPerSlot > 0 && overlappingBookings.length >= capacityPerSlot;
+      const serviceFull = serviceCapacity > 0 && serviceOverlappingBookings.length >= serviceCapacity;
       const reason = dayClosedReason
         || (outsideWorkingHours ? 'outside working hours' : '')
         || (overlapsBreak ? 'break time' : '')
         || (alreadyPassed ? 'time passed' : '')
-        || (underLeadNotice ? 'lead notice required' : '')
-        || (booked ? 'already booked' : '');
+        || (underLeadNotice ? 'too soon' : '')
+        || (dailyLimitReached ? 'daily booking limit reached' : '')
+        || (serviceFull ? 'service full' : '')
+        || (slotFull ? 'full' : '');
+      const totalCapacity = serviceCapacity || capacityPerSlot;
+      const usedCapacity = serviceCapacity ? serviceOverlappingBookings.length : overlappingBookings.length;
+      const spotsLeft = totalCapacity > 0 ? Math.max(0, totalCapacity - usedCapacity) : null;
       slots.push({
-        label: value,
+        label: minutesToTime(start),
         startTime: minutesToTime(start),
         endTime: minutesToTime(end),
         value,
+        durationMinutes: slotDurationMinutes,
+        gapAfterBookingMinutes,
+        spotsLeft,
         disabled: !!reason,
         reason,
         isEmergency: !reason && isEmergencyBookingTime(website, start, bookingDate),
@@ -643,7 +820,22 @@ class ProviderWebsiteService {
         breakEndTime: businessHour.breakEndTime || ''
       } : null,
       minBookableTime: minBookableMinutes >= 0 ? minutesToTime(Math.min(1440, minBookableMinutes)) : '',
-      emergencyWindowMinutes: Math.max(0, cleanNumber(website.bookingBufferMinutes, 0)),
+      maxBookableDate,
+      slotDurationMinutes,
+      gapAfterBookingMinutes,
+      minimumAdvanceBookingMinutes: leadNoticeMinutes,
+      maximumAdvanceBookingDays: maxAdvanceDays,
+      capacityPerSlot,
+      dailyBookingLimit,
+      existingBookingsCount: existingBookings.length,
+      service: selectedService ? {
+        id: selectedService._id.toString(),
+        title: selectedService.title,
+        price: selectedService.price,
+        durationMinutes: slotDurationMinutes,
+        capacity: cleanNumber(selectedService.bookingCapacity, 0) || capacityPerSlot
+      } : null,
+      emergencyWindowMinutes: Math.max(0, cleanNumber((rules.emergency || {}).windowMinutes ?? website.bookingBufferMinutes, 0)),
       slots
     };
   }
@@ -673,10 +865,19 @@ class ProviderWebsiteService {
       throw new Error('Choose a booking time slot');
     }
 
+    const slotData = await this.getBookingSlots(slug, bookingDate, { serviceId: payload.serviceId });
+    const selectedSlot = (slotData.slots || []).find((slot) => slot.value === bookingTime);
+    if (!selectedSlot || selectedSlot.disabled) {
+      throw new Error(selectedSlot?.reason ? `Selected slot is unavailable: ${selectedSlot.reason}` : 'Choose an available booking time slot');
+    }
+
     const website = await ProviderWebsite.findOne({ slug: slugify(slug) });
     const selectedService = payload.serviceId
-      ? await ProviderServiceModel.findOne({ _id: payload.serviceId, providerId: website.providerId }).lean()
+      ? await ProviderServiceModel.findOne({ _id: payload.serviceId, providerId: website.providerId, isActive: true }).lean()
       : null;
+    if (payload.serviceId && (!selectedService || selectedService.availableForBooking === false)) {
+      throw new Error('Selected service is not available for booking');
+    }
 
     const bookingWeekday = getWeekdayForDate(bookingDate);
     if (!bookingWeekday) {
@@ -703,6 +904,8 @@ class ProviderWebsiteService {
     const [requestedStart = '', requestedEnd = ''] = bookingTime.split(' - ').map((item) => cleanString(item));
     const slotStartMinutes = parseTimeToMinutes(requestedStart);
     const slotEndMinutes = parseTimeToMinutes(requestedEnd);
+    const slotDurationMinutes = cleanNumber(selectedSlot.durationMinutes, resolveBookingSlotDuration(website, selectedService));
+    const gapAfterBookingMinutes = cleanNumber(selectedSlot.gapAfterBookingMinutes, resolveBookingGapMinutes(website, selectedService));
     const openMinutes = parseTimeToMinutes(businessHour?.openTime);
     const closeMinutes = parseTimeToMinutes(businessHour?.closeTime);
     if (slotStartMinutes === null || slotEndMinutes === null || openMinutes === null || closeMinutes === null || slotEndMinutes <= slotStartMinutes) {
@@ -723,8 +926,8 @@ class ProviderWebsiteService {
     }
 
     const leadNoticeMinutes = resolveLeadNoticeMinutes(website);
-    if (bookingDate === indiaNow.date && slotStartMinutes <= indiaNow.minutes + leadNoticeMinutes) {
-      throw new Error('This time slot is no longer available today');
+    if (minutesUntilBooking(bookingDate, slotStartMinutes, indiaNow) <= leadNoticeMinutes) {
+      throw new Error('This time slot does not meet the minimum advance booking time');
     }
 
     const bookingFlow = normalizeBookingFlowForWebsite(website);
@@ -732,6 +935,10 @@ class ProviderWebsiteService {
     const timeCharges = resolveBookingTimeCharges(website, slotStartMinutes, baseAmount, bookingDate);
     const payableAmount = Number((baseAmount + timeCharges.total).toFixed(2));
     const paymentChoice = websitePaymentService.resolveCustomerPaymentChoice(bookingFlow, payload.paymentChoice);
+    const confirmationType = resolveBookingConfirmationType(website, selectedService);
+    if (confirmationType === 'payment_first' && paymentChoice === 'pay-later') {
+      throw new Error('Payment is required before this booking can be submitted');
+    }
     if (paymentChoice === 'gateway' && !websitePaymentService.isGatewayConfigured()) {
       throw new Error('Online gateway payment is not connected yet. Choose manual UPI payment or pay later.');
     }
@@ -756,17 +963,22 @@ class ProviderWebsiteService {
       customerName: cleanString(payload.customerName),
       customerPhone: normalizeIndianPhone(payload.customerPhone),
       customerEmail: cleanString(payload.customerEmail),
+      customerAddress: cleanString(payload.customerAddress),
       serviceId: payload.serviceId || null,
       serviceTitle: cleanString(selectedService?.title),
       bookingDate,
       bookingTime,
+      bookingStartTime: minutesToTime(slotStartMinutes),
+      bookingEndTime: minutesToTime(slotEndMinutes),
+      bookingDurationMinutes: slotDurationMinutes,
+      bookingGapMinutes: gapAfterBookingMinutes,
       message: cleanString(payload.message),
       advanceFeeRequired: paymentChoice !== 'pay-later' && amountBreakdown.totalAmount > 0,
       advanceFeeAmount: Number(amountBreakdown.totalAmount || 0),
       paymentChoice,
       paymentChannel,
       paymentStatus,
-      status: 'new'
+      status: resolveBookingStatus(website, selectedService, paymentChoice)
     });
 
     let transaction = null;
@@ -849,6 +1061,10 @@ class ProviderWebsiteService {
       status: booking.status,
       paymentStatus: booking.paymentStatus,
       paymentChoice: booking.paymentChoice,
+      bookingDate: booking.bookingDate,
+      bookingTime: booking.bookingTime,
+      serviceTitle: booking.serviceTitle,
+      advanceFeeAmount: booking.advanceFeeAmount,
       createdAt: booking.createdAt,
       transaction: transaction ? this.serializeTransaction(transaction) : null
     };
@@ -1008,7 +1224,7 @@ class ProviderWebsiteService {
 
   async updateBookingStatus(userId, bookingId, payload = {}) {
     const nextStatus = cleanString(payload.status);
-    const allowedStatuses = ['new', 'confirmed', 'completed', 'cancelled'];
+    const allowedStatuses = ['new', 'pending_approval', 'confirmed', 'payment_pending', 'rejected', 'completed', 'cancelled'];
     if (!allowedStatuses.includes(nextStatus)) {
       throw new Error('Invalid booking status');
     }
@@ -1048,7 +1264,7 @@ class ProviderWebsiteService {
       transaction.receipt.receiptNumber = transaction.receipt.receiptNumber || websitePaymentService.buildReceiptNumber('BK');
       transaction.receipt.issuedAt = new Date();
       booking.paymentStatus = 'paid';
-      booking.status = booking.status === 'new' ? 'confirmed' : booking.status;
+      booking.status = ['new', 'payment_pending'].includes(booking.status) ? 'confirmed' : booking.status;
       await Promise.all([transaction.save(), booking.save()]);
       await this.sendReceiptEmails(userId, transaction);
     } else if (action === 'refund') {
@@ -1170,6 +1386,15 @@ class ProviderWebsiteService {
         productsEnabled: false,
         bookingEnabled: false,
         paymentsEnabled: false,
+        bookingConfirmationType: 'provider_approval',
+        bookingPaymentOption: 'pay_later',
+        bookingSlotDurationMinutes: 30,
+        bookingGapAfterMinutes: 0,
+        bookingMinimumAdvanceMinutes: 60,
+        bookingMaximumAdvanceDays: 30,
+        bookingLimitType: 'per_slot',
+        bookingCapacityPerSlot: 1,
+        bookingDailyLimit: 0,
         bookingFlow: {
           enabled: true,
           paymentModel: 'without-online-payment',
@@ -1275,6 +1500,7 @@ class ProviderWebsiteService {
       },
       emergency: {
         enabled: cleanBoolean(emergency.enabled, false),
+        windowMinutes: clampNumber(emergency.windowMinutes ?? emergency.applyWithinMinutes, 120, 0, 43200),
         amount: cleanNumber(emergency.amount, 0),
         waiveOrderAbove: cleanNumber(emergency.waiveOrderAbove ?? emergency.waiveAboveAmount, 0)
       },
@@ -1285,6 +1511,24 @@ class ProviderWebsiteService {
   normalizeBookingClosedDates(dates = []) {
     return cleanArray(dates)
       .filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item))
+      .slice(0, 60);
+  }
+
+  normalizeBookingClosedDateDetails(items = []) {
+    const source = Array.isArray(items) ? items : cleanArray(items).map((date) => ({ date }));
+    const seen = new Map();
+    source.forEach((item) => {
+      const date = cleanString(typeof item === 'string' ? item : item?.date);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return;
+      }
+      seen.set(date, {
+        date,
+        reason: cleanString(typeof item === 'string' ? '' : item?.reason)
+      });
+    });
+    return Array.from(seen.values())
+      .sort((left, right) => left.date.localeCompare(right.date))
       .slice(0, 60);
   }
 
@@ -1325,6 +1569,13 @@ class ProviderWebsiteService {
         image: cleanString(item.image),
         isFeatured: cleanBoolean(item.isFeatured, false),
         isActive: cleanBoolean(item.isActive, true),
+        availableForBooking: cleanBoolean(item.availableForBooking, true),
+        bookingDurationMinutes: clampNumber(item.bookingDurationMinutes, 0, 0, 480),
+        bookingGapMinutes: clampNumber(item.bookingGapMinutes, 0, 0, 240),
+        bookingCapacity: clampNumber(item.bookingCapacity, 0, 0, 100),
+        bookingConfirmationType: ['', 'auto_confirm', 'provider_approval', 'payment_first', 'call_whatsapp'].includes(cleanString(item.bookingConfirmationType))
+          ? cleanString(item.bookingConfirmationType)
+          : '',
         sortOrder: cleanNumber(item.sortOrder, index)
       }))
       .filter((item) => item.title);

@@ -30,6 +30,11 @@ const bookingSlotSchema = new mongoose.Schema({
   isActive: { type: Boolean, default: true }
 }, { _id: true });
 
+const closedBookingDateSchema = new mongoose.Schema({
+  date: { type: String, default: '' },
+  reason: { type: String, default: '' }
+}, { _id: true });
+
 const websitePaymentFlowSchema = new mongoose.Schema({
   enabled: { type: Boolean, default: true },
   paymentModel: {
@@ -69,6 +74,7 @@ const extraChargeRuleSchema = new mongoose.Schema({
   },
   emergency: {
     enabled: { type: Boolean, default: false },
+    windowMinutes: { type: Number, default: 120 },
     amount: { type: Number, default: 0 },
     waiveOrderAbove: { type: Number, default: 0 }
   },
@@ -123,11 +129,33 @@ const providerWebsiteSchema = new mongoose.Schema({
   emergencyAvailability: { type: Boolean, default: false },
   requestCallbackMessage: { type: String, default: '' },
   bookingIntro: { type: String, default: '' },
+  bookingConfirmationType: {
+    type: String,
+    enum: ['auto_confirm', 'provider_approval', 'payment_first', 'call_whatsapp'],
+    default: 'provider_approval'
+  },
+  bookingPaymentOption: {
+    type: String,
+    enum: ['no_online_payment', 'pay_later', 'upi_payment', 'payment_screenshot_required', 'gateway_payment'],
+    default: 'pay_later'
+  },
   bookingWorkingDays: [{ type: String }],
   bookingSlots: [bookingSlotSchema],
+  bookingSlotDurationMinutes: { type: Number, default: 30 },
+  bookingGapAfterMinutes: { type: Number, default: 0 },
+  bookingMinimumAdvanceMinutes: { type: Number, default: 60 },
+  bookingMaximumAdvanceDays: { type: Number, default: 30 },
+  bookingLimitType: {
+    type: String,
+    enum: ['per_slot', 'per_day', 'per_service', 'manual_no_limit'],
+    default: 'per_slot'
+  },
+  bookingCapacityPerSlot: { type: Number, default: 1 },
+  bookingDailyLimit: { type: Number, default: 0 },
   bookingBufferMinutes: { type: Number, default: 0 },
   bookingLeadNoticeHours: { type: Number, default: 0 },
   bookingClosedDates: [{ type: String }],
+  bookingClosedDateDetails: [closedBookingDateSchema],
   upiId: { type: String, default: '' },
   upiQrCodeImage: { type: String, default: '' },
   upiQrCodeSource: { type: String, enum: ['auto', 'custom'], default: 'auto' },
