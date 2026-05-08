@@ -19,10 +19,17 @@ const providerServiceSchema = new mongoose.Schema({
   bookingCapacity: { type: Number, default: 0 },
   bookingConfirmationType: {
     type: String,
-    enum: ['auto_confirm', 'provider_approval', 'payment_first', 'call_whatsapp', ''],
+    enum: ['auto_confirm', 'provider_approval', ''],
     default: ''
   },
   sortOrder: { type: Number, default: 0 }
 }, { timestamps: true });
+
+providerServiceSchema.pre('validate', function normalizeLegacyBookingConfirmation(next) {
+  if (!['', 'auto_confirm', 'provider_approval'].includes(this.bookingConfirmationType)) {
+    this.bookingConfirmationType = '';
+  }
+  next();
+});
 
 module.exports = mongoose.model('ProviderService', providerServiceSchema);

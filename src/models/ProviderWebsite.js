@@ -131,12 +131,12 @@ const providerWebsiteSchema = new mongoose.Schema({
   bookingIntro: { type: String, default: '' },
   bookingConfirmationType: {
     type: String,
-    enum: ['auto_confirm', 'provider_approval', 'payment_first', 'call_whatsapp'],
+    enum: ['auto_confirm', 'provider_approval'],
     default: 'provider_approval'
   },
   bookingPaymentOption: {
     type: String,
-    enum: ['no_online_payment', 'pay_later', 'upi_payment', 'payment_screenshot_required', 'gateway_payment'],
+    enum: ['pay_later', 'upi_payment', 'gateway_payment', 'gateway_plus_upi'],
     default: 'pay_later'
   },
   bookingWorkingDays: [{ type: String }],
@@ -176,5 +176,21 @@ const providerWebsiteSchema = new mongoose.Schema({
 });
 
 providerWebsiteSchema.index({ slug: 1 }, { unique: true, partialFilterExpression: { slug: { $type: 'string', $ne: '' } } });
+
+providerWebsiteSchema.pre('validate', function normalizeLegacyBookingOptions(next) {
+  if (!['auto_confirm', 'provider_approval'].includes(this.bookingConfirmationType)) {
+    this.bookingConfirmationType = 'provider_approval';
+  }
+  if (this.bookingPaymentOption === 'no_online_payment') {
+    this.bookingPaymentOption = 'pay_later';
+  }
+  if (this.bookingPaymentOption === 'payment_screenshot_required') {
+    this.bookingPaymentOption = 'upi_payment';
+  }
+  if (!['pay_later', 'upi_payment', 'gateway_payment', 'gateway_plus_upi'].includes(this.bookingPaymentOption)) {
+    this.bookingPaymentOption = 'pay_later';
+  }
+  next();
+});
 
 module.exports = mongoose.model('ProviderWebsite', providerWebsiteSchema);
