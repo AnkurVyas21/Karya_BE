@@ -353,10 +353,21 @@ const isEmergencyBookingTime = (website = {}, bookingStartMinutes = null, bookin
 const toReceiptPayload = (transaction, providerName = '') => ({
   receiptNumber: transaction?.receipt?.receiptNumber || '',
   contextLabel: cleanString(transaction?.contextLabel),
+  contextType: cleanString(transaction?.contextType),
+  contextId: toObjectIdString(transaction?.contextId),
   paymentChannel: cleanString(transaction?.paymentChannel),
+  paymentStatus: cleanString(transaction?.paymentStatus),
+  paymentId: cleanString(transaction?.manualPayment?.payerTransactionId),
+  upiId: cleanString(transaction?.manualPayment?.upiId),
   totalAmount: cleanNumber(transaction?.amountBreakdown?.totalAmount, 0),
   issuedAt: transaction?.receipt?.issuedAt,
-  providerName: cleanString(providerName)
+  providerName: cleanString(providerName),
+  customerName: cleanString(transaction?.customerName),
+  customerPhone: cleanString(transaction?.customerPhone),
+  customerEmail: cleanString(transaction?.customerEmail),
+  refundStatus: cleanString(transaction?.refundStatus),
+  refundAmount: cleanNumber(transaction?.refund?.amount, 0),
+  refundReference: cleanString(transaction?.refund?.reference)
 });
 const escapeHtml = (value = '') => cleanString(value)
   .replace(/&/g, '&amp;')
@@ -364,6 +375,108 @@ const escapeHtml = (value = '') => cleanString(value)
   .replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#039;');
+const frontendBaseUrl = () => cleanString(process.env.PUBLIC_FRONTEND_URL || process.env.FRONTEND_URL || process.env.CLIENT_URL || 'https://nasdiya.com').replace(/\/+$/, '');
+const buildBusinessUrl = (website = {}) => {
+  const baseUrl = frontendBaseUrl();
+  return website?.slug ? `${baseUrl}/business/${website.slug}` : baseUrl;
+};
+const bookingPublicReference = (booking = {}) => {
+  const id = toObjectIdString(booking?._id || booking?.id);
+  return id ? `BK-${id.slice(-8).toUpperCase()}` : '';
+};
+const formatInr = (value = 0) => `Rs ${cleanNumber(value, 0)}`;
+const formatIndiaDateTime = (value) => {
+  if (!value) {
+    return '';
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? cleanString(value) : date.toLocaleString('en-IN', { timeZone: INDIA_TIME_ZONE });
+};
+const paymentMethodLabel = (value = '') => {
+  const labels = {
+    'manual-upi': 'Manual UPI',
+    gateway: 'Online gateway',
+    none: 'Pay later'
+  };
+  return labels[cleanString(value)] || cleanString(value) || 'Payment';
+};
+const buildBookingReceiptEmailHtml = ({
+  receipt = {},
+  booking = {},
+  provider = {},
+  website = {},
+  statusLabel = '',
+  providerMessage = ''
+}) => {
+  const providerName = receipt.providerName || [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+  const providerPhone = normalizeIndianPhone(website?.phone || provider?.mobile || provider?.phone);
+  const businessUrl = buildBusinessUrl(website);
+  const bookingId = bookingPublicReference(booking) || (receipt.contextId ? `BK-${receipt.contextId.slice(-8).toUpperCase()}` : '');
+  const bookingWhen = [booking?.bookingDate, booking?.bookingTime].filter(Boolean).join(', ');
+  const refundLine = receipt.refundStatus && receipt.refundStatus !== 'none'
+    ? `<tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Refund status</td><td style="padding:12px 14px"><strong>${escapeHtml(receipt.refundStatus)}</strong>${receipt.refundAmount ? ` (${formatInr(receipt.refundAmount)})` : ''}${receipt.refundReference ? `<br><span>Reference: ${escapeHtml(receipt.refundReference)}</span>` : ''}</td></tr>`
+    : '';
+
+  return `
+    <div style="margin:0;background:#f3f6fb;padding:24px;font-family:Arial,sans-serif;color:#111827">
+      <style>
+        @media print {
+          body { background: #fff !important; }
+          .receipt-page { box-shadow: none !important; border: 1px solid #d0d5dd !important; }
+          .no-print { display: none !important; }
+        }
+      </style>
+      <div class="receipt-page" style="max-width:760px;margin:0 auto;background:#fff;border:1px solid #d9e2ee;border-radius:14px;box-shadow:0 18px 45px rgba(15,23,42,.08);overflow:hidden">
+        <div style="padding:24px 28px;border-bottom:1px solid #e4ebf5;display:flex;justify-content:space-between;gap:18px;align-items:flex-start">
+          <div>
+            <p style="margin:0 0 6px;color:#155dfc;font-weight:700;letter-spacing:.04em;text-transform:uppercase;font-size:12px">Nasdiya payment receipt</p>
+            <h1 style="margin:0;color:#101828;font-size:26px;line-height:1.2">Booking ${escapeHtml(statusLabel || 'updated')}</h1>
+            <p style="margin:8px 0 0;color:#667085;font-size:14px">Keep this email as a printable receipt for your booking and payment.</p>
+          </div>
+          <div style="text-align:right;color:#101828">
+            <p style="margin:0;color:#667085;font-size:12px">Receipt No.</p>
+            <strong style="font-size:15px">${escapeHtml(receipt.receiptNumber)}</strong>
+          </div>
+        </div>
+
+        <div style="padding:22px 28px">
+          <p style="margin:0 0 16px;font-size:15px;line-height:1.6">Hello ${escapeHtml(booking?.customerName || receipt.customerName || 'there')}, your booking with <strong>${escapeHtml(website?.businessName || providerName)}</strong> is <strong>${escapeHtml(statusLabel || 'updated')}</strong>.</p>
+
+          <table style="width:100%;border-collapse:collapse;margin:0 0 18px;border:1px solid #e4ebf5;border-radius:10px;overflow:hidden">
+            <tbody>
+              <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085;width:38%">Booking ID</td><td style="padding:12px 14px"><strong>${escapeHtml(bookingId)}</strong></td></tr>
+              <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Item / Service</td><td style="padding:12px 14px"><strong>${escapeHtml(booking?.serviceTitle || receipt.contextLabel || 'Website booking')}</strong></td></tr>
+              <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Date & time</td><td style="padding:12px 14px"><strong>${escapeHtml(bookingWhen || '-')}</strong></td></tr>
+              <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Customer</td><td style="padding:12px 14px"><strong>${escapeHtml(booking?.customerName || receipt.customerName || '-')}</strong><br><span>${escapeHtml(booking?.customerPhone || receipt.customerPhone || '')}</span></td></tr>
+            </tbody>
+          </table>
+
+          <table style="width:100%;border-collapse:collapse;margin:0 0 18px;border:1px solid #e4ebf5;border-radius:10px;overflow:hidden">
+            <tbody>
+              <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085;width:38%">Total paid</td><td style="padding:12px 14px"><strong style="font-size:18px">${formatInr(receipt.totalAmount)}</strong></td></tr>
+              <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Payment method</td><td style="padding:12px 14px"><strong>${escapeHtml(paymentMethodLabel(receipt.paymentChannel))}</strong></td></tr>
+              ${receipt.paymentId ? `<tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Payment ID</td><td style="padding:12px 14px"><strong>${escapeHtml(receipt.paymentId)}</strong></td></tr>` : ''}
+              ${receipt.upiId ? `<tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Provider UPI ID</td><td style="padding:12px 14px"><strong>${escapeHtml(receipt.upiId)}</strong></td></tr>` : ''}
+              <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Issued at</td><td style="padding:12px 14px"><strong>${escapeHtml(formatIndiaDateTime(receipt.issuedAt))}</strong></td></tr>
+              ${refundLine}
+            </tbody>
+          </table>
+
+          <table style="width:100%;border-collapse:collapse;margin:0 0 18px;border:1px solid #e4ebf5;border-radius:10px;overflow:hidden">
+            <tbody>
+              <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085;width:38%">Provider</td><td style="padding:12px 14px"><strong>${escapeHtml(website?.businessName || providerName)}</strong>${providerPhone ? `<br><span>Mobile: ${escapeHtml(providerPhone)}</span>` : ''}</td></tr>
+              <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Book again</td><td style="padding:12px 14px"><a href="${escapeHtml(businessUrl)}" style="color:#155dfc;text-decoration:none;font-weight:700">${escapeHtml(businessUrl)}</a></td></tr>
+              <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Nasdiya</td><td style="padding:12px 14px">Find trusted providers or create your own provider website at <a href="${escapeHtml(frontendBaseUrl())}" style="color:#155dfc;text-decoration:none;font-weight:700">Nasdiya</a>.</td></tr>
+            </tbody>
+          </table>
+
+          ${providerMessage ? `<p style="margin:0 0 16px;padding:12px 14px;border-left:4px solid #155dfc;background:#f5f9ff;color:#344054"><strong>Message from provider:</strong><br>${escapeHtml(providerMessage)}</p>` : ''}
+          <p class="no-print" style="margin:0;color:#667085;font-size:12px;line-height:1.5">To print this receipt, open this email and use your browser or mail app print option.</p>
+        </div>
+      </div>
+    </div>
+  `;
+};
 const normalizeBookingFlowForWebsite = (website = {}) => {
   const paymentOptions = normalizeBookingPaymentOptions(website);
   const paymentModel = resolvePaymentModelForBookingOptions(paymentOptions);
@@ -1322,6 +1435,15 @@ class ProviderWebsiteService {
     const providerMessage = cleanString(payload.message || payload.providerMessage || payload.note);
     const nextBookingDate = cleanString(payload.bookingDate);
     const nextBookingTime = cleanString(payload.bookingTime);
+    const paymentChannel = cleanString(transaction?.paymentChannel || booking.paymentChannel);
+    const paymentStatus = cleanString(transaction?.paymentStatus || booking.paymentStatus);
+    const actionStatuses = ['confirmed', 'rescheduled', 'cancelled', 'completed'];
+    if (paymentChannel === 'manual-upi' && paymentStatus === 'verification-pending' && actionStatuses.includes(nextStatus)) {
+      throw new Error('Verify the UPI payment or mark it not received before updating this booking.');
+    }
+    if (paymentChannel === 'manual-upi' && paymentStatus === 'failed' && ['confirmed', 'rescheduled', 'completed'].includes(nextStatus)) {
+      throw new Error('Payment was marked not received. Resolve the payment before continuing this booking.');
+    }
 
     if (nextBookingDate || nextBookingTime) {
       const bookingDate = nextBookingDate || booking.bookingDate;
@@ -1398,9 +1520,8 @@ class ProviderWebsiteService {
       transaction.receipt.receiptNumber = transaction.receipt.receiptNumber || websitePaymentService.buildReceiptNumber('BK');
       transaction.receipt.issuedAt = new Date();
       booking.paymentStatus = 'paid';
-      booking.status = ['new', 'payment_pending'].includes(booking.status) ? 'confirmed' : booking.status;
+      booking.status = ['new', 'payment_pending'].includes(booking.status) ? 'pending_approval' : booking.status;
       await Promise.all([transaction.save(), booking.save()]);
-      await this.sendReceiptEmails(userId, transaction);
     } else if (action === 'refund') {
       transaction.paymentStatus = 'refunded';
       transaction.refundStatus = 'processed';
@@ -2220,6 +2341,17 @@ class ProviderWebsiteService {
     const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
     const bookingWhen = [booking.bookingDate, booking.bookingTime].filter(Boolean).join(' ');
     const customerMessage = providerMessage || booking.providerMessage || booking.cancellationReason || booking.rescheduleMessage || '';
+    const hasPaidReceipt = transaction
+      && cleanString(transaction.paymentStatus) === 'paid'
+      && cleanString(transaction.paymentChannel) !== 'none';
+    if (hasPaidReceipt) {
+      transaction.receipt.receiptNumber = transaction.receipt.receiptNumber || websitePaymentService.buildReceiptNumber('BK');
+      transaction.receipt.issuedAt = transaction.receipt.issuedAt || new Date();
+      if (transaction.isModified && transaction.isModified()) {
+        await transaction.save();
+      }
+    }
+    const receipt = hasPaidReceipt ? toReceiptPayload(transaction, providerName) : null;
     const refundLine = booking.refundStatus && booking.refundStatus !== 'none'
       ? `<p>Refund status: <strong>${escapeHtml(booking.refundStatus)}</strong>${booking.refundAmount ? ` for Rs ${cleanNumber(booking.refundAmount, 0)}` : ''}</p>`
       : '';
@@ -2243,15 +2375,25 @@ class ProviderWebsiteService {
       return;
     }
 
-    await receiptEmailService.sendReceipt({
+    const mailed = await receiptEmailService.sendReceipt({
       to: [booking.customerEmail],
-      subject: `Booking ${statusLabel} - ${website?.businessName || providerName}`,
+      subject: hasPaidReceipt
+        ? `Receipt ${receipt.receiptNumber} - Booking ${statusLabel} - ${website?.businessName || providerName}`
+        : `Booking ${statusLabel} - ${website?.businessName || providerName}`,
       replyTo: cleanString(provider?.email),
-      html: `
+      html: hasPaidReceipt ? buildBookingReceiptEmailHtml({
+        receipt,
+        booking,
+        provider,
+        website,
+        statusLabel,
+        providerMessage: customerMessage
+      }) : `
         <div style="font-family:Arial,sans-serif;line-height:1.5;color:#1f2937">
           <h2 style="margin-bottom:12px">Booking ${escapeHtml(statusLabel)}</h2>
           <p>Hello ${escapeHtml(booking.customerName || 'there')},</p>
           <p>Your booking with <strong>${escapeHtml(website?.businessName || providerName)}</strong> is <strong>${escapeHtml(statusLabel)}</strong>.</p>
+          <p>Booking ID: <strong>${escapeHtml(bookingPublicReference(booking))}</strong></p>
           <p>Booking: <strong>${escapeHtml(booking.serviceTitle || 'Website booking')}</strong></p>
           <p>Date and time: <strong>${escapeHtml(bookingWhen)}</strong></p>
           <p>Payment: <strong>${escapeHtml(booking.paymentChoice === 'pay-later' ? 'Pay later' : booking.paymentStatus)}</strong></p>
@@ -2261,6 +2403,10 @@ class ProviderWebsiteService {
         </div>
       `
     });
+    if (mailed && hasPaidReceipt && !transaction.receipt.emailedAt) {
+      transaction.receipt.emailedAt = new Date();
+      await transaction.save();
+    }
   }
 
   async sendReceiptEmails(providerUserId, transaction) {
@@ -2268,7 +2414,10 @@ class ProviderWebsiteService {
       return;
     }
 
-    const provider = await User.findById(providerUserId).lean();
+    const [provider, website] = await Promise.all([
+      User.findById(providerUserId).lean(),
+      transaction.websiteId ? ProviderWebsite.findById(transaction.websiteId).lean() : Promise.resolve(null)
+    ]);
     const recipients = [
       cleanString(transaction.customerEmail),
       cleanString(provider?.email)
@@ -2277,19 +2426,43 @@ class ProviderWebsiteService {
       return;
     }
 
-    const receipt = toReceiptPayload(transaction, [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim());
+    const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+    const providerPhone = normalizeIndianPhone(website?.phone || provider?.mobile || provider?.phone);
+    const receipt = toReceiptPayload(transaction, providerName);
     const mailed = await receiptEmailService.sendReceipt({
       to: recipients,
       subject: `Receipt ${receipt.receiptNumber} for ${receipt.contextLabel || 'Website payment'}`,
       html: `
-        <div style="font-family:Arial,sans-serif;line-height:1.5;color:#1f2937">
-          <h2 style="margin-bottom:12px">Payment receipt</h2>
-          <p>Receipt number: <strong>${receipt.receiptNumber}</strong></p>
-          <p>Item: <strong>${receipt.contextLabel || 'Website payment'}</strong></p>
-          <p>Payment method: <strong>${receipt.paymentChannel}</strong></p>
-          <p>Total paid: <strong>Rs ${receipt.totalAmount}</strong></p>
-          <p>Issued at: <strong>${receipt.issuedAt ? new Date(receipt.issuedAt).toLocaleString('en-IN') : ''}</strong></p>
-          <p>Provider: <strong>${receipt.providerName || 'Provider'}</strong></p>
+        <div style="margin:0;background:#f3f6fb;padding:24px;font-family:Arial,sans-serif;color:#111827">
+          <style>
+            @media print {
+              body { background: #fff !important; }
+              .receipt-page { box-shadow: none !important; border: 1px solid #d0d5dd !important; }
+            }
+          </style>
+          <div class="receipt-page" style="max-width:720px;margin:0 auto;background:#fff;border:1px solid #d9e2ee;border-radius:14px;box-shadow:0 18px 45px rgba(15,23,42,.08);overflow:hidden">
+            <div style="padding:24px 28px;border-bottom:1px solid #e4ebf5">
+              <p style="margin:0 0 6px;color:#155dfc;font-weight:700;letter-spacing:.04em;text-transform:uppercase;font-size:12px">Nasdiya payment receipt</p>
+              <h2 style="margin:0;color:#101828;font-size:24px">Payment receipt</h2>
+              <p style="margin:8px 0 0;color:#667085;font-size:14px">Receipt number: <strong>${escapeHtml(receipt.receiptNumber)}</strong></p>
+            </div>
+            <div style="padding:22px 28px">
+              <table style="width:100%;border-collapse:collapse;margin:0 0 18px;border:1px solid #e4ebf5;border-radius:10px;overflow:hidden">
+                <tbody>
+                  <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085;width:38%">Reference ID</td><td style="padding:12px 14px"><strong>${escapeHtml(receipt.contextId)}</strong></td></tr>
+                  <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Item</td><td style="padding:12px 14px"><strong>${escapeHtml(receipt.contextLabel || 'Website payment')}</strong></td></tr>
+                  <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Customer</td><td style="padding:12px 14px"><strong>${escapeHtml(receipt.customerName || '-')}</strong>${receipt.customerPhone ? `<br><span>${escapeHtml(receipt.customerPhone)}</span>` : ''}</td></tr>
+                  <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Payment method</td><td style="padding:12px 14px"><strong>${escapeHtml(paymentMethodLabel(receipt.paymentChannel))}</strong></td></tr>
+                  ${receipt.paymentId ? `<tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Payment ID</td><td style="padding:12px 14px"><strong>${escapeHtml(receipt.paymentId)}</strong></td></tr>` : ''}
+                  ${receipt.upiId ? `<tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Provider UPI ID</td><td style="padding:12px 14px"><strong>${escapeHtml(receipt.upiId)}</strong></td></tr>` : ''}
+                  <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Total paid</td><td style="padding:12px 14px"><strong style="font-size:18px">${formatInr(receipt.totalAmount)}</strong></td></tr>
+                  <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Issued at</td><td style="padding:12px 14px"><strong>${escapeHtml(formatIndiaDateTime(receipt.issuedAt))}</strong></td></tr>
+                  <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Provider</td><td style="padding:12px 14px"><strong>${escapeHtml(website?.businessName || receipt.providerName || 'Provider')}</strong>${providerPhone ? `<br><span>Mobile: ${escapeHtml(providerPhone)}</span>` : ''}</td></tr>
+                  <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Nasdiya</td><td style="padding:12px 14px">Book more services or create your own provider website at <a href="${escapeHtml(frontendBaseUrl())}" style="color:#155dfc;text-decoration:none;font-weight:700">Nasdiya</a>.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       `
     });
