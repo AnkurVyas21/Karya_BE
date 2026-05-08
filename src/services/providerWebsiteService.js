@@ -73,13 +73,29 @@ const clampNumber = (value, fallback = 0, min = 0, max = Number.MAX_SAFE_INTEGER
   return Math.min(Math.max(parsed, min), max);
 };
 const parseTimeToMinutes = (value = '') => {
-  const match = /^(\d{1,2}):(\d{2})$/.exec(cleanString(value));
+  const normalized = cleanString(value)
+    .toUpperCase()
+    .replace(/\./g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\b([AP])\s+M\b/g, '$1M');
+  const match = /^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/.exec(normalized);
   if (!match) {
     return null;
   }
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+  let hours = Number(match[1]);
+  const minutes = Number(match[2] || 0);
+  const meridiem = match[3];
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || minutes < 0 || minutes > 59) {
+    return null;
+  }
+  if (meridiem) {
+    if (hours < 1 || hours > 12) {
+      return null;
+    }
+    hours = meridiem === 'AM'
+      ? hours === 12 ? 0 : hours
+      : hours === 12 ? 12 : hours + 12;
+  } else if (hours < 0 || hours > 23) {
     return null;
   }
   return (hours * 60) + minutes;
@@ -89,6 +105,14 @@ const minutesToTime = (value = 0) => {
   const hours = Math.floor(normalized / 60);
   const minutes = normalized % 60;
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+};
+const normalizeTimeForStorage = (value = '') => {
+  const cleaned = cleanString(value);
+  if (!cleaned) {
+    return '';
+  }
+  const minutes = parseTimeToMinutes(cleaned);
+  return minutes === null ? cleaned : minutesToTime(minutes);
 };
 const getIndiaNowContext = () => {
   const formatter = new Intl.DateTimeFormat('en-CA', {
@@ -1507,10 +1531,10 @@ class ProviderWebsiteService {
     return source.map((item, index) => ({
       day: cleanString(item.day) || DEFAULT_BUSINESS_HOURS[index]?.day || '',
       isOpen: cleanBoolean(item.isOpen, true),
-      openTime: cleanString(item.openTime),
-      closeTime: cleanString(item.closeTime),
-      breakStartTime: cleanString(item.breakStartTime),
-      breakEndTime: cleanString(item.breakEndTime)
+      openTime: normalizeTimeForStorage(item.openTime),
+      closeTime: normalizeTimeForStorage(item.closeTime),
+      breakStartTime: normalizeTimeForStorage(item.breakStartTime),
+      breakEndTime: normalizeTimeForStorage(item.breakEndTime)
     })).slice(0, 7);
   }
 
