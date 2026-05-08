@@ -139,6 +139,10 @@ const providerWebsiteSchema = new mongoose.Schema({
     enum: ['pay_later', 'upi_payment', 'gateway_payment', 'gateway_plus_upi'],
     default: 'pay_later'
   },
+  bookingPaymentOptions: [{
+    type: String,
+    enum: ['pay_later', 'upi_payment']
+  }],
   bookingWorkingDays: [{ type: String }],
   bookingSlots: [bookingSlotSchema],
   bookingSlotDurationMinutes: { type: Number, default: 30 },
@@ -187,9 +191,22 @@ providerWebsiteSchema.pre('validate', function normalizeLegacyBookingOptions(nex
   if (this.bookingPaymentOption === 'payment_screenshot_required') {
     this.bookingPaymentOption = 'upi_payment';
   }
+  if (this.bookingPaymentOption === 'gateway_plus_upi') {
+    this.bookingPaymentOption = 'upi_payment';
+  }
+  if (this.bookingPaymentOption === 'gateway_payment') {
+    this.bookingPaymentOption = 'pay_later';
+  }
   if (!['pay_later', 'upi_payment', 'gateway_payment', 'gateway_plus_upi'].includes(this.bookingPaymentOption)) {
     this.bookingPaymentOption = 'pay_later';
   }
+  const selectedOptions = Array.isArray(this.bookingPaymentOptions)
+    ? this.bookingPaymentOptions.filter((item) => ['pay_later', 'upi_payment'].includes(item))
+    : [];
+  if (selectedOptions.length === 0) {
+    selectedOptions.push(this.bookingPaymentOption === 'upi_payment' ? 'upi_payment' : 'pay_later');
+  }
+  this.bookingPaymentOptions = Array.from(new Set(selectedOptions));
   next();
 });
 

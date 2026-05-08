@@ -145,16 +145,39 @@ const resolvePriceForService = (service = {}, fallbackAmount = 0) => {
   const price = cleanNumber(service?.price, 0);
   return price > 0 ? price : cleanNumber(fallbackAmount, 0);
 };
+const normalizeBookingPaymentOptionValue = (value = '') => {
+  const option = cleanString(value);
+  if (option === 'no_online_payment') {
+    return 'pay_later';
+  }
+  if (option === 'payment_screenshot_required') {
+    return 'upi_payment';
+  }
+  if (option === 'gateway_plus_upi') {
+    return 'upi_payment';
+  }
+  if (option === 'gateway_payment') {
+    return 'pay_later';
+  }
+  return ['pay_later', 'upi_payment'].includes(option) ? option : '';
+};
+const normalizeBookingPaymentOptions = (value = '') => {
+  const source = Array.isArray(value)
+    ? value
+    : Array.isArray(value?.bookingPaymentOptions)
+      ? value.bookingPaymentOptions
+      : value?.bookingPaymentOption !== undefined
+        ? value.bookingPaymentOption
+        : value;
+  const rawOptions = Array.isArray(source) ? source : cleanArray(source);
+  const options = rawOptions
+    .map((item) => normalizeBookingPaymentOptionValue(item))
+    .filter(Boolean);
+  return Array.from(new Set(options.length ? options : ['pay_later']));
+};
 const hasOnlineBookingPaymentOption = (website = {}) => {
-  const option = cleanString(website.bookingPaymentOption || '');
-  if (['pay_later', 'no_online_payment'].includes(option)) {
-    return false;
-  }
-  if (['upi_payment', 'payment_screenshot_required', 'gateway_payment', 'gateway_plus_upi'].includes(option)) {
-    return true;
-  }
-  const paymentModel = cleanString(website.bookingFlow?.paymentModel || '');
-  return ['payment-only', 'both'].includes(paymentModel);
+  const options = normalizeBookingPaymentOptions(website);
+  return options.some((option) => option === 'upi_payment');
 };
 const hasAdvanceBookingFee = (website = {}) => cleanBoolean(website.advanceBookingFeeEnabled, false)
   && cleanNumber(website.bookingFeeAmount, 0) > 0
@@ -194,29 +217,23 @@ const resolveBookingConfirmationType = (website = {}, service = null) => {
   return ['auto_confirm', 'provider_approval'].includes(value) ? value : 'provider_approval';
 };
 const resolveBookingPaymentOption = (value = '') => {
-  const option = typeof value === 'string'
-    ? cleanString(value)
-    : cleanString(value?.bookingPaymentOption || 'pay_later');
-  if (option === 'no_online_payment') {
+  const options = normalizeBookingPaymentOptions(value);
+  if (options.includes('pay_later')) {
     return 'pay_later';
   }
-  if (option === 'payment_screenshot_required') {
-    return 'upi_payment';
-  }
-  return ['pay_later', 'upi_payment', 'gateway_payment', 'gateway_plus_upi'].includes(option) ? option : 'pay_later';
+  return options.includes('upi_payment') ? 'upi_payment' : 'pay_later';
 };
-const resolvePaymentMethodsForBookingOption = (paymentOption = '') => {
-  const option = resolveBookingPaymentOption(paymentOption);
-  if (option === 'upi_payment') {
-    return ['manual-upi'];
-  }
-  if (option === 'gateway_payment') {
-    return ['gateway'];
-  }
-  if (option === 'gateway_plus_upi') {
-    return ['gateway', 'manual-upi'];
-  }
-  return [];
+const resolvePaymentMethodsForBookingOptions = (paymentOptions = '') => {
+  const options = normalizeBookingPaymentOptions(paymentOptions);
+  return options.includes('upi_payment') ? ['manual-upi'] : [];
+};
+const resolvePaymentModelForBookingOptions = (paymentOptions = '') => {
+  const options = normalizeBookingPaymentOptions(paymentOptions);
+  const hasPayLater = options.includes('pay_later');
+  const hasOnline = options.includes('upi_payment');
+  if (hasPayLater && hasOnline) return 'both';
+  if (hasOnline) return 'payment-only';
+  return 'without-online-payment';
 };
 const resolveBookingStatus = (website = {}, service = null, paymentChoice = 'pay-later') => {
   const confirmationType = resolveBookingConfirmationType(website, service);
@@ -342,50 +359,34 @@ const toReceiptPayload = (transaction, providerName = '') => ({
   providerName: cleanString(providerName)
 });
 const normalizeBookingFlowForWebsite = (website = {}) => {
-  const paymentOption = resolveBookingPaymentOption(website);
-  const optionMethods = resolvePaymentMethodsForBookingOption(paymentOption);
+  const paymentOptions = normalizeBookingPaymentOptions(website);
+  const paymentModel = resolvePaymentModelForBookingOptions(paymentOptions);
+  const optionMethods = resolvePaymentMethodsForBookingOptions(paymentOptions);
   const flow = websitePaymentService.normalizeFlowConfig(website.bookingFlow || {}, {
     enabled: true,
-    paymentModel: hasAdvanceBookingFee(website) || optionMethods.length ? 'payment-only' : 'without-online-payment',
-    paymentMethods: optionMethods.length ? optionMethods : (website.upiId ? ['manual-upi'] : []),
+    paymentModel,
+    paymentMethods: optionMethods,
     gatewayFeeBearer: 'customer',
     chargeAmount: website.bookingFeeAmount || 0,
     paymentInstructions: website.paymentInstructions || ''
   });
   if (hasAdvanceBookingFee(website)) {
-    const methods = optionMethods.length
-      ? optionMethods
-      : Array.isArray(flow.paymentMethods) && flow.paymentMethods.length
-      ? flow.paymentMethods
-      : (website.upiId ? ['manual-upi'] : []);
     return {
       ...flow,
-      paymentModel: 'payment-only',
-      paymentMethods: methods,
-      manualPaymentEnabled: methods.includes('manual-upi'),
-      gatewayPaymentEnabled: methods.includes('gateway'),
+      paymentModel,
+      paymentMethods: optionMethods,
+      manualPaymentEnabled: optionMethods.includes('manual-upi'),
+      gatewayPaymentEnabled: false,
       chargeAmount: cleanNumber(website.bookingFeeAmount, 0)
     };
   }
-  if (paymentOption === 'pay_later') {
-    return {
-      ...flow,
-      paymentModel: 'without-online-payment',
-      paymentMethods: [],
-      manualPaymentEnabled: false,
-      gatewayPaymentEnabled: false
-    };
-  }
-  if (optionMethods.length) {
-    return {
-      ...flow,
-      paymentModel: 'payment-only',
-      paymentMethods: optionMethods,
-      manualPaymentEnabled: optionMethods.includes('manual-upi'),
-      gatewayPaymentEnabled: optionMethods.includes('gateway')
-    };
-  }
-  return flow;
+  return {
+    ...flow,
+    paymentModel,
+    paymentMethods: optionMethods,
+    manualPaymentEnabled: optionMethods.includes('manual-upi'),
+    gatewayPaymentEnabled: false
+  };
 };
 
 class ProviderWebsiteService {
@@ -487,9 +488,15 @@ class ProviderWebsiteService {
     website.bookingConfirmationType = payload.bookingConfirmationType !== undefined
       ? resolveBookingConfirmationType(payload, null)
       : resolveBookingConfirmationType(website, null);
-    website.bookingPaymentOption = resolveBookingPaymentOption(
-      payload.bookingPaymentOption !== undefined ? payload.bookingPaymentOption : website.bookingPaymentOption
+    const bookingPaymentOptions = normalizeBookingPaymentOptions(
+      payload.bookingPaymentOptions !== undefined
+        ? payload.bookingPaymentOptions
+        : payload.bookingPaymentOption !== undefined
+          ? payload.bookingPaymentOption
+          : website
     );
+    website.bookingPaymentOptions = bookingPaymentOptions;
+    website.bookingPaymentOption = resolveBookingPaymentOption(bookingPaymentOptions);
     website.bookingWorkingDays = cleanArray(payload.bookingWorkingDays);
     website.bookingSlots = bookingSlots;
     website.bookingSlotDurationMinutes = clampNumber(payload.bookingSlotDurationMinutes, website.bookingSlotDurationMinutes || 30, 5, 480);
@@ -509,31 +516,27 @@ class ProviderWebsiteService {
     website.paymentInstructions = cleanString(payload.paymentInstructions);
     website.extraChargeRules = this.normalizeExtraChargeRules(payload.extraChargeRules || website.extraChargeRules || {});
     const paymentSettings = websitePaymentService.normalizeWebsitePaymentSettings(payload, website);
-    const bookingPaymentMethods = resolvePaymentMethodsForBookingOption(website.bookingPaymentOption);
+    const bookingPaymentMethods = resolvePaymentMethodsForBookingOptions(bookingPaymentOptions);
+    const bookingPaymentModel = resolvePaymentModelForBookingOptions(bookingPaymentOptions);
     website.bookingFlow = {
       ...paymentSettings.bookingFlow,
-      paymentModel: website.bookingPaymentOption === 'pay_later' ? 'without-online-payment' : 'payment-only',
+      paymentModel: bookingPaymentModel,
       paymentMethods: bookingPaymentMethods,
       manualPaymentEnabled: bookingPaymentMethods.includes('manual-upi'),
-      gatewayPaymentEnabled: bookingPaymentMethods.includes('gateway'),
+      gatewayPaymentEnabled: false,
       chargeAmount: paymentSettings.bookingFlow.chargeAmount || website.bookingFeeAmount || 0,
       paymentInstructions: paymentSettings.bookingFlow.paymentInstructions || website.paymentInstructions || ''
     };
     if (hasAdvanceBookingFee(website)) {
-      const methods = bookingPaymentMethods.length
-        ? bookingPaymentMethods
-        : Array.isArray(paymentSettings.bookingFlow.paymentMethods) && paymentSettings.bookingFlow.paymentMethods.length
-        ? paymentSettings.bookingFlow.paymentMethods
-        : (website.upiId ? ['manual-upi'] : []);
       website.bookingFlow = {
         ...website.bookingFlow,
-        paymentModel: 'payment-only',
-        paymentMethods: methods,
-        manualPaymentEnabled: methods.includes('manual-upi'),
-        gatewayPaymentEnabled: methods.includes('gateway'),
+        paymentModel: bookingPaymentModel,
+        paymentMethods: bookingPaymentMethods,
+        manualPaymentEnabled: bookingPaymentMethods.includes('manual-upi'),
+        gatewayPaymentEnabled: false,
         chargeAmount: website.bookingFeeAmount
       };
-    } else if (website.bookingPaymentOption === 'pay_later') {
+    } else if (bookingPaymentModel === 'without-online-payment') {
       website.bookingFlow = {
         ...website.bookingFlow,
         paymentModel: 'without-online-payment',
@@ -1461,6 +1464,7 @@ class ProviderWebsiteService {
         paymentsEnabled: false,
         bookingConfirmationType: 'provider_approval',
         bookingPaymentOption: 'pay_later',
+        bookingPaymentOptions: ['pay_later'],
         bookingSlotDurationMinutes: 30,
         bookingGapAfterMinutes: 0,
         bookingMinimumAdvanceMinutes: 60,
