@@ -358,6 +358,12 @@ const toReceiptPayload = (transaction, providerName = '') => ({
   issuedAt: transaction?.receipt?.issuedAt,
   providerName: cleanString(providerName)
 });
+const escapeHtml = (value = '') => cleanString(value)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#039;');
 const normalizeBookingFlowForWebsite = (website = {}) => {
   const paymentOptions = normalizeBookingPaymentOptions(website);
   const paymentModel = resolvePaymentModelForBookingOptions(paymentOptions);
@@ -730,7 +736,9 @@ class ProviderWebsiteService {
       type: notificationCopy.type,
       title: notificationCopy.title,
       body: notificationCopy.body,
-      linkPath: '/provider/website',
+      linkPath: source === 'callback'
+        ? '/provider/customer-requests?tab=callbacks'
+        : '/provider/customer-requests?tab=inquiries',
       metadata: {
         leadId: lead._id.toString(),
         slug: website.slug,
@@ -1109,7 +1117,7 @@ class ProviderWebsiteService {
       type: 'booking',
       title: 'New booking request',
       body: `${cleanString(payload.customerName) || 'A customer'} requested a booking for ${publicWebsite.website?.businessName || 'your business page'}.`,
-      linkPath: '/provider/website',
+      linkPath: '/provider/customer-requests?tab=bookings',
       metadata: {
         bookingId: booking._id.toString(),
         slug: website.slug,
@@ -1300,7 +1308,7 @@ class ProviderWebsiteService {
 
   async updateBookingStatus(userId, bookingId, payload = {}) {
     const nextStatus = cleanString(payload.status);
-    const allowedStatuses = ['new', 'pending_approval', 'confirmed', 'payment_pending', 'rejected', 'completed', 'cancelled'];
+    const allowedStatuses = ['new', 'pending_approval', 'confirmed', 'payment_pending', 'rejected', 'completed', 'cancelled', 'rescheduled'];
     if (!allowedStatuses.includes(nextStatus)) {
       throw new Error('Invalid booking status');
     }
@@ -1310,8 +1318,58 @@ class ProviderWebsiteService {
       throw new Error('Booking not found');
     }
 
+    const transaction = booking.transactionId ? await WebsiteTransaction.findById(booking.transactionId) : null;
+    const providerMessage = cleanString(payload.message || payload.providerMessage || payload.note);
+    const nextBookingDate = cleanString(payload.bookingDate);
+    const nextBookingTime = cleanString(payload.bookingTime);
+
+    if (nextBookingDate || nextBookingTime) {
+      const bookingDate = nextBookingDate || booking.bookingDate;
+      const bookingTime = nextBookingTime || booking.bookingTime;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(bookingDate)) {
+        throw new Error('Choose a valid reschedule date');
+      }
+      const [requestedStart = '', requestedEnd = ''] = bookingTime.split(' - ').map((item) => cleanString(item));
+      const slotStartMinutes = parseTimeToMinutes(requestedStart);
+      const slotEndMinutes = parseTimeToMinutes(requestedEnd);
+      if (slotStartMinutes === null || slotEndMinutes === null || slotEndMinutes <= slotStartMinutes) {
+        throw new Error('Choose a valid reschedule time range');
+      }
+      booking.bookingDate = bookingDate;
+      booking.bookingStartTime = minutesToTime(slotStartMinutes);
+      booking.bookingEndTime = minutesToTime(slotEndMinutes);
+      booking.bookingTime = `${booking.bookingStartTime} - ${booking.bookingEndTime}`;
+      booking.bookingDurationMinutes = Math.max(5, slotEndMinutes - slotStartMinutes);
+      booking.rescheduledAt = new Date();
+      booking.rescheduleMessage = providerMessage || cleanString(payload.rescheduleMessage);
+    }
+
     booking.status = nextStatus;
-    await booking.save();
+    booking.statusUpdatedAt = new Date();
+    if (providerMessage) {
+      booking.providerMessage = providerMessage;
+    }
+    if (nextStatus === 'cancelled' || nextStatus === 'rejected') {
+      booking.cancelledAt = new Date();
+      booking.cancellationReason = cleanString(payload.cancellationReason || providerMessage);
+      if (['paid', 'verification-pending'].includes(booking.paymentStatus)) {
+        booking.refundStatus = booking.refundStatus === 'processed' ? 'processed' : 'pending';
+        booking.refundAmount = cleanNumber(payload.refundAmount, transaction?.amountBreakdown?.totalAmount || booking.advanceFeeAmount || 0);
+        booking.refundNote = cleanString(payload.refundNote || 'Refund pending from provider.');
+        if (transaction && transaction.refundStatus !== 'processed') {
+          transaction.refundStatus = 'pending';
+          transaction.refund.requestedAt = transaction.refund.requestedAt || new Date();
+          transaction.refund.amount = booking.refundAmount;
+          transaction.refund.note = booking.refundNote;
+        }
+      }
+    }
+
+    await Promise.all([
+      booking.save(),
+      transaction && transaction.isModified ? transaction.save() : Promise.resolve()
+    ]);
+    await this.sendBookingStatusUpdate(userId, booking, transaction, nextStatus, providerMessage);
 
     return this.getManager(userId);
   }
@@ -1351,6 +1409,10 @@ class ProviderWebsiteService {
       transaction.refund.reference = cleanString(payload.reference);
       transaction.refund.note = cleanString(payload.note);
       booking.paymentStatus = 'refunded';
+      booking.refundStatus = 'processed';
+      booking.refundAmount = transaction.refund.amount;
+      booking.refundReference = transaction.refund.reference;
+      booking.refundNote = transaction.refund.note;
       await Promise.all([transaction.save(), booking.save()]);
     } else {
       transaction.paymentStatus = 'failed';
@@ -1934,7 +1996,7 @@ class ProviderWebsiteService {
 
   async buildManagerResponse(userId, websiteDoc, options = {}) {
     const website = websiteDoc.toObject ? websiteDoc.toObject() : websiteDoc;
-    const [themeConfig, seoConfig, services, products, offers, articles, leads, bookings, orders, transactions, profile, user, reviewSummary, leadCount, bookingCount] = await Promise.all([
+    const [themeConfig, seoConfig, services, products, offers, articles, leads, bookings, orders, transactions, profile, user, reviewSummary, leadCount, bookingCount, inquiryCount, callbackCount] = await Promise.all([
       ProviderThemeConfig.findOne({ providerId: userId }).lean(),
       ProviderSEOConfig.findOne({ providerId: userId }).lean(),
       ProviderServiceModel.find({ providerId: userId }).sort({ sortOrder: 1, createdAt: 1 }).lean(),
@@ -1949,7 +2011,9 @@ class ProviderWebsiteService {
       User.findById(userId).lean(),
       options.reviewSummary ? Promise.resolve(options.reviewSummary) : this.getReviewSummary(userId),
       ProviderLead.countDocuments({ providerId: userId }),
-      ProviderBooking.countDocuments({ providerId: userId })
+      ProviderBooking.countDocuments({ providerId: userId }),
+      ProviderLead.countDocuments({ providerId: userId, source: { $in: ['website', 'inquiry'] } }),
+      ProviderLead.countDocuments({ providerId: userId, source: 'callback' })
     ]);
 
     const completion = options.completion || this.computeCompletion({ website, services });
@@ -1981,7 +2045,9 @@ class ProviderWebsiteService {
       checklist: completion.checklist,
       suggestions: completion.suggestions,
       stats: {
-        inquiriesCount: leadCount,
+        inquiriesCount: inquiryCount,
+        callbacksCount: callbackCount,
+        leadsCount: leadCount,
         bookingsCount: bookingCount,
         viewsCount: Number(profile?.viewCount || 0),
         serviceCount: services.length,
@@ -2134,6 +2200,67 @@ class ProviderWebsiteService {
       websiteId: item.websiteId?.toString?.() || String(item.websiteId || ''),
       customerUserId: item.customerUserId?.toString?.() || String(item.customerUserId || '')
     };
+  }
+
+  async sendBookingStatusUpdate(providerUserId, booking, transaction = null, status = '', providerMessage = '') {
+    const statusLabels = {
+      confirmed: 'confirmed',
+      cancelled: 'cancelled',
+      rejected: 'declined',
+      rescheduled: 'rescheduled',
+      completed: 'completed',
+      payment_pending: 'waiting for payment',
+      pending_approval: 'waiting for provider approval'
+    };
+    const statusLabel = statusLabels[cleanString(status)] || cleanString(status) || 'updated';
+    const [provider, website] = await Promise.all([
+      User.findById(providerUserId).lean(),
+      booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null)
+    ]);
+    const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+    const bookingWhen = [booking.bookingDate, booking.bookingTime].filter(Boolean).join(' ');
+    const customerMessage = providerMessage || booking.providerMessage || booking.cancellationReason || booking.rescheduleMessage || '';
+    const refundLine = booking.refundStatus && booking.refundStatus !== 'none'
+      ? `<p>Refund status: <strong>${escapeHtml(booking.refundStatus)}</strong>${booking.refundAmount ? ` for Rs ${cleanNumber(booking.refundAmount, 0)}` : ''}</p>`
+      : '';
+
+    if (booking.customerUserId) {
+      await notificationService.createNotification({
+        userId: booking.customerUserId,
+        type: 'booking',
+        title: `Booking ${statusLabel}`,
+        body: `Your booking with ${providerName} is ${statusLabel}.`,
+        linkPath: website?.slug ? `/business/${website.slug}` : '',
+        metadata: {
+          bookingId: booking._id.toString(),
+          providerId: providerUserId.toString(),
+          status: cleanString(status)
+        }
+      });
+    }
+
+    if (!cleanString(booking.customerEmail)) {
+      return;
+    }
+
+    await receiptEmailService.sendReceipt({
+      to: [booking.customerEmail],
+      subject: `Booking ${statusLabel} - ${website?.businessName || providerName}`,
+      replyTo: cleanString(provider?.email),
+      html: `
+        <div style="font-family:Arial,sans-serif;line-height:1.5;color:#1f2937">
+          <h2 style="margin-bottom:12px">Booking ${escapeHtml(statusLabel)}</h2>
+          <p>Hello ${escapeHtml(booking.customerName || 'there')},</p>
+          <p>Your booking with <strong>${escapeHtml(website?.businessName || providerName)}</strong> is <strong>${escapeHtml(statusLabel)}</strong>.</p>
+          <p>Booking: <strong>${escapeHtml(booking.serviceTitle || 'Website booking')}</strong></p>
+          <p>Date and time: <strong>${escapeHtml(bookingWhen)}</strong></p>
+          <p>Payment: <strong>${escapeHtml(booking.paymentChoice === 'pay-later' ? 'Pay later' : booking.paymentStatus)}</strong></p>
+          ${transaction?.manualPayment?.payerTransactionId ? `<p>Payment ID: <strong>${escapeHtml(transaction.manualPayment.payerTransactionId)}</strong></p>` : ''}
+          ${customerMessage ? `<p>Message from provider: ${escapeHtml(customerMessage)}</p>` : ''}
+          ${refundLine}
+        </div>
+      `
+    });
   }
 
   async sendReceiptEmails(providerUserId, transaction) {

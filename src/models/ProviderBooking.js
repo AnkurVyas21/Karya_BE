@@ -17,6 +17,11 @@ const providerBookingSchema = new mongoose.Schema({
   bookingDurationMinutes: { type: Number, default: 30 },
   bookingGapMinutes: { type: Number, default: 0 },
   message: { type: String, default: '' },
+  providerMessage: { type: String, default: '' },
+  cancellationReason: { type: String, default: '' },
+  cancelledAt: { type: Date, default: null },
+  rescheduleMessage: { type: String, default: '' },
+  rescheduledAt: { type: Date, default: null },
   advanceFeeRequired: { type: Boolean, default: false },
   advanceFeeAmount: { type: Number, default: 0 },
   paymentChoice: { type: String, enum: ['pay-later', 'manual-upi', 'gateway'], default: 'pay-later' },
@@ -27,9 +32,14 @@ const providerBookingSchema = new mongoose.Schema({
     default: 'pending'
   },
   transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'WebsiteTransaction', default: null, index: true },
+  refundStatus: { type: String, enum: ['none', 'pending', 'processed', 'rejected'], default: 'none' },
+  refundAmount: { type: Number, default: 0 },
+  refundReference: { type: String, default: '' },
+  refundNote: { type: String, default: '' },
+  statusUpdatedAt: { type: Date, default: null },
   status: {
     type: String,
-    enum: ['new', 'pending_approval', 'confirmed', 'payment_pending', 'rejected', 'completed', 'cancelled'],
+    enum: ['new', 'pending_approval', 'confirmed', 'payment_pending', 'rejected', 'completed', 'cancelled', 'rescheduled'],
     default: 'pending_approval'
   }
 }, { timestamps: true });
