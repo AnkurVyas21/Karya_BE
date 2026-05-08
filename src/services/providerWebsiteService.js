@@ -117,6 +117,10 @@ const resolvePriceForService = (service = {}, fallbackAmount = 0) => {
   return price > 0 ? price : cleanNumber(fallbackAmount, 0);
 };
 const hasAdvanceBookingFee = (website = {}) => cleanBoolean(website.advanceBookingFeeEnabled, false) && cleanNumber(website.bookingFeeAmount, 0) > 0;
+const resolveLeadNoticeMinutes = (website = {}) => {
+  const value = Math.max(0, cleanNumber(website.bookingLeadNoticeHours, 0));
+  return value > 24 ? value : value * 60;
+};
 const resolveBookingPaymentDue = (website = {}, service = {}, bookingFlow = {}) => {
   const advanceAmount = cleanNumber(website.bookingFeeAmount, 0);
   if (hasAdvanceBookingFee(website)) {
@@ -576,7 +580,7 @@ class ProviderWebsiteService {
     const closeMinutes = parseTimeToMinutes(businessHour?.closeTime);
     const breakStart = parseTimeToMinutes(businessHour?.breakStartTime);
     const breakEnd = parseTimeToMinutes(businessHour?.breakEndTime);
-    const leadNoticeMinutes = Math.max(0, cleanNumber(website.bookingLeadNoticeHours, 0)) * 60;
+    const leadNoticeMinutes = resolveLeadNoticeMinutes(website);
     const minBookableMinutes = bookingDate === indiaNow.date ? indiaNow.minutes + leadNoticeMinutes : -1;
     const isWorkingDay = workingDays.length === 0 || workingDays.some((day) => normalizeDayLabel(day) === normalizeDayLabel(bookingWeekday));
     const dayClosedReason = bookingDate < indiaNow.date
@@ -718,7 +722,7 @@ class ProviderWebsiteService {
       throw new Error('Past booking dates are not allowed');
     }
 
-    const leadNoticeMinutes = Math.max(0, cleanNumber(website.bookingLeadNoticeHours, 0)) * 60;
+    const leadNoticeMinutes = resolveLeadNoticeMinutes(website);
     if (bookingDate === indiaNow.date && slotStartMinutes <= indiaNow.minutes + leadNoticeMinutes) {
       throw new Error('This time slot is no longer available today');
     }
