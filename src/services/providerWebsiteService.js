@@ -1253,6 +1253,8 @@ class ProviderWebsiteService {
       });
     }
 
+    await this.sendBookingCreatedEmails(website.providerId, booking, transaction, website);
+
     return {
       id: booking._id.toString(),
       status: booking.status,
@@ -1507,7 +1509,7 @@ class ProviderWebsiteService {
     }
 
     const action = cleanString(payload.action);
-    if (!['verify', 'refund', 'fail'].includes(action)) {
+    if (!['verify', 'refund', 'fail', 'receipt'].includes(action)) {
       throw new Error('Invalid payment action');
     }
 
@@ -1522,6 +1524,11 @@ class ProviderWebsiteService {
       booking.paymentStatus = 'paid';
       booking.status = ['new', 'payment_pending'].includes(booking.status) ? 'pending_approval' : booking.status;
       await Promise.all([transaction.save(), booking.save()]);
+      try {
+        await this.sendBookingReceiptCopy(userId, booking, transaction, 'Payment verified by provider.');
+      } catch (error) {
+        logger.warn(`Booking receipt email after payment verification failed: ${error.message}`);
+      }
     } else if (action === 'refund') {
       transaction.paymentStatus = 'refunded';
       transaction.refundStatus = 'processed';
@@ -1535,11 +1542,22 @@ class ProviderWebsiteService {
       booking.refundReference = transaction.refund.reference;
       booking.refundNote = transaction.refund.note;
       await Promise.all([transaction.save(), booking.save()]);
-    } else {
+    } else if (action === 'fail') {
       transaction.paymentStatus = 'failed';
       transaction.manualPayment.verificationNote = cleanString(payload.note);
       booking.paymentStatus = 'failed';
       await Promise.all([transaction.save(), booking.save()]);
+    } else if (action === 'receipt') {
+      if (!['paid', 'refunded'].includes(cleanString(transaction.paymentStatus))) {
+        throw new Error('Verify the payment before sending a receipt.');
+      }
+      transaction.receipt.receiptNumber = transaction.receipt.receiptNumber || websitePaymentService.buildReceiptNumber('BK');
+      transaction.receipt.issuedAt = transaction.receipt.issuedAt || new Date();
+      await transaction.save();
+      const mailed = await this.sendBookingReceiptCopy(userId, booking, transaction);
+      if (!mailed) {
+        throw new Error('Receipt could not be emailed. Check email configuration or customer email.');
+      }
     }
 
     return this.getManager(userId);
@@ -2321,6 +2339,101 @@ class ProviderWebsiteService {
       websiteId: item.websiteId?.toString?.() || String(item.websiteId || ''),
       customerUserId: item.customerUserId?.toString?.() || String(item.customerUserId || '')
     };
+  }
+
+  async sendBookingCreatedEmails(providerUserId, booking, transaction = null, websiteSeed = null) {
+    const [provider, website] = await Promise.all([
+      User.findById(providerUserId).lean(),
+      websiteSeed ? Promise.resolve(websiteSeed) : booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null)
+    ]);
+    const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+    const businessName = website?.businessName || providerName;
+    const bookingId = bookingPublicReference(booking);
+    const bookingWhen = [booking.bookingDate, booking.bookingTime].filter(Boolean).join(', ');
+    const paymentLine = transaction
+      ? `${paymentMethodLabel(transaction.paymentChannel)} - ${cleanString(transaction.paymentStatus) || 'pending'}`
+      : 'Pay later';
+    const paymentIdLine = transaction?.manualPayment?.payerTransactionId
+      ? `<p style="margin:4px 0">Payment ID: <strong>${escapeHtml(transaction.manualPayment.payerTransactionId)}</strong></p>`
+      : '';
+    const businessUrl = buildBusinessUrl(website);
+
+    if (cleanString(booking.customerEmail)) {
+      await receiptEmailService.sendReceipt({
+        to: [booking.customerEmail],
+        subject: `Booking request received - ${businessName}`,
+        replyTo: cleanString(provider?.email),
+        html: `
+          <div style="font-family:Arial,sans-serif;line-height:1.55;color:#1f2937">
+            <h2 style="margin:0 0 12px">Booking request received</h2>
+            <p>Hello ${escapeHtml(booking.customerName || 'there')},</p>
+            <p>Your booking request has been sent to <strong>${escapeHtml(businessName)}</strong>. The provider will review it and update you soon.</p>
+            <p style="margin:4px 0">Booking ID: <strong>${escapeHtml(bookingId)}</strong></p>
+            <p style="margin:4px 0">Service: <strong>${escapeHtml(booking.serviceTitle || 'Website booking')}</strong></p>
+            <p style="margin:4px 0">Date & time: <strong>${escapeHtml(bookingWhen || '-')}</strong></p>
+            <p style="margin:4px 0">Payment mode/status: <strong>${escapeHtml(paymentLine)}</strong></p>
+            ${paymentIdLine}
+            <p style="margin:14px 0 0">Book more with this provider: <a href="${escapeHtml(businessUrl)}" style="color:#155dfc;text-decoration:none;font-weight:700">${escapeHtml(businessUrl)}</a></p>
+          </div>
+        `
+      });
+    }
+
+    if (cleanString(provider?.email)) {
+      await receiptEmailService.sendReceipt({
+        to: [provider.email],
+        subject: `New booking request - ${booking.customerName || 'Customer'}`,
+        html: `
+          <div style="font-family:Arial,sans-serif;line-height:1.55;color:#1f2937">
+            <h2 style="margin:0 0 12px">New booking request</h2>
+            <p>Booking ID: <strong>${escapeHtml(bookingId)}</strong></p>
+            <p>Customer: <strong>${escapeHtml(booking.customerName || '-')}</strong> ${booking.customerPhone ? `(${escapeHtml(booking.customerPhone)})` : ''}</p>
+            <p>Service: <strong>${escapeHtml(booking.serviceTitle || 'Website booking')}</strong></p>
+            <p>Date & time: <strong>${escapeHtml(bookingWhen || '-')}</strong></p>
+            <p>Payment mode/status: <strong>${escapeHtml(paymentLine)}</strong></p>
+            ${paymentIdLine}
+            <p>Open requests: <a href="${escapeHtml(`${frontendBaseUrl()}/provider/customer-requests?tab=bookings`)}" style="color:#155dfc;text-decoration:none;font-weight:700">Customer Requests</a></p>
+          </div>
+        `
+      });
+    }
+  }
+
+  async sendBookingReceiptCopy(providerUserId, booking, transaction, providerMessage = '') {
+    if (!transaction?.receipt?.receiptNumber || !cleanString(booking?.customerEmail)) {
+      return false;
+    }
+
+    const [provider, website] = await Promise.all([
+      User.findById(providerUserId).lean(),
+      booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null)
+    ]);
+    const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+    const receipt = toReceiptPayload(transaction, providerName);
+    const recipients = [
+      cleanString(booking.customerEmail),
+      cleanString(provider?.email)
+    ].filter(Boolean);
+
+    const mailed = await receiptEmailService.sendReceipt({
+      to: recipients,
+      subject: `Receipt ${receipt.receiptNumber} - ${website?.businessName || providerName}`,
+      replyTo: cleanString(provider?.email),
+      html: buildBookingReceiptEmailHtml({
+        receipt,
+        booking,
+        provider,
+        website,
+        statusLabel: cleanString(booking.status) || 'updated',
+        providerMessage
+      })
+    });
+
+    if (mailed) {
+      transaction.receipt.emailedAt = new Date();
+      await transaction.save();
+    }
+    return mailed;
   }
 
   async sendBookingStatusUpdate(providerUserId, booking, transaction = null, status = '', providerMessage = '') {

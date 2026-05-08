@@ -100,7 +100,11 @@ class ReceiptEmailService {
       return true;
     } catch (error) {
       logger.warn(`Receipt email failed: ${error.message}`);
-      return false;
+      const sentWithResend = await this.sendWithResend({ to: recipients, subject, html, replyTo });
+      if (!sentWithResend) {
+        logger.warn('Receipt email could not be sent by SMTP or Resend');
+      }
+      return sentWithResend;
     }
   }
 }
