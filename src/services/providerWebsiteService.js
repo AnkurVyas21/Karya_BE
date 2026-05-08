@@ -75,6 +75,7 @@ const clampNumber = (value, fallback = 0, min = 0, max = Number.MAX_SAFE_INTEGER
 const parseTimeToMinutes = (value = '') => {
   const normalized = cleanString(value)
     .toUpperCase()
+    .replace(/(\d)\.(\d)/g, '$1:$2')
     .replace(/\./g, '')
     .replace(/\s+/g, ' ')
     .replace(/\b([AP])\s+M\b/g, '$1M');
