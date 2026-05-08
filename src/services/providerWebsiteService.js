@@ -546,8 +546,17 @@ class ProviderWebsiteService {
   }
 
   async getBookingSlots(slug, dateString = '') {
-    const website = await ProviderWebsite.findOne({ slug: slugify(slug) }).lean();
-    if (!website || !website.published || !website.bookingEnabled) {
+    const cleanSlug = slugify(slug);
+    if (!cleanSlug) {
+      throw new Error('Booking is not available for this business page');
+    }
+
+    const [website, state] = await Promise.all([
+      ProviderWebsite.findOne({ slug: cleanSlug }).lean(),
+      ProviderGrowth.findOne({ websiteSlug: cleanSlug })
+    ]);
+    const normalizedState = state ? await providerGrowthService.normalizeState(state) : null;
+    if (!website || website.status !== 'published' || !providerGrowthService.hasActiveWebsite(normalizedState) || !website.bookingEnabled) {
       throw new Error('Booking is not available for this business page');
     }
 
@@ -600,11 +609,13 @@ class ProviderWebsiteService {
       const overlapsBreak = breakStart !== null && breakEnd !== null && breakEnd > breakStart && start < breakEnd && end > breakStart;
       const outsideWorkingHours = !dayClosedReason && (start < openMinutes || end > closeMinutes);
       const alreadyPassed = !dayClosedReason && bookingDate === indiaNow.date && start <= indiaNow.minutes;
+      const underLeadNotice = !dayClosedReason && bookingDate === indiaNow.date && !alreadyPassed && start <= minBookableMinutes;
       const booked = bookedTimes.has(value);
       const reason = dayClosedReason
         || (outsideWorkingHours ? 'outside working hours' : '')
         || (overlapsBreak ? 'break time' : '')
         || (alreadyPassed ? 'time passed' : '')
+        || (underLeadNotice ? 'lead notice required' : '')
         || (booked ? 'already booked' : '');
       slots.push({
         label: value,
