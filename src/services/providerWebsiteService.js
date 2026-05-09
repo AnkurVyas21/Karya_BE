@@ -411,10 +411,14 @@ const buildBookingReceiptEmailHtml = ({
   const providerName = receipt.providerName || [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
   const providerPhone = normalizeIndianPhone(website?.phone || provider?.mobile || provider?.phone);
   const businessUrl = buildBusinessUrl(website);
+  const providerSignupUrl = `${frontendBaseUrl()}/provider/register`;
   const bookingId = bookingPublicReference(booking) || (receipt.contextId ? `BK-${receipt.contextId.slice(-8).toUpperCase()}` : '');
   const bookingWhen = [booking?.bookingDate, booking?.bookingTime].filter(Boolean).join(', ');
   const refundLine = receipt.refundStatus && receipt.refundStatus !== 'none'
     ? `<tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Refund status</td><td style="padding:12px 14px"><strong>${escapeHtml(receipt.refundStatus)}</strong>${receipt.refundAmount ? ` (${formatInr(receipt.refundAmount)})` : ''}${receipt.refundReference ? `<br><span>Reference: ${escapeHtml(receipt.refundReference)}</span>` : ''}</td></tr>`
+    : '';
+  const completionBlock = cleanString(statusLabel) === 'completed'
+    ? `<p style="margin:0 0 16px;padding:14px 16px;border-left:4px solid #16a34a;background:#f0fdf4;color:#14532d;line-height:1.6">Thank you for contacting us. I hope you liked our services. Please rate and review, and visit again.<br><a href="${escapeHtml(`${businessUrl}#reviews`)}" style="color:#155dfc;text-decoration:none;font-weight:700">Rate and review ${escapeHtml(website?.businessName || providerName)}</a><br><a href="${escapeHtml(providerSignupUrl)}" style="color:#155dfc;text-decoration:none;font-weight:700">Become a provider on Nasdiya</a></p>`
     : '';
 
   return `
@@ -471,6 +475,7 @@ const buildBookingReceiptEmailHtml = ({
           </table>
 
           ${providerMessage ? `<p style="margin:0 0 16px;padding:12px 14px;border-left:4px solid #155dfc;background:#f5f9ff;color:#344054"><strong>Message from provider:</strong><br>${escapeHtml(providerMessage)}</p>` : ''}
+          ${completionBlock}
           <p class="no-print" style="margin:0;color:#667085;font-size:12px;line-height:1.5">To print this receipt, open this email and use your browser or mail app print option.</p>
         </div>
       </div>
@@ -1254,6 +1259,9 @@ class ProviderWebsiteService {
     }
 
     await this.sendBookingCreatedEmails(website.providerId, booking, transaction, website);
+    if (booking.status === 'confirmed') {
+      await this.sendBookingStatusUpdate(website.providerId, booking, transaction, 'confirmed', 'Your booking is confirmed.');
+    }
 
     return {
       id: booking._id.toString(),
@@ -1485,6 +1493,20 @@ class ProviderWebsiteService {
           transaction.refund.requestedAt = transaction.refund.requestedAt || new Date();
           transaction.refund.amount = booking.refundAmount;
           transaction.refund.note = booking.refundNote;
+        }
+      }
+    } else if (['new', 'pending_approval', 'confirmed', 'payment_pending', 'rescheduled', 'completed'].includes(nextStatus)) {
+      booking.cancelledAt = null;
+      booking.cancellationReason = '';
+      if (booking.refundStatus === 'pending') {
+        booking.refundStatus = 'none';
+        booking.refundAmount = 0;
+        booking.refundNote = '';
+        if (transaction && transaction.refundStatus === 'pending') {
+          transaction.refundStatus = 'none';
+          transaction.refund.amount = 0;
+          transaction.refund.note = '';
+          transaction.refund.requestedAt = null;
         }
       }
     }
@@ -2454,6 +2476,8 @@ class ProviderWebsiteService {
     const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
     const bookingWhen = [booking.bookingDate, booking.bookingTime].filter(Boolean).join(' ');
     const customerMessage = providerMessage || booking.providerMessage || booking.cancellationReason || booking.rescheduleMessage || '';
+    const businessUrl = buildBusinessUrl(website);
+    const providerSignupUrl = `${frontendBaseUrl()}/provider/register`;
     const hasPaidReceipt = transaction
       && cleanString(transaction.paymentStatus) === 'paid'
       && cleanString(transaction.paymentChannel) !== 'none';
@@ -2467,6 +2491,13 @@ class ProviderWebsiteService {
     const receipt = hasPaidReceipt ? toReceiptPayload(transaction, providerName) : null;
     const refundLine = booking.refundStatus && booking.refundStatus !== 'none'
       ? `<p>Refund status: <strong>${escapeHtml(booking.refundStatus)}</strong>${booking.refundAmount ? ` for Rs ${cleanNumber(booking.refundAmount, 0)}` : ''}</p>`
+      : '';
+    const completionBlock = cleanString(status) === 'completed'
+      ? `
+          <p style="margin:14px 0 0">Thank you for contacting us. I hope you liked our services. Please rate and review, and visit again.</p>
+          <p style="margin:8px 0">Rate and review: <a href="${escapeHtml(`${businessUrl}#reviews`)}" style="color:#155dfc;text-decoration:none;font-weight:700">${escapeHtml(businessUrl)}</a></p>
+          <p style="margin:8px 0">Want to become a provider? <a href="${escapeHtml(providerSignupUrl)}" style="color:#155dfc;text-decoration:none;font-weight:700">Sign up on Nasdiya</a></p>
+        `
       : '';
 
     if (booking.customerUserId) {
@@ -2513,6 +2544,7 @@ class ProviderWebsiteService {
           ${transaction?.manualPayment?.payerTransactionId ? `<p>Payment ID: <strong>${escapeHtml(transaction.manualPayment.payerTransactionId)}</strong></p>` : ''}
           ${customerMessage ? `<p>Message from provider: ${escapeHtml(customerMessage)}</p>` : ''}
           ${refundLine}
+          ${completionBlock}
         </div>
       `
     });
