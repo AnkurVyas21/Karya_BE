@@ -1166,6 +1166,7 @@ class ProviderWebsiteService {
       customerUserId: actorUserId || null,
       customerName: cleanString(payload.customerName),
       customerPhone: normalizeIndianPhone(payload.customerPhone),
+      customerWhatsappOptIn: cleanBoolean(payload.isWhatsappNumber, false),
       customerEmail,
       customerAddress: cleanString(payload.customerAddress),
       serviceId: payload.serviceId || null,
@@ -1270,6 +1271,7 @@ class ProviderWebsiteService {
       status: booking.status,
       paymentStatus: booking.paymentStatus,
       paymentChoice: booking.paymentChoice,
+      customerEmail: booking.customerEmail,
       bookingDate: booking.bookingDate,
       bookingTime: booking.bookingTime,
       serviceTitle: booking.serviceTitle,
@@ -1554,6 +1556,7 @@ class ProviderWebsiteService {
         logger.warn(`Booking receipt email after payment verification failed: ${error.message}`);
       }
     } else if (action === 'refund') {
+      const refundUpiId = cleanString(payload.upiId || transaction.manualPayment?.upiId);
       transaction.paymentStatus = 'refunded';
       transaction.refundStatus = 'processed';
       transaction.refund.processedAt = new Date();
@@ -1566,6 +1569,11 @@ class ProviderWebsiteService {
       booking.refundReference = transaction.refund.reference;
       booking.refundNote = transaction.refund.note;
       await Promise.all([transaction.save(), booking.save()]);
+      try {
+        await this.sendBookingRefundEmail(userId, booking, transaction, refundUpiId);
+      } catch (error) {
+        logger.warn(`Booking refund email failed: ${error.message}`);
+      }
     } else if (action === 'fail') {
       transaction.paymentStatus = 'failed';
       transaction.manualPayment.verificationNote = cleanString(payload.note);
@@ -2564,6 +2572,45 @@ class ProviderWebsiteService {
       transaction.receipt.emailedAt = new Date();
       await transaction.save();
     }
+  }
+
+  async sendBookingRefundEmail(providerUserId, booking, transaction, refundUpiId = '') {
+    const [provider, website, customerUser] = await Promise.all([
+      User.findById(providerUserId).lean(),
+      booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null),
+      booking?.customerUserId ? User.findById(booking.customerUserId).select('email').lean() : Promise.resolve(null)
+    ]);
+    const customerEmail = cleanString(booking.customerEmail) || cleanString(customerUser?.email);
+    if (!customerEmail) {
+      return false;
+    }
+
+    const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+    const amount = cleanNumber(transaction?.refund?.amount || booking.refundAmount, 0);
+    const reference = cleanString(transaction?.refund?.reference || booking.refundReference);
+    const providerUpiId = cleanString(refundUpiId || transaction?.manualPayment?.upiId || website?.upiId);
+    const bookingWhen = [booking.bookingDate, booking.bookingTime].filter(Boolean).join(' ');
+
+    return receiptEmailService.sendReceipt({
+      to: [customerEmail],
+      subject: `Refund processed - ${website?.businessName || providerName}`,
+      replyTo: cleanString(provider?.email),
+      html: `
+        <div style="font-family:Arial,sans-serif;line-height:1.5;color:#1f2937">
+          <h2 style="margin-bottom:12px">Refund processed</h2>
+          <p>Hello ${escapeHtml(booking.customerName || 'there')},</p>
+          <p>Your refund for <strong>${escapeHtml(website?.businessName || providerName)}</strong> has been marked as processed.</p>
+          <p>Booking ID: <strong>${escapeHtml(bookingPublicReference(booking))}</strong></p>
+          <p>Booking: <strong>${escapeHtml(booking.serviceTitle || 'Website booking')}</strong></p>
+          <p>Date and time: <strong>${escapeHtml(bookingWhen)}</strong></p>
+          <p>Refund amount: <strong>Rs ${escapeHtml(String(amount))}</strong></p>
+          ${reference ? `<p>Refund transaction ID: <strong>${escapeHtml(reference)}</strong></p>` : ''}
+          ${providerUpiId ? `<p>Provider UPI ID: <strong>${escapeHtml(providerUpiId)}</strong></p>` : ''}
+          ${transaction?.manualPayment?.payerTransactionId ? `<p>Original payment transaction ID: <strong>${escapeHtml(transaction.manualPayment.payerTransactionId)}</strong></p>` : ''}
+          ${booking.refundNote ? `<p>Note: ${escapeHtml(booking.refundNote)}</p>` : ''}
+        </div>
+      `
+    });
   }
 
   async sendReceiptEmails(providerUserId, transaction) {

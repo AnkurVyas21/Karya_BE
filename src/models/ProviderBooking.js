@@ -6,6 +6,7 @@ const providerBookingSchema = new mongoose.Schema({
   customerUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
   customerName: { type: String, required: true },
   customerPhone: { type: String, required: true },
+  customerWhatsappOptIn: { type: Boolean, default: false },
   customerEmail: { type: String, default: '' },
   customerAddress: { type: String, default: '' },
   serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProviderService', default: null },
