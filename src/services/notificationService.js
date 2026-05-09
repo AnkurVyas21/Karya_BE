@@ -41,16 +41,21 @@ class NotificationService {
     return payload;
   }
 
-  async listForUser(userId, limit = 20) {
-    const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 50);
+  async listForUser(userId, limit = 20, options = {}) {
+    const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 200);
+    const query = { userId };
+    if (options.unreadOnly) {
+      query.isRead = false;
+    }
     const [items, unreadCount] = await Promise.all([
-      Notification.find({ userId }).sort({ createdAt: -1 }).limit(safeLimit).lean(),
+      Notification.find(query).sort({ createdAt: -1 }).limit(safeLimit).lean(),
       Notification.countDocuments({ userId, isRead: false })
     ]);
 
     return {
       notifications: items.map((item) => this.serialize(item)),
-      unreadCount
+      unreadCount,
+      returnedCount: items.length
     };
   }
 

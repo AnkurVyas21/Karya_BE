@@ -2,7 +2,9 @@ const notificationService = require('../services/notificationService');
 
 const listNotifications = async (req, res) => {
   try {
-    const data = await notificationService.listForUser(req.user._id, req.query.limit);
+    const data = await notificationService.listForUser(req.user._id, req.query.limit, {
+      unreadOnly: String(req.query.unreadOnly || '').toLowerCase() === 'true'
+    });
     res.json({ success: true, data });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
