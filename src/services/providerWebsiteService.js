@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const QRCode = require('qrcode');
 const ProviderGrowth = require('../models/ProviderGrowth');
 const ProviderWebsite = require('../models/ProviderWebsite');
@@ -56,6 +57,8 @@ const cleanNumber = (value, fallback = 0) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
+const generateBookingOtp = () => String(crypto.randomInt(100000, 1000000));
+const hashBookingOtp = (value = '') => crypto.createHash('sha256').update(cleanString(value)).digest('hex');
 const normalizeIndianPhone = (value = '') => String(value || '').replace(/[^\d]/g, '').slice(-10);
 const slugify = (value = '') => cleanString(value)
   .toLowerCase()
@@ -1159,6 +1162,7 @@ class ProviderWebsiteService {
       : paymentChoice === 'manual-upi'
         ? 'verification-pending'
         : 'pending';
+    const serviceProofOtp = paymentChoice !== 'pay-later' && amountBreakdown.totalAmount > 0 ? generateBookingOtp() : '';
 
     const booking = await ProviderBooking.create({
       providerId: website.providerId,
@@ -1183,6 +1187,8 @@ class ProviderWebsiteService {
       paymentChoice,
       paymentChannel,
       paymentStatus,
+      serviceProofOtpHash: serviceProofOtp ? hashBookingOtp(serviceProofOtp) : '',
+      serviceProofOtpGeneratedAt: serviceProofOtp ? new Date() : null,
       status: resolveBookingStatus(website, selectedService, paymentChoice)
     });
 
@@ -1261,7 +1267,7 @@ class ProviderWebsiteService {
       });
     }
 
-    await this.sendBookingCreatedEmails(website.providerId, booking, transaction, website);
+    await this.sendBookingCreatedEmails(website.providerId, booking, transaction, website, serviceProofOtp);
     if (booking.status === 'confirmed') {
       await this.sendBookingStatusUpdate(website.providerId, booking, transaction, 'confirmed', 'Your booking is confirmed.');
     }
@@ -1458,6 +1464,9 @@ class ProviderWebsiteService {
     if (paymentChannel === 'manual-upi' && paymentStatus === 'failed' && ['confirmed', 'rescheduled', 'completed'].includes(nextStatus)) {
       throw new Error('Payment was marked not received. Resolve the payment before continuing this booking.');
     }
+    if (this.requiresBookingProofOtp(booking, transaction) && ['rescheduled', 'cancelled', 'completed'].includes(nextStatus)) {
+      this.verifyBookingProofOtp(booking, payload.otp || payload.serviceOtp);
+    }
 
     if (nextBookingDate || nextBookingTime) {
       const bookingDate = nextBookingDate || booking.bookingDate;
@@ -1557,11 +1566,15 @@ class ProviderWebsiteService {
       }
     } else if (action === 'refund') {
       const refundUpiId = cleanString(payload.upiId || transaction.manualPayment?.upiId);
+      this.verifyBookingProofOtp(booking, payload.otp || payload.serviceOtp);
+      if (!cleanString(payload.reference) && !cleanBoolean(payload.refundPaidCash, false)) {
+        throw new Error('Enter the refund transaction ID or mark the refund as paid by cash.');
+      }
       transaction.paymentStatus = 'refunded';
       transaction.refundStatus = 'processed';
       transaction.refund.processedAt = new Date();
       transaction.refund.amount = cleanNumber(payload.amount, transaction.amountBreakdown?.totalAmount || 0);
-      transaction.refund.reference = cleanString(payload.reference);
+      transaction.refund.reference = cleanBoolean(payload.refundPaidCash, false) ? 'Paid by cash' : cleanString(payload.reference);
       transaction.refund.note = cleanString(payload.note);
       booking.paymentStatus = 'refunded';
       booking.refundStatus = 'processed';
@@ -2251,7 +2264,7 @@ class ProviderWebsiteService {
       offers: offers.map((item) => ({ ...item, id: item._id.toString() })),
       articles: articles.map((item) => ({ ...item, id: item._id.toString() })),
       leads: leads.map((item) => ({ ...item, id: item._id.toString() })),
-      bookings: bookings.map((item) => ({ ...item, id: item._id.toString() })),
+      bookings: bookings.map((item) => this.serializeBooking(item)),
       orders: orders.map((item) => ({ ...item, id: item._id.toString() })),
       transactions: transactions.map((item) => this.serializeTransaction(item)),
       themeConfig: themeConfig || {},
@@ -2373,7 +2386,32 @@ class ProviderWebsiteService {
     };
   }
 
-  async sendBookingCreatedEmails(providerUserId, booking, transaction = null, websiteSeed = null) {
+  serializeBooking(item) {
+    const { serviceProofOtpHash, ...booking } = item || {};
+    return {
+      ...booking,
+      id: item?._id?.toString?.() || String(item?.id || '')
+    };
+  }
+
+  requiresBookingProofOtp(booking, transaction = null) {
+    const amount = cleanNumber(transaction?.amountBreakdown?.totalAmount || booking?.advanceFeeAmount, 0);
+    const status = cleanString(transaction?.paymentStatus || booking?.paymentStatus);
+    return amount > 0 && ['paid', 'refunded'].includes(status || 'paid') && cleanString(booking?.serviceProofOtpHash);
+  }
+
+  verifyBookingProofOtp(booking, otpValue) {
+    if (!cleanString(booking?.serviceProofOtpHash)) {
+      throw new Error('Booking completion OTP is not available. Ask the customer to contact support.');
+    }
+    const otp = cleanString(otpValue);
+    if (!/^\d{6}$/.test(otp) || hashBookingOtp(otp) !== cleanString(booking.serviceProofOtpHash)) {
+      throw new Error('Enter the valid 6-digit OTP shared by the customer.');
+    }
+    booking.serviceProofOtpVerifiedAt = new Date();
+  }
+
+  async sendBookingCreatedEmails(providerUserId, booking, transaction = null, websiteSeed = null, serviceProofOtp = '') {
     const [provider, website, customerUser] = await Promise.all([
       User.findById(providerUserId).lean(),
       websiteSeed ? Promise.resolve(websiteSeed) : booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null),
@@ -2388,6 +2426,9 @@ class ProviderWebsiteService {
       : 'Pay later';
     const paymentIdLine = transaction?.manualPayment?.payerTransactionId
       ? `<p style="margin:4px 0">Payment ID: <strong>${escapeHtml(transaction.manualPayment.payerTransactionId)}</strong></p>`
+      : '';
+    const otpLine = cleanString(serviceProofOtp)
+      ? `<div style="margin:14px 0;padding:12px;border:1px solid #f5c542;background:#fff8e1;border-radius:8px"><p style="margin:0 0 6px"><strong>Service proof OTP: ${escapeHtml(serviceProofOtp)}</strong></p><p style="margin:0;color:#7a4b00">Share this OTP with the provider only after the service is completed, or when you approve a paid booking reschedule, cancellation, or refund.</p></div>`
       : '';
     const businessUrl = buildBusinessUrl(website);
 
@@ -2408,6 +2449,7 @@ class ProviderWebsiteService {
             <p style="margin:4px 0">Date & time: <strong>${escapeHtml(bookingWhen || '-')}</strong></p>
             <p style="margin:4px 0">Payment mode/status: <strong>${escapeHtml(paymentLine)}</strong></p>
             ${paymentIdLine}
+            ${otpLine}
             <p style="margin:14px 0 0">Book more with this provider: <a href="${escapeHtml(businessUrl)}" style="color:#155dfc;text-decoration:none;font-weight:700">${escapeHtml(businessUrl)}</a></p>
           </div>
         `
