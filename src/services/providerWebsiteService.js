@@ -1135,6 +1135,8 @@ class ProviderWebsiteService {
       throw new Error('This time slot does not meet the minimum advance booking time');
     }
 
+    const actorUser = actorUserId ? await User.findById(actorUserId).select('email').lean() : null;
+    const customerEmail = cleanString(payload.customerEmail) || cleanString(actorUser?.email);
     const bookingFlow = normalizeBookingFlowForWebsite(website);
     const baseAmount = resolveBookingPaymentDue(website, selectedService, bookingFlow);
     const timeCharges = resolveBookingTimeCharges(website, slotStartMinutes, baseAmount, bookingDate);
@@ -1164,7 +1166,7 @@ class ProviderWebsiteService {
       customerUserId: actorUserId || null,
       customerName: cleanString(payload.customerName),
       customerPhone: normalizeIndianPhone(payload.customerPhone),
-      customerEmail: cleanString(payload.customerEmail),
+      customerEmail,
       customerAddress: cleanString(payload.customerAddress),
       serviceId: payload.serviceId || null,
       serviceTitle: cleanString(selectedService?.title),
@@ -1205,7 +1207,7 @@ class ProviderWebsiteService {
         customerUserId: actorUserId || null,
         customerName: cleanString(payload.customerName),
         customerPhone: normalizeIndianPhone(payload.customerPhone),
-        customerEmail: cleanString(payload.customerEmail),
+        customerEmail,
         contextType: 'booking',
         contextId: booking._id,
         contextLabel: cleanString(selectedService?.title) || 'Website booking',
@@ -2364,9 +2366,10 @@ class ProviderWebsiteService {
   }
 
   async sendBookingCreatedEmails(providerUserId, booking, transaction = null, websiteSeed = null) {
-    const [provider, website] = await Promise.all([
+    const [provider, website, customerUser] = await Promise.all([
       User.findById(providerUserId).lean(),
-      websiteSeed ? Promise.resolve(websiteSeed) : booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null)
+      websiteSeed ? Promise.resolve(websiteSeed) : booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null),
+      booking?.customerUserId ? User.findById(booking.customerUserId).select('email').lean() : Promise.resolve(null)
     ]);
     const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
     const businessName = website?.businessName || providerName;
@@ -2380,9 +2383,11 @@ class ProviderWebsiteService {
       : '';
     const businessUrl = buildBusinessUrl(website);
 
-    if (cleanString(booking.customerEmail)) {
+    const customerEmail = cleanString(booking.customerEmail) || cleanString(customerUser?.email);
+
+    if (customerEmail) {
       await receiptEmailService.sendReceipt({
-        to: [booking.customerEmail],
+        to: [customerEmail],
         subject: `Booking request received - ${businessName}`,
         replyTo: cleanString(provider?.email),
         html: `
@@ -2422,20 +2427,25 @@ class ProviderWebsiteService {
   }
 
   async sendBookingReceiptCopy(providerUserId, booking, transaction, providerMessage = '') {
-    if (!transaction?.receipt?.receiptNumber || !cleanString(booking?.customerEmail)) {
+    if (!transaction?.receipt?.receiptNumber) {
       return false;
     }
 
-    const [provider, website] = await Promise.all([
+    const [provider, website, customerUser] = await Promise.all([
       User.findById(providerUserId).lean(),
-      booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null)
+      booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null),
+      booking?.customerUserId ? User.findById(booking.customerUserId).select('email').lean() : Promise.resolve(null)
     ]);
     const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
     const receipt = toReceiptPayload(transaction, providerName);
+    const customerEmail = cleanString(booking.customerEmail) || cleanString(customerUser?.email);
     const recipients = [
-      cleanString(booking.customerEmail),
+      customerEmail,
       cleanString(provider?.email)
     ].filter(Boolean);
+    if (!customerEmail && !cleanString(provider?.email)) {
+      return false;
+    }
 
     const mailed = await receiptEmailService.sendReceipt({
       to: recipients,
@@ -2469,9 +2479,10 @@ class ProviderWebsiteService {
       pending_approval: 'waiting for provider approval'
     };
     const statusLabel = statusLabels[cleanString(status)] || cleanString(status) || 'updated';
-    const [provider, website] = await Promise.all([
+    const [provider, website, customerUser] = await Promise.all([
       User.findById(providerUserId).lean(),
-      booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null)
+      booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null),
+      booking?.customerUserId ? User.findById(booking.customerUserId).select('email').lean() : Promise.resolve(null)
     ]);
     const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
     const bookingWhen = [booking.bookingDate, booking.bookingTime].filter(Boolean).join(' ');
@@ -2515,12 +2526,13 @@ class ProviderWebsiteService {
       });
     }
 
-    if (!cleanString(booking.customerEmail)) {
+    const customerEmail = cleanString(booking.customerEmail) || cleanString(customerUser?.email);
+    if (!customerEmail) {
       return;
     }
 
     const mailed = await receiptEmailService.sendReceipt({
-      to: [booking.customerEmail],
+      to: [customerEmail],
       subject: hasPaidReceipt
         ? `Receipt ${receipt.receiptNumber} - Booking ${statusLabel} - ${website?.businessName || providerName}`
         : `Booking ${statusLabel} - ${website?.businessName || providerName}`,
