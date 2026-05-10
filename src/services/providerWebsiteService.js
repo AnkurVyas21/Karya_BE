@@ -20,6 +20,7 @@ const logger = require('../utils/logger');
 const providerGrowthService = require('./providerGrowthService');
 const websitePaymentService = require('./websitePaymentService');
 const receiptEmailService = require('./receiptEmailService');
+const receiptPdfService = require('./receiptPdfService');
 
 const DEFAULT_BUSINESS_HOURS = [
   { day: 'Monday', isOpen: true, openTime: '09:00', closeTime: '18:00' },
@@ -426,6 +427,65 @@ const bookingOfferEmailHtml = (offerInfo = null, booking = {}) => {
       ${discountAmount ? `<p style="margin:0;color:#155dfc"><strong>You received a benefit of Rs ${discountAmount} from this offer.</strong></p>` : ''}
     </div>
   `;
+};
+const bookingOfferPdfLine = (offerInfo = null, booking = {}) => {
+  const code = cleanString(booking?.offerCode || offerInfo?.offerCode);
+  if (!code) {
+    return 'No offer applied';
+  }
+  const parts = [code];
+  if (cleanString(offerInfo?.title)) {
+    parts.push(cleanString(offerInfo.title));
+  }
+  if (cleanNumber(booking?.offerDiscountAmount, 0) > 0) {
+    parts.push(`Discount ${formatInr(booking.offerDiscountAmount)}`);
+  }
+  return parts.join(' - ');
+};
+const buildBookingReceiptPdfAttachment = ({
+  receipt = {},
+  booking = {},
+  provider = {},
+  website = {},
+  statusLabel = '',
+  providerMessage = '',
+  offerInfo = null
+}) => {
+  const providerName = receipt.providerName || [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+  const providerPhone = normalizeIndianPhone(website?.phone || provider?.mobile || provider?.phone);
+  const bookingId = bookingPublicReference(booking) || (receipt.contextId ? `BK-${receipt.contextId.slice(-8).toUpperCase()}` : '');
+  const bookingWhen = [booking?.bookingDate, booking?.bookingTime].filter(Boolean).join(', ');
+  const rows = [
+    { label: 'Receipt No.', value: receipt.receiptNumber },
+    { label: 'Booking status', value: statusLabel || 'updated' },
+    { label: 'Booking ID', value: bookingId },
+    { label: 'Item / Service', value: booking?.serviceTitle || receipt.contextLabel || 'Website booking' },
+    { label: 'Date & time', value: bookingWhen || '-' },
+    { label: 'Units', value: bookingUnitsLabel(booking) },
+    { label: 'Customer', value: [booking?.customerName || receipt.customerName || '-', booking?.customerPhone || receipt.customerPhone, receipt.customerEmail].filter(Boolean).join(' | ') },
+    { label: 'Offer', value: bookingOfferPdfLine(offerInfo, booking) },
+    { label: 'Total paid', value: formatInr(receipt.totalAmount) },
+    { label: 'Payment method', value: paymentMethodLabel(receipt.paymentChannel) },
+    { label: 'Payment ID', value: receipt.paymentId || '-' },
+    { label: 'Provider UPI ID', value: receipt.upiId || '-' },
+    { label: 'Issued at', value: formatIndiaDateTime(receipt.issuedAt) || '-' },
+    { label: 'Provider', value: [website?.businessName || providerName, providerPhone ? `Mobile: ${providerPhone}` : ''].filter(Boolean).join(' | ') },
+    { label: 'Book again', value: buildBusinessUrl(website) },
+    { label: 'Nasdiya', value: frontendBaseUrl() }
+  ];
+  if (receipt.refundStatus && receipt.refundStatus !== 'none') {
+    rows.push({ label: 'Refund status', value: `${receipt.refundStatus}${receipt.refundAmount ? ` (${formatInr(receipt.refundAmount)})` : ''}${receipt.refundReference ? ` - ${receipt.refundReference}` : ''}` });
+  }
+  if (providerMessage) {
+    rows.push({ label: 'Message from provider', value: providerMessage });
+  }
+
+  return receiptPdfService.buildAttachment({
+    filename: `booking-receipt-${receipt.receiptNumber || bookingId}`,
+    title: 'Nasdiya payment receipt',
+    subtitle: `Booking ${statusLabel || 'updated'} - ${website?.businessName || providerName}`,
+    rows
+  });
 };
 const buildBookingReceiptEmailHtml = ({
   receipt = {},
@@ -1637,6 +1697,11 @@ class ProviderWebsiteService {
       booking.paymentStatus = 'paid';
       booking.status = ['new', 'payment_pending'].includes(booking.status) ? 'pending_approval' : booking.status;
       await Promise.all([transaction.save(), booking.save()]);
+      try {
+        await this.sendBookingReceiptCopy(userId, booking, transaction);
+      } catch (error) {
+        logger.warn(`Booking receipt email failed after payment verification: ${error.message}`);
+      }
     } else if (action === 'refund') {
       const refundUpiId = cleanString(payload.upiId || transaction.manualPayment?.upiId);
       this.verifyBookingProofOtp(booking, payload.otp || payload.serviceOtp);
@@ -2676,6 +2741,15 @@ class ProviderWebsiteService {
       to: recipients,
       subject: `Receipt ${receipt.receiptNumber} - ${website?.businessName || providerName}`,
       replyTo: cleanString(provider?.email),
+      attachments: [buildBookingReceiptPdfAttachment({
+        receipt,
+        booking,
+        provider,
+        website,
+        statusLabel: cleanString(booking.status) || 'updated',
+        providerMessage,
+        offerInfo
+      })],
       html: buildBookingReceiptEmailHtml({
         receipt,
         booking,
@@ -2764,6 +2838,15 @@ class ProviderWebsiteService {
         ? `Receipt ${receipt.receiptNumber} - Booking ${statusLabel} - ${website?.businessName || providerName}`
         : `Booking ${statusLabel} - ${website?.businessName || providerName}`,
       replyTo: cleanString(provider?.email),
+      attachments: hasPaidReceipt ? [buildBookingReceiptPdfAttachment({
+        receipt,
+        booking,
+        provider,
+        website,
+        statusLabel,
+        providerMessage: customerMessage,
+        offerInfo
+      })] : [],
       html: hasPaidReceipt ? buildBookingReceiptEmailHtml({
         receipt,
         booking,

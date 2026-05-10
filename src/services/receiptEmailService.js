@@ -29,7 +29,29 @@ class ReceiptEmailService {
     return this.transporter;
   }
 
-  async sendWithResend({ to = [], subject = '', html = '', replyTo = '' }) {
+  normalizeAttachments(attachments = [], { base64 = false } = {}) {
+    if (!Array.isArray(attachments)) {
+      return [];
+    }
+
+    return attachments
+      .map((item) => {
+        const filename = String(item?.filename || '').trim();
+        const content = item?.content;
+        if (!filename || content === null || content === undefined) {
+          return null;
+        }
+        const buffer = Buffer.isBuffer(content) ? content : Buffer.from(String(content));
+        return {
+          filename,
+          content: base64 ? buffer.toString('base64') : buffer,
+          contentType: item?.contentType || 'application/octet-stream'
+        };
+      })
+      .filter(Boolean);
+  }
+
+  async sendWithResend({ to = [], subject = '', html = '', replyTo = '', attachments = [] }) {
     const apiKey = String(process.env.RESEND_API_KEY || '').trim();
     const from = String(process.env.RESEND_FROM || '').trim();
     const recipients = (Array.isArray(to) ? to : [to]).map((item) => String(item || '').trim()).filter(Boolean);
@@ -45,6 +67,10 @@ class ReceiptEmailService {
         subject,
         html
       };
+      const normalizedAttachments = this.normalizeAttachments(attachments, { base64: true });
+      if (normalizedAttachments.length > 0) {
+        body.attachments = normalizedAttachments;
+      }
       if (String(replyTo || '').trim()) {
         body.reply_to = String(replyTo || '').trim();
       }
@@ -71,7 +97,7 @@ class ReceiptEmailService {
     }
   }
 
-  async sendReceipt({ to = [], subject = '', html = '', replyTo = '' }) {
+  async sendReceipt({ to = [], subject = '', html = '', replyTo = '', attachments = [] }) {
     const recipients = (Array.isArray(to) ? to : [to]).map((item) => String(item || '').trim()).filter(Boolean);
     if (recipients.length === 0) {
       return false;
@@ -79,7 +105,7 @@ class ReceiptEmailService {
 
     const transporter = this.getTransporter();
     if (!transporter) {
-      const sentWithResend = await this.sendWithResend({ to: recipients, subject, html, replyTo });
+      const sentWithResend = await this.sendWithResend({ to: recipients, subject, html, replyTo, attachments });
       if (!sentWithResend) {
         logger.warn('Receipt email skipped because neither SMTP nor Resend is configured');
       }
@@ -91,7 +117,8 @@ class ReceiptEmailService {
         from: String(process.env.SMTP_FROM || process.env.SMTP_USER || '').trim(),
         to: recipients.join(', '),
         subject,
-        html
+        html,
+        attachments: this.normalizeAttachments(attachments)
       };
       if (String(replyTo || '').trim()) {
         mailOptions.replyTo = String(replyTo || '').trim();
@@ -100,7 +127,7 @@ class ReceiptEmailService {
       return true;
     } catch (error) {
       logger.warn(`Receipt email failed: ${error.message}`);
-      const sentWithResend = await this.sendWithResend({ to: recipients, subject, html, replyTo });
+      const sentWithResend = await this.sendWithResend({ to: recipients, subject, html, replyTo, attachments });
       if (!sentWithResend) {
         logger.warn('Receipt email could not be sent by SMTP or Resend');
       }
