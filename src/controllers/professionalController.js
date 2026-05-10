@@ -270,6 +270,15 @@ const updateWebsiteBookingPayment = async (req, res) => {
   }
 };
 
+const resendWebsiteBookingOtp = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.resendBookingProofOtp(req.user._id, req.params.id);
+    res.json({ success: true, data, message: 'OTP resent to the customer email.' });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const updateWebsiteOrderStatus = async (req, res) => {
   try {
     const data = await providerWebsiteService.updateOrderStatus(req.user._id, req.params.id, req.body);
@@ -457,6 +466,7 @@ module.exports = {
   updateWebsiteLeadStatus,
   updateWebsiteBookingStatus,
   updateWebsiteBookingPayment,
+  resendWebsiteBookingOtp,
   updateWebsiteOrderStatus,
   updateWebsiteOrderPayment,
   deleteProviderAdvertisement,

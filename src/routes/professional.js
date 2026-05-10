@@ -21,6 +21,7 @@ const {
   updateWebsiteLeadStatus,
   updateWebsiteBookingStatus,
   updateWebsiteBookingPayment,
+  resendWebsiteBookingOtp,
   updateWebsiteOrderStatus,
   updateWebsiteOrderPayment,
   deleteProviderAdvertisement,
@@ -81,6 +82,7 @@ router.patch('/growth/website-manager/publish', authMiddleware, roleMiddleware([
 router.patch('/growth/website-manager/leads/:id', authMiddleware, roleMiddleware(['professional']), updateWebsiteLeadStatus);
 router.patch('/growth/website-manager/bookings/:id', authMiddleware, roleMiddleware(['professional']), updateWebsiteBookingStatus);
 router.patch('/growth/website-manager/bookings/:id/payment', authMiddleware, roleMiddleware(['professional']), updateWebsiteBookingPayment);
+router.post('/growth/website-manager/bookings/:id/resend-otp', authMiddleware, roleMiddleware(['professional']), resendWebsiteBookingOtp);
 router.patch('/growth/website-manager/orders/:id', authMiddleware, roleMiddleware(['professional']), updateWebsiteOrderStatus);
 router.patch('/growth/website-manager/orders/:id/payment', authMiddleware, roleMiddleware(['professional']), updateWebsiteOrderPayment);
 router.delete('/growth/advertisements/:id', authMiddleware, roleMiddleware(['professional']), deleteProviderAdvertisement);

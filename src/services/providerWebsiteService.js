@@ -2411,6 +2411,69 @@ class ProviderWebsiteService {
     booking.serviceProofOtpVerifiedAt = new Date();
   }
 
+  async resendBookingProofOtp(providerUserId, bookingId) {
+    const booking = await ProviderBooking.findOne({ _id: bookingId, providerId: providerUserId });
+    if (!booking) {
+      throw new Error('Booking not found');
+    }
+
+    const transaction = booking.transactionId ? await WebsiteTransaction.findById(booking.transactionId) : null;
+    const amount = cleanNumber(transaction?.amountBreakdown?.totalAmount || booking.advanceFeeAmount, 0);
+    const paymentStatus = cleanString(transaction?.paymentStatus || booking.paymentStatus);
+    if (amount <= 0 || !['paid', 'refunded'].includes(paymentStatus)) {
+      throw new Error('OTP is available only for paid bookings that need customer approval.');
+    }
+
+    const otp = generateBookingOtp();
+    booking.serviceProofOtpHash = hashBookingOtp(otp);
+    booking.serviceProofOtpGeneratedAt = new Date();
+    booking.serviceProofOtpVerifiedAt = null;
+    await booking.save();
+
+    const mailed = await this.sendBookingProofOtpEmail(providerUserId, booking, transaction, otp);
+    if (!mailed) {
+      throw new Error('OTP could not be emailed. Check the customer email address or email configuration.');
+    }
+
+    return this.getManager(providerUserId);
+  }
+
+  async sendBookingProofOtpEmail(providerUserId, booking, transaction = null, serviceProofOtp = '') {
+    const [provider, website, customerUser] = await Promise.all([
+      User.findById(providerUserId).lean(),
+      booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null),
+      booking?.customerUserId ? User.findById(booking.customerUserId).select('email').lean() : Promise.resolve(null)
+    ]);
+    const customerEmail = cleanString(booking.customerEmail) || cleanString(customerUser?.email);
+    if (!customerEmail || !cleanString(serviceProofOtp)) {
+      return false;
+    }
+
+    const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+    const businessName = website?.businessName || providerName;
+    const bookingWhen = [booking.bookingDate, booking.bookingTime].filter(Boolean).join(', ');
+    await receiptEmailService.sendReceipt({
+      to: [customerEmail],
+      subject: `Your booking OTP - ${businessName}`,
+      replyTo: cleanString(provider?.email),
+      html: `
+        <div style="font-family:Arial,sans-serif;line-height:1.55;color:#1f2937">
+          <h2 style="margin:0 0 12px">Booking OTP</h2>
+          <p>Hello ${escapeHtml(booking.customerName || 'there')},</p>
+          <p>Your OTP for <strong>${escapeHtml(businessName)}</strong> has been resent.</p>
+          <div style="margin:14px 0;padding:12px;border:1px solid #f5c542;background:#fff8e1;border-radius:8px">
+            <p style="margin:0 0 6px"><strong>Service proof OTP: ${escapeHtml(serviceProofOtp)}</strong></p>
+            <p style="margin:0;color:#7a4b00">Share this OTP with the provider only after the service is completed, or when you approve a paid booking reschedule, cancellation, or refund.</p>
+          </div>
+          <p style="margin:4px 0">Booking ID: <strong>${escapeHtml(bookingPublicReference(booking))}</strong></p>
+          <p style="margin:4px 0">Service: <strong>${escapeHtml(booking.serviceTitle || transaction?.contextLabel || 'Website booking')}</strong></p>
+          <p style="margin:4px 0">Date & time: <strong>${escapeHtml(bookingWhen || '-')}</strong></p>
+        </div>
+      `
+    });
+    return true;
+  }
+
   async sendBookingCreatedEmails(providerUserId, booking, transaction = null, websiteSeed = null, serviceProofOtp = '') {
     const [provider, website, customerUser] = await Promise.all([
       User.findById(providerUserId).lean(),
