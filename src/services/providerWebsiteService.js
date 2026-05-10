@@ -1698,11 +1698,6 @@ class ProviderWebsiteService {
       booking.paymentStatus = 'paid';
       booking.status = ['new', 'payment_pending'].includes(booking.status) ? 'pending_approval' : booking.status;
       await Promise.all([transaction.save(), booking.save()]);
-      try {
-        await this.sendBookingReceiptCopy(userId, booking, transaction);
-      } catch (error) {
-        logger.warn(`Booking receipt email failed after payment verification: ${error.message}`);
-      }
     } else if (action === 'refund') {
       const refundUpiId = cleanString(payload.upiId || transaction.manualPayment?.upiId);
       this.verifyBookingProofOtp(booking, payload.otp || payload.serviceOtp);
