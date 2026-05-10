@@ -72,6 +72,7 @@ const slugify = (value = '') => cleanString(value)
   .slice(0, 60);
 const isValidIndianPhone = (value = '') => /^[6-9]\d{9}$/.test(String(value || '').replace(/[^\d]/g, '').slice(-10));
 const isValidUpi = (value = '') => !cleanString(value) || /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(cleanString(value));
+const isValidObjectIdString = (value = '') => /^[a-f\d]{24}$/i.test(cleanString(value));
 const normalizeGallery = (value) => cleanArray(value).slice(0, 20);
 const normalizeVideos = (value) => cleanArray(value).slice(0, 8);
 const toObjectIdString = (value) => (value && typeof value.toString === 'function' ? value.toString() : String(value || ''));
@@ -2021,26 +2022,30 @@ class ProviderWebsiteService {
 
   normalizeServices(items = []) {
     return (Array.isArray(items) ? items : [])
-      .map((item, index) => ({
-        title: cleanString(item.title),
-        shortDescription: cleanString(item.shortDescription),
-        fullDescription: cleanString(item.fullDescription),
-        category: cleanString(item.category),
-        priceType: ['fixed', 'starting', 'custom', 'on-request'].includes(cleanString(item.priceType)) ? cleanString(item.priceType) : 'on-request',
-        price: cleanNumber(item.price, 0),
-        unit: cleanString(item.unit),
-        image: cleanString(item.image),
-        isFeatured: cleanBoolean(item.isFeatured, false),
-        isActive: cleanBoolean(item.isActive, true),
-        availableForBooking: cleanBoolean(item.availableForBooking, true),
-        bookingDurationMinutes: clampNumber(item.bookingDurationMinutes, 0, 0, 480),
-        bookingGapMinutes: clampNumber(item.bookingGapMinutes, 0, 0, 240),
-        bookingCapacity: clampNumber(item.bookingCapacity, 0, 0, 100),
-        bookingConfirmationType: ['', 'auto_confirm', 'provider_approval'].includes(cleanString(item.bookingConfirmationType))
-          ? cleanString(item.bookingConfirmationType)
-          : '',
-        sortOrder: cleanNumber(item.sortOrder, index)
-      }))
+      .map((item, index) => {
+        const serviceId = cleanString(item.id || item._id);
+        return {
+          ...(isValidObjectIdString(serviceId) ? { _id: serviceId } : {}),
+          title: cleanString(item.title),
+          shortDescription: cleanString(item.shortDescription),
+          fullDescription: cleanString(item.fullDescription),
+          category: cleanString(item.category),
+          priceType: ['fixed', 'starting', 'custom', 'on-request'].includes(cleanString(item.priceType)) ? cleanString(item.priceType) : 'on-request',
+          price: cleanNumber(item.price, 0),
+          unit: cleanString(item.unit),
+          image: cleanString(item.image),
+          isFeatured: cleanBoolean(item.isFeatured, false),
+          isActive: cleanBoolean(item.isActive, true),
+          availableForBooking: cleanBoolean(item.availableForBooking, true),
+          bookingDurationMinutes: clampNumber(item.bookingDurationMinutes, 0, 0, 480),
+          bookingGapMinutes: clampNumber(item.bookingGapMinutes, 0, 0, 240),
+          bookingCapacity: clampNumber(item.bookingCapacity, 0, 0, 100),
+          bookingConfirmationType: ['', 'auto_confirm', 'provider_approval'].includes(cleanString(item.bookingConfirmationType))
+            ? cleanString(item.bookingConfirmationType)
+            : '',
+          sortOrder: cleanNumber(item.sortOrder, index)
+        };
+      })
       .filter((item) => item.title);
   }
 
