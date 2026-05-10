@@ -155,6 +155,8 @@ const providerWebsiteSchema = new mongoose.Schema({
     default: 'per_slot'
   },
   bookingCapacityPerSlot: { type: Number, default: 1 },
+  bookingMultipleUnitsEnabled: { type: Boolean, default: false },
+  bookingMaxUnitsPerCustomer: { type: Number, default: 1 },
   bookingDailyLimit: { type: Number, default: 0 },
   bookingBufferMinutes: { type: Number, default: 0 },
   bookingLeadNoticeHours: { type: Number, default: 0 },

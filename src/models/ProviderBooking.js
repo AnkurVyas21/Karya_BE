@@ -17,6 +17,7 @@ const providerBookingSchema = new mongoose.Schema({
   bookingEndTime: { type: String, default: '' },
   bookingDurationMinutes: { type: Number, default: 30 },
   bookingGapMinutes: { type: Number, default: 0 },
+  bookingQuantity: { type: Number, default: 1 },
   message: { type: String, default: '' },
   providerMessage: { type: String, default: '' },
   cancellationReason: { type: String, default: '' },

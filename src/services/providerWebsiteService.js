@@ -636,6 +636,10 @@ class ProviderWebsiteService {
     website.bookingMaximumAdvanceDays = clampNumber(payload.bookingMaximumAdvanceDays, website.bookingMaximumAdvanceDays ?? 30, 0, 365);
     website.bookingLimitType = resolveBookingLimitType(payload);
     website.bookingCapacityPerSlot = clampNumber(payload.bookingCapacityPerSlot, website.bookingCapacityPerSlot || 1, 1, 100);
+    website.bookingMultipleUnitsEnabled = cleanBoolean(payload.bookingMultipleUnitsEnabled, false);
+    website.bookingMaxUnitsPerCustomer = website.bookingMultipleUnitsEnabled
+      ? clampNumber(payload.bookingMaxUnitsPerCustomer, website.bookingCapacityPerSlot, 1, website.bookingCapacityPerSlot)
+      : 1;
     website.bookingDailyLimit = clampNumber(payload.bookingDailyLimit, website.bookingDailyLimit || 0, 0, 1000);
     website.bookingBufferMinutes = cleanNumber(payload.bookingBufferMinutes, 0);
     website.bookingLeadNoticeHours = cleanNumber(payload.bookingLeadNoticeHours, 0);
@@ -965,7 +969,7 @@ class ProviderWebsiteService {
       websiteId: website._id,
       bookingDate,
       status: { $nin: ['cancelled', 'rejected'] }
-    }).select('bookingTime bookingStartTime bookingEndTime bookingDurationMinutes bookingGapMinutes serviceId status').lean();
+    }).select('bookingTime bookingStartTime bookingEndTime bookingDurationMinutes bookingGapMinutes bookingQuantity serviceId status').lean();
     const dailyLimitReached = dailyBookingLimit > 0 && existingBookings.length >= dailyBookingLimit;
     const rules = website.extraChargeRules || website.extraCharges || {};
     const night = rules.night || {};
@@ -994,8 +998,10 @@ class ProviderWebsiteService {
       const serviceCapacity = selectedService && cleanNumber(selectedService.bookingCapacity, 0) > 0
         ? clampNumber(selectedService.bookingCapacity, 1, 1, 100)
         : 0;
-      const slotFull = capacityPerSlot > 0 && overlappingBookings.length >= capacityPerSlot;
-      const serviceFull = serviceCapacity > 0 && serviceOverlappingBookings.length >= serviceCapacity;
+      const usedSlotUnits = overlappingBookings.reduce((total, booking) => total + Math.max(1, cleanNumber(booking.bookingQuantity, 1)), 0);
+      const usedServiceUnits = serviceOverlappingBookings.reduce((total, booking) => total + Math.max(1, cleanNumber(booking.bookingQuantity, 1)), 0);
+      const slotFull = capacityPerSlot > 0 && usedSlotUnits >= capacityPerSlot;
+      const serviceFull = serviceCapacity > 0 && usedServiceUnits >= serviceCapacity;
       const reason = dayClosedReason
         || (outsideWorkingHours ? 'outside working hours' : '')
         || (overlapsBreak ? 'break time' : '')
@@ -1005,7 +1011,7 @@ class ProviderWebsiteService {
         || (serviceFull ? 'service full' : '')
         || (slotFull ? 'full' : '');
       const totalCapacity = serviceCapacity || capacityPerSlot;
-      const usedCapacity = serviceCapacity ? serviceOverlappingBookings.length : overlappingBookings.length;
+      const usedCapacity = serviceCapacity ? usedServiceUnits : usedSlotUnits;
       const spotsLeft = totalCapacity > 0 ? Math.max(0, totalCapacity - usedCapacity) : null;
       slots.push({
         label: minutesToTime(start),
@@ -1090,6 +1096,15 @@ class ProviderWebsiteService {
     if (payload.serviceId && (!selectedService || selectedService.availableForBooking === false)) {
       throw new Error('Selected service is not available for booking');
     }
+    const maxUnitsPerCustomer = cleanBoolean(website.bookingMultipleUnitsEnabled, false)
+      ? clampNumber(website.bookingMaxUnitsPerCustomer, website.bookingCapacityPerSlot || 1, 1, resolveCapacityPerSlot(website, selectedService))
+      : 1;
+    const bookingQuantity = cleanBoolean(website.bookingMultipleUnitsEnabled, false)
+      ? clampNumber(payload.bookingQuantity, 1, 1, maxUnitsPerCustomer)
+      : 1;
+    if (selectedSlot.spotsLeft !== null && selectedSlot.spotsLeft !== undefined && bookingQuantity > cleanNumber(selectedSlot.spotsLeft, 0)) {
+      throw new Error(`Only ${selectedSlot.spotsLeft} booking unit${Number(selectedSlot.spotsLeft) === 1 ? '' : 's'} are available for this time slot.`);
+    }
 
     const bookingWeekday = getWeekdayForDate(bookingDate);
     if (!bookingWeekday) {
@@ -1145,7 +1160,8 @@ class ProviderWebsiteService {
     const actorUser = actorUserId ? await User.findById(actorUserId).select('email').lean() : null;
     const customerEmail = cleanString(payload.customerEmail) || cleanString(actorUser?.email);
     const bookingFlow = normalizeBookingFlowForWebsite(website);
-    const baseAmount = resolveBookingPaymentDue(website, selectedService, bookingFlow);
+    const unitBaseAmount = resolveBookingPaymentDue(website, selectedService, bookingFlow);
+    const baseAmount = Number((unitBaseAmount * bookingQuantity).toFixed(2));
     const timeCharges = resolveBookingTimeCharges(website, slotStartMinutes, baseAmount, bookingDate);
     const paymentChoice = websitePaymentService.resolveCustomerPaymentChoice(bookingFlow, payload.paymentChoice);
     const offerQuantity = Math.max(1, cleanNumber(payload.offerQuantity, 1));
@@ -1215,6 +1231,7 @@ class ProviderWebsiteService {
       bookingEndTime: minutesToTime(slotEndMinutes),
       bookingDurationMinutes: slotDurationMinutes,
       bookingGapMinutes: gapAfterBookingMinutes,
+      bookingQuantity,
       message: cleanString(payload.message),
       advanceFeeRequired: paymentChoice !== 'pay-later' && amountBreakdown.totalAmount > 0,
       advanceFeeAmount: Number(amountBreakdown.totalAmount || 0),
@@ -1755,6 +1772,8 @@ class ProviderWebsiteService {
         bookingMaximumAdvanceDays: 30,
         bookingLimitType: 'per_slot',
         bookingCapacityPerSlot: 1,
+        bookingMultipleUnitsEnabled: false,
+        bookingMaxUnitsPerCustomer: 1,
         bookingDailyLimit: 0,
         bookingFlow: {
           enabled: true,
