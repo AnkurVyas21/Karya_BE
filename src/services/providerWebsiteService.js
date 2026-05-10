@@ -407,13 +407,34 @@ const paymentMethodLabel = (value = '') => {
   };
   return labels[cleanString(value)] || cleanString(value) || 'Payment';
 };
+const bookingUnitsLabel = (booking = {}) => {
+  const units = Math.max(1, cleanNumber(booking?.bookingQuantity, 1));
+  return `${units} unit${units === 1 ? '' : 's'}`;
+};
+const bookingOfferEmailHtml = (offerInfo = null, booking = {}) => {
+  const code = cleanString(booking?.offerCode || offerInfo?.offerCode);
+  if (!code) {
+    return '<p style="margin:4px 0">Offer: <strong>No offer applied</strong></p>';
+  }
+  const title = cleanString(offerInfo?.title);
+  const description = cleanString(offerInfo?.description);
+  const discountAmount = cleanNumber(booking?.offerDiscountAmount, 0);
+  return `
+    <div style="margin:10px 0;padding:10px 12px;border:1px solid #dbeafe;background:#eff6ff;border-radius:8px">
+      <p style="margin:0 0 4px">Offer applied: <strong>${escapeHtml(code)}</strong>${title ? ` - ${escapeHtml(title)}` : ''}</p>
+      ${description ? `<p style="margin:0 0 4px;color:#475467">${escapeHtml(description)}</p>` : ''}
+      ${discountAmount ? `<p style="margin:0;color:#155dfc"><strong>You received a benefit of Rs ${discountAmount} from this offer.</strong></p>` : ''}
+    </div>
+  `;
+};
 const buildBookingReceiptEmailHtml = ({
   receipt = {},
   booking = {},
   provider = {},
   website = {},
   statusLabel = '',
-  providerMessage = ''
+  providerMessage = '',
+  offerInfo = null
 }) => {
   const providerName = receipt.providerName || [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
   const providerPhone = normalizeIndianPhone(website?.phone || provider?.mobile || provider?.phone);
@@ -458,9 +479,11 @@ const buildBookingReceiptEmailHtml = ({
               <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085;width:38%">Booking ID</td><td style="padding:12px 14px"><strong>${escapeHtml(bookingId)}</strong></td></tr>
               <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Item / Service</td><td style="padding:12px 14px"><strong>${escapeHtml(booking?.serviceTitle || receipt.contextLabel || 'Website booking')}</strong></td></tr>
               <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Date & time</td><td style="padding:12px 14px"><strong>${escapeHtml(bookingWhen || '-')}</strong></td></tr>
+              <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Units</td><td style="padding:12px 14px"><strong>${escapeHtml(bookingUnitsLabel(booking))}</strong></td></tr>
               <tr><td style="padding:12px 14px;background:#f8fafc;color:#667085">Customer</td><td style="padding:12px 14px"><strong>${escapeHtml(booking?.customerName || receipt.customerName || '-')}</strong><br><span>${escapeHtml(booking?.customerPhone || receipt.customerPhone || '')}</span></td></tr>
             </tbody>
           </table>
+          ${bookingOfferEmailHtml(offerInfo, booking)}
 
           <table style="width:100%;border-collapse:collapse;margin:0 0 18px;border:1px solid #e4ebf5;border-radius:10px;overflow:hidden">
             <tbody>
@@ -1614,11 +1637,6 @@ class ProviderWebsiteService {
       booking.paymentStatus = 'paid';
       booking.status = ['new', 'payment_pending'].includes(booking.status) ? 'pending_approval' : booking.status;
       await Promise.all([transaction.save(), booking.save()]);
-      try {
-        await this.sendBookingReceiptCopy(userId, booking, transaction, 'Payment verified by provider.');
-      } catch (error) {
-        logger.warn(`Booking receipt email after payment verification failed: ${error.message}`);
-      }
     } else if (action === 'refund') {
       const refundUpiId = cleanString(payload.upiId || transaction.manualPayment?.upiId);
       this.verifyBookingProofOtp(booking, payload.otp || payload.serviceOtp);
@@ -2524,6 +2542,7 @@ class ProviderWebsiteService {
     const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
     const businessName = website?.businessName || providerName;
     const bookingWhen = [booking.bookingDate, booking.bookingTime].filter(Boolean).join(', ');
+    const offerInfo = await this.getBookingOfferInfo(booking);
     await receiptEmailService.sendReceipt({
       to: [customerEmail],
       subject: `Your booking OTP - ${businessName}`,
@@ -2540,10 +2559,25 @@ class ProviderWebsiteService {
           <p style="margin:4px 0">Booking ID: <strong>${escapeHtml(bookingPublicReference(booking))}</strong></p>
           <p style="margin:4px 0">Service: <strong>${escapeHtml(booking.serviceTitle || transaction?.contextLabel || 'Website booking')}</strong></p>
           <p style="margin:4px 0">Date & time: <strong>${escapeHtml(bookingWhen || '-')}</strong></p>
+          <p style="margin:4px 0">Units: <strong>${escapeHtml(bookingUnitsLabel(booking))}</strong></p>
+          ${bookingOfferEmailHtml(offerInfo, booking)}
         </div>
       `
     });
     return true;
+  }
+
+  async getBookingOfferInfo(booking) {
+    const code = normalizeOfferCode(booking?.offerCode);
+    if (!code) {
+      return null;
+    }
+    return ProviderOffer.findOne({
+      providerId: booking.providerId,
+      websiteId: booking.websiteId,
+      kind: 'offer',
+      offerCode: code
+    }).lean();
   }
 
   async sendBookingCreatedEmails(providerUserId, booking, transaction = null, websiteSeed = null, serviceProofOtp = '') {
@@ -2566,6 +2600,7 @@ class ProviderWebsiteService {
       ? `<div style="margin:14px 0;padding:12px;border:1px solid #f5c542;background:#fff8e1;border-radius:8px"><p style="margin:0 0 6px"><strong>Service proof OTP: ${escapeHtml(serviceProofOtp)}</strong></p><p style="margin:0;color:#7a4b00">Share this OTP with the provider only after the service is completed, or when you approve a paid booking reschedule, cancellation, or refund.</p></div>`
       : '';
     const businessUrl = buildBusinessUrl(website);
+    const offerInfo = await this.getBookingOfferInfo(booking);
 
     const customerEmail = cleanString(booking.customerEmail) || cleanString(customerUser?.email);
 
@@ -2582,7 +2617,9 @@ class ProviderWebsiteService {
             <p style="margin:4px 0">Booking ID: <strong>${escapeHtml(bookingId)}</strong></p>
             <p style="margin:4px 0">Service: <strong>${escapeHtml(booking.serviceTitle || 'Website booking')}</strong></p>
             <p style="margin:4px 0">Date & time: <strong>${escapeHtml(bookingWhen || '-')}</strong></p>
+            <p style="margin:4px 0">Units: <strong>${escapeHtml(bookingUnitsLabel(booking))}</strong></p>
             <p style="margin:4px 0">Payment mode/status: <strong>${escapeHtml(paymentLine)}</strong></p>
+            ${bookingOfferEmailHtml(offerInfo, booking)}
             ${paymentIdLine}
             ${otpLine}
             <p style="margin:14px 0 0">Book more with this provider: <a href="${escapeHtml(businessUrl)}" style="color:#155dfc;text-decoration:none;font-weight:700">${escapeHtml(businessUrl)}</a></p>
@@ -2602,7 +2639,9 @@ class ProviderWebsiteService {
             <p>Customer: <strong>${escapeHtml(booking.customerName || '-')}</strong> ${booking.customerPhone ? `(${escapeHtml(booking.customerPhone)})` : ''}</p>
             <p>Service: <strong>${escapeHtml(booking.serviceTitle || 'Website booking')}</strong></p>
             <p>Date & time: <strong>${escapeHtml(bookingWhen || '-')}</strong></p>
+            <p>Units: <strong>${escapeHtml(bookingUnitsLabel(booking))}</strong></p>
             <p>Payment mode/status: <strong>${escapeHtml(paymentLine)}</strong></p>
+            ${bookingOfferEmailHtml(offerInfo, booking)}
             ${paymentIdLine}
             <p>Open requests: <a href="${escapeHtml(`${frontendBaseUrl()}/provider/customer-requests?tab=bookings`)}" style="color:#155dfc;text-decoration:none;font-weight:700">Customer Requests</a></p>
           </div>
@@ -2623,6 +2662,7 @@ class ProviderWebsiteService {
     ]);
     const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
     const receipt = toReceiptPayload(transaction, providerName);
+    const offerInfo = await this.getBookingOfferInfo(booking);
     const customerEmail = cleanString(booking.customerEmail) || cleanString(customerUser?.email);
     const recipients = [
       customerEmail,
@@ -2642,7 +2682,8 @@ class ProviderWebsiteService {
         provider,
         website,
         statusLabel: cleanString(booking.status) || 'updated',
-        providerMessage
+        providerMessage,
+        offerInfo
       })
     });
 
@@ -2695,6 +2736,7 @@ class ProviderWebsiteService {
           <p style="margin:8px 0">Want to become a provider? <a href="${escapeHtml(providerSignupUrl)}" style="color:#155dfc;text-decoration:none;font-weight:700">Sign up on Nasdiya</a></p>
         `
       : '';
+    const offerInfo = await this.getBookingOfferInfo(booking);
 
     if (booking.customerUserId) {
       await notificationService.createNotification({
@@ -2728,7 +2770,8 @@ class ProviderWebsiteService {
         provider,
         website,
         statusLabel,
-        providerMessage: customerMessage
+        providerMessage: customerMessage,
+        offerInfo
       }) : `
         <div style="font-family:Arial,sans-serif;line-height:1.5;color:#1f2937">
           <h2 style="margin-bottom:12px">Booking ${escapeHtml(statusLabel)}</h2>
@@ -2737,7 +2780,9 @@ class ProviderWebsiteService {
           <p>Booking ID: <strong>${escapeHtml(bookingPublicReference(booking))}</strong></p>
           <p>Booking: <strong>${escapeHtml(booking.serviceTitle || 'Website booking')}</strong></p>
           <p>Date and time: <strong>${escapeHtml(bookingWhen)}</strong></p>
+          <p>Units: <strong>${escapeHtml(bookingUnitsLabel(booking))}</strong></p>
           <p>Payment: <strong>${escapeHtml(booking.paymentChoice === 'pay-later' ? 'Pay later' : booking.paymentStatus)}</strong></p>
+          ${bookingOfferEmailHtml(offerInfo, booking)}
           ${transaction?.manualPayment?.payerTransactionId ? `<p>Payment ID: <strong>${escapeHtml(transaction.manualPayment.payerTransactionId)}</strong></p>` : ''}
           ${customerMessage ? `<p>Message from provider: ${escapeHtml(customerMessage)}</p>` : ''}
           ${refundLine}
@@ -2767,6 +2812,7 @@ class ProviderWebsiteService {
     const reference = cleanString(transaction?.refund?.reference || booking.refundReference);
     const providerUpiId = cleanString(refundUpiId || transaction?.manualPayment?.upiId || website?.upiId);
     const bookingWhen = [booking.bookingDate, booking.bookingTime].filter(Boolean).join(' ');
+    const offerInfo = await this.getBookingOfferInfo(booking);
 
     return receiptEmailService.sendReceipt({
       to: [customerEmail],
@@ -2780,6 +2826,8 @@ class ProviderWebsiteService {
           <p>Booking ID: <strong>${escapeHtml(bookingPublicReference(booking))}</strong></p>
           <p>Booking: <strong>${escapeHtml(booking.serviceTitle || 'Website booking')}</strong></p>
           <p>Date and time: <strong>${escapeHtml(bookingWhen)}</strong></p>
+          <p>Units: <strong>${escapeHtml(bookingUnitsLabel(booking))}</strong></p>
+          ${bookingOfferEmailHtml(offerInfo, booking)}
           <p>Refund amount: <strong>Rs ${escapeHtml(String(amount))}</strong></p>
           ${reference ? `<p>Refund transaction ID: <strong>${escapeHtml(reference)}</strong></p>` : ''}
           ${providerUpiId ? `<p>Provider UPI ID: <strong>${escapeHtml(providerUpiId)}</strong></p>` : ''}
