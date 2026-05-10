@@ -75,6 +75,51 @@ router.get('/professions', async (_req, res) => {
   }
 });
 
+router.get('/customer-requests', async (_req, res) => {
+  try {
+    const data = await adminService.getCustomerRequests();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/customer-requests/bookings/:id/email', async (req, res) => {
+  try {
+    const data = await adminService.updateCustomerRequestBookingEmail(req.params.id, req.body || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/customer-requests/bookings/:id/resend-otp', async (req, res) => {
+  try {
+    const data = await adminService.resendCustomerRequestBookingOtp(req.params.id);
+    res.json({ success: true, data, message: 'OTP resent to the customer email.' });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/customer-requests/bookings/:id/status', async (req, res) => {
+  try {
+    const data = await adminService.updateCustomerRequestBookingStatus(req.params.id, req.body || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/customer-requests/bookings/:id/payment', async (req, res) => {
+  try {
+    const data = await adminService.updateCustomerRequestBookingPayment(req.params.id, req.body || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/ads', async (req, res) => {
   try {
     const data = await advertisementCreativeService.listForAdmin({ status: req.query.status || '' });

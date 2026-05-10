@@ -1188,6 +1188,7 @@ class ProviderWebsiteService {
       paymentChannel,
       paymentStatus,
       serviceProofOtpHash: serviceProofOtp ? hashBookingOtp(serviceProofOtp) : '',
+      serviceProofOtpCode: serviceProofOtp,
       serviceProofOtpGeneratedAt: serviceProofOtp ? new Date() : null,
       status: resolveBookingStatus(website, selectedService, paymentChoice)
     });
@@ -2387,7 +2388,7 @@ class ProviderWebsiteService {
   }
 
   serializeBooking(item) {
-    const { serviceProofOtpHash, ...booking } = item || {};
+    const { serviceProofOtpHash, serviceProofOtpCode, ...booking } = item || {};
     return {
       ...booking,
       id: item?._id?.toString?.() || String(item?.id || '')
@@ -2426,6 +2427,7 @@ class ProviderWebsiteService {
 
     const otp = generateBookingOtp();
     booking.serviceProofOtpHash = hashBookingOtp(otp);
+    booking.serviceProofOtpCode = otp;
     booking.serviceProofOtpGeneratedAt = new Date();
     booking.serviceProofOtpVerifiedAt = null;
     await booking.save();

@@ -5,8 +5,13 @@ const Subscription = require('../models/Subscription');
 const SiteVisit = require('../models/SiteVisit');
 const AdvertisementCreative = require('../models/AdvertisementCreative');
 const ProviderGrowth = require('../models/ProviderGrowth');
+const ProviderLead = require('../models/ProviderLead');
+const ProviderBooking = require('../models/ProviderBooking');
+const ProviderWebsite = require('../models/ProviderWebsite');
+const WebsiteTransaction = require('../models/WebsiteTransaction');
 const advertisementCreativeService = require('./advertisementCreativeService');
 const professionCatalogService = require('./professionCatalogService');
+const providerWebsiteService = require('./providerWebsiteService');
 const paymentService = require('./paymentService');
 const logger = require('../utils/logger');
 const { composeLocation, getProfileCompletionState, toVisibleEmail, toVisibleMobile } = require('../utils/accountPresenter');
@@ -22,6 +27,7 @@ const getFullName = (entity = {}) => [entity.firstName, entity.lastName].filter(
 const toObjectIdString = (value) => value?._id ? value._id.toString() : String(value || '');
 
 const cleanString = (value) => String(value || '').trim();
+const isValidEmail = (value = '') => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanString(value).toLowerCase());
 
 const normalizeDateInput = (value) => String(value || '').trim();
 
@@ -686,6 +692,162 @@ class AdminService {
       summary: await this.getProfessionsSummary(),
       items
     };
+  }
+
+  async getCustomerRequests() {
+    const [bookings, leads] = await Promise.all([
+      ProviderBooking.find({}).sort({ createdAt: -1 }).limit(250).lean(),
+      ProviderLead.find({}).sort({ createdAt: -1 }).limit(250).lean()
+    ]);
+
+    const providerIds = [...new Set([
+      ...bookings.map((item) => toObjectIdString(item.providerId)),
+      ...leads.map((item) => toObjectIdString(item.providerId))
+    ].filter(Boolean))];
+    const websiteIds = [...new Set([
+      ...bookings.map((item) => toObjectIdString(item.websiteId)),
+      ...leads.map((item) => toObjectIdString(item.websiteId))
+    ].filter(Boolean))];
+    const transactionIds = bookings.map((item) => toObjectIdString(item.transactionId)).filter(Boolean);
+
+    const [providers, websites, transactions] = await Promise.all([
+      User.find({ _id: { $in: providerIds } }).select('firstName lastName email mobile role').lean(),
+      ProviderWebsite.find({ _id: { $in: websiteIds } }).select('businessName slug category city').lean(),
+      WebsiteTransaction.find({ _id: { $in: transactionIds } }).lean()
+    ]);
+
+    const providerMap = new Map(providers.map((provider) => [toObjectIdString(provider._id), {
+      id: toObjectIdString(provider._id),
+      fullName: getFullName(provider) || provider.email || 'Provider',
+      email: provider.email || '',
+      mobile: provider.mobile || ''
+    }]));
+    const websiteMap = new Map(websites.map((website) => [toObjectIdString(website._id), {
+      id: toObjectIdString(website._id),
+      businessName: website.businessName || '',
+      slug: website.slug || '',
+      category: website.category || '',
+      city: website.city || ''
+    }]));
+    const transactionMap = new Map(transactions.map((transaction) => [toObjectIdString(transaction._id), {
+      ...transaction,
+      id: toObjectIdString(transaction._id),
+      contextId: toObjectIdString(transaction.contextId),
+      providerId: toObjectIdString(transaction.providerId),
+      websiteId: toObjectIdString(transaction.websiteId)
+    }]));
+
+    const bookingItems = bookings.map((booking) => {
+      const providerId = toObjectIdString(booking.providerId);
+      const websiteId = toObjectIdString(booking.websiteId);
+      const transaction = transactionMap.get(toObjectIdString(booking.transactionId)) || null;
+      return {
+        type: 'booking',
+        id: toObjectIdString(booking._id),
+        providerId,
+        websiteId,
+        provider: providerMap.get(providerId) || null,
+        website: websiteMap.get(websiteId) || null,
+        item: {
+          ...booking,
+          id: toObjectIdString(booking._id),
+          providerId,
+          websiteId,
+          customerUserId: toObjectIdString(booking.customerUserId),
+          transactionId: toObjectIdString(booking.transactionId),
+          serviceProofOtp: cleanString(booking.serviceProofOtpCode),
+          serviceProofOtpAvailable: Boolean(cleanString(booking.serviceProofOtpHash))
+        },
+        transaction,
+        createdAt: booking.createdAt
+      };
+    });
+
+    const leadItems = leads.map((lead) => {
+      const providerId = toObjectIdString(lead.providerId);
+      const websiteId = toObjectIdString(lead.websiteId);
+      return {
+        type: cleanString(lead.source) === 'callback' ? 'callback' : 'inquiry',
+        id: toObjectIdString(lead._id),
+        providerId,
+        websiteId,
+        provider: providerMap.get(providerId) || null,
+        website: websiteMap.get(websiteId) || null,
+        item: {
+          ...lead,
+          id: toObjectIdString(lead._id),
+          providerId,
+          websiteId
+        },
+        transaction: null,
+        createdAt: lead.createdAt
+      };
+    });
+
+    const items = [...bookingItems, ...leadItems].sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
+
+    return {
+      summary: {
+        total: items.length,
+        bookings: bookingItems.length,
+        inquiries: leadItems.filter((item) => item.type === 'inquiry').length,
+        callbacks: leadItems.filter((item) => item.type === 'callback').length,
+        paidBookings: bookingItems.filter((item) => ['paid', 'refunded'].includes(cleanString(item.transaction?.paymentStatus || item.item?.paymentStatus))).length
+      },
+      items
+    };
+  }
+
+  async updateCustomerRequestBookingEmail(bookingId, payload = {}) {
+    const email = cleanString(payload.email).toLowerCase();
+    if (!isValidEmail(email)) {
+      throw new Error('Enter a valid customer email address.');
+    }
+
+    const booking = await ProviderBooking.findById(bookingId);
+    if (!booking) {
+      throw new Error('Booking not found');
+    }
+
+    booking.customerEmail = email;
+    await booking.save();
+
+    if (booking.transactionId) {
+      await WebsiteTransaction.findByIdAndUpdate(booking.transactionId, { customerEmail: email });
+    }
+
+    if (payload.resendOtp) {
+      await providerWebsiteService.resendBookingProofOtp(booking.providerId, booking._id);
+    }
+
+    return this.getCustomerRequests();
+  }
+
+  async resendCustomerRequestBookingOtp(bookingId) {
+    const booking = await ProviderBooking.findById(bookingId);
+    if (!booking) {
+      throw new Error('Booking not found');
+    }
+    await providerWebsiteService.resendBookingProofOtp(booking.providerId, booking._id);
+    return this.getCustomerRequests();
+  }
+
+  async updateCustomerRequestBookingStatus(bookingId, payload = {}) {
+    const booking = await ProviderBooking.findById(bookingId);
+    if (!booking) {
+      throw new Error('Booking not found');
+    }
+    await providerWebsiteService.updateBookingStatus(booking.providerId, booking._id, payload);
+    return this.getCustomerRequests();
+  }
+
+  async updateCustomerRequestBookingPayment(bookingId, payload = {}) {
+    const booking = await ProviderBooking.findById(bookingId);
+    if (!booking) {
+      throw new Error('Booking not found');
+    }
+    await providerWebsiteService.updateBookingPayment(booking.providerId, booking._id, payload);
+    return this.getCustomerRequests();
   }
 
   async countUniqueVisitors(match = {}) {

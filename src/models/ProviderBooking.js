@@ -38,6 +38,7 @@ const providerBookingSchema = new mongoose.Schema({
   refundReference: { type: String, default: '' },
   refundNote: { type: String, default: '' },
   serviceProofOtpHash: { type: String, default: '' },
+  serviceProofOtpCode: { type: String, default: '' },
   serviceProofOtpGeneratedAt: { type: Date, default: null },
   serviceProofOtpVerifiedAt: { type: Date, default: null },
   statusUpdatedAt: { type: Date, default: null },
