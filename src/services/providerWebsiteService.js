@@ -59,6 +59,10 @@ const cleanNumber = (value, fallback = 0) => {
 };
 const generateBookingOtp = () => String(crypto.randomInt(100000, 1000000));
 const hashBookingOtp = (value = '') => crypto.createHash('sha256').update(cleanString(value)).digest('hex');
+const normalizeOfferCode = (value = '') => cleanString(value)
+  .toUpperCase()
+  .replace(/[^A-Z0-9]/g, '')
+  .slice(0, 18);
 const normalizeIndianPhone = (value = '') => String(value || '').replace(/[^\d]/g, '').slice(-10);
 const slugify = (value = '') => cleanString(value)
   .toLowerCase()
@@ -1143,8 +1147,38 @@ class ProviderWebsiteService {
     const bookingFlow = normalizeBookingFlowForWebsite(website);
     const baseAmount = resolveBookingPaymentDue(website, selectedService, bookingFlow);
     const timeCharges = resolveBookingTimeCharges(website, slotStartMinutes, baseAmount, bookingDate);
-    const payableAmount = Number((baseAmount + timeCharges.total).toFixed(2));
     const paymentChoice = websitePaymentService.resolveCustomerPaymentChoice(bookingFlow, payload.paymentChoice);
+    const offerQuantity = Math.max(1, cleanNumber(payload.offerQuantity, 1));
+    const requestedOfferCode = normalizeOfferCode(payload.offerCode);
+    let offerDiscountAmount = 0;
+    let appliedOfferCode = '';
+    let payableAmount = Number((baseAmount + timeCharges.total).toFixed(2));
+    if (requestedOfferCode && paymentChoice !== 'pay-later' && payableAmount > 0) {
+      const offer = await ProviderOffer.findOne({
+        providerId: website.providerId,
+        websiteId: website._id,
+        kind: 'offer',
+        offerCode: requestedOfferCode,
+        isActive: true
+      }).lean();
+      if (!offer) {
+        throw new Error('Enter a valid offer code.');
+      }
+      const serviceIds = Array.isArray(offer.applicableServiceIds) ? offer.applicableServiceIds.map((item) => toObjectIdString(item)) : [];
+      const selectedServiceId = toObjectIdString(selectedService?._id || payload.serviceId);
+      const appliesToService = serviceIds.length === 0 || serviceIds.includes('all') || serviceIds.includes(selectedServiceId);
+      if (!appliesToService) {
+        throw new Error('This offer code is not applicable to the selected service.');
+      }
+      if (offerQuantity < Math.max(1, cleanNumber(offer.minQuantity, 1))) {
+        throw new Error(`This offer is available for quantity ${Math.max(1, cleanNumber(offer.minQuantity, 1))} or above.`);
+      }
+      offerDiscountAmount = cleanString(offer.discountType) === 'amount'
+        ? Math.min(payableAmount, cleanNumber(offer.discountValue, 0))
+        : Math.min(payableAmount, Number((payableAmount * cleanNumber(offer.discountValue, 0) / 100).toFixed(2)));
+      payableAmount = Math.max(0, Number((payableAmount - offerDiscountAmount).toFixed(2)));
+      appliedOfferCode = requestedOfferCode;
+    }
     const confirmationType = resolveBookingConfirmationType(website, selectedService);
     if (paymentChoice === 'gateway' && !websitePaymentService.isGatewayConfigured()) {
       throw new Error('Online gateway payment is not connected yet. Choose manual UPI payment or pay later.');
@@ -1187,6 +1221,9 @@ class ProviderWebsiteService {
       paymentChoice,
       paymentChannel,
       paymentStatus,
+      offerCode: appliedOfferCode,
+      offerDiscountAmount,
+      offerQuantity,
       serviceProofOtpHash: serviceProofOtp ? hashBookingOtp(serviceProofOtp) : '',
       serviceProofOtpCode: serviceProofOtp,
       serviceProofOtpGeneratedAt: serviceProofOtp ? new Date() : null,
@@ -1923,18 +1960,32 @@ class ProviderWebsiteService {
 
   normalizeOffers(items = []) {
     return (Array.isArray(items) ? items : [])
-      .map((item) => ({
-        title: cleanString(item.title),
-        description: cleanString(item.description),
-        bannerImage: cleanString(item.bannerImage),
-        badgeText: cleanString(item.badgeText),
-        discountText: cleanString(item.discountText),
-        startDate: item.startDate || null,
-        endDate: item.endDate || null,
-        isActive: cleanBoolean(item.isActive, true),
-        placement: ['hero', 'offers', 'both'].includes(cleanString(item.placement)) ? cleanString(item.placement) : 'hero',
-        preset: cleanString(item.preset)
-      }))
+      .map((item, index) => {
+        const kind = cleanString(item.kind) === 'offer' ? 'offer' : 'banner';
+        const title = cleanString(item.title);
+        const fallbackCode = `${slugify(title || `OFFER${index + 1}`).replace(/-/g, '').toUpperCase().slice(0, 10)}${String(index + 1).padStart(2, '0')}`;
+        const offerCode = normalizeOfferCode(item.offerCode) || (kind === 'offer' ? fallbackCode : '');
+        return {
+          kind,
+          title,
+          description: cleanString(item.description),
+          bannerImage: cleanString(item.bannerImage),
+          badgeText: cleanString(item.badgeText),
+          discountText: cleanString(item.discountText),
+          offerCode,
+          linkedOfferCode: normalizeOfferCode(item.linkedOfferCode),
+          applicableServiceIds: cleanArray(item.applicableServiceIds),
+          minQuantity: Math.max(1, cleanNumber(item.minQuantity, 1)),
+          discountType: cleanString(item.discountType) === 'amount' ? 'amount' : 'percent',
+          discountValue: Math.max(0, cleanNumber(item.discountValue, 0)),
+          paymentOnly: cleanBoolean(item.paymentOnly, true),
+          startDate: item.startDate || null,
+          endDate: item.endDate || null,
+          isActive: cleanBoolean(item.isActive, true),
+          placement: ['hero', 'offers', 'both'].includes(cleanString(item.placement)) ? cleanString(item.placement) : 'hero',
+          preset: cleanString(item.preset)
+        };
+      })
       .filter((item) => item.title);
   }
 

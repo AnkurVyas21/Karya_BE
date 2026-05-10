@@ -32,6 +32,9 @@ const providerBookingSchema = new mongoose.Schema({
     enum: ['not-required', 'pending', 'verification-pending', 'paid', 'failed', 'refunded', 'waived'],
     default: 'pending'
   },
+  offerCode: { type: String, default: '' },
+  offerDiscountAmount: { type: Number, default: 0 },
+  offerQuantity: { type: Number, default: 1 },
   transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'WebsiteTransaction', default: null, index: true },
   refundStatus: { type: String, enum: ['none', 'pending', 'processed', 'rejected'], default: 'none' },
   refundAmount: { type: Number, default: 0 },
