@@ -1247,7 +1247,7 @@ class ProviderWebsiteService {
     const baseAmount = Number((unitBaseAmount * bookingQuantity).toFixed(2));
     const timeCharges = resolveBookingTimeCharges(website, slotStartMinutes, baseAmount, bookingDate);
     const paymentChoice = websitePaymentService.resolveCustomerPaymentChoice(bookingFlow, payload.paymentChoice);
-    const offerQuantity = Math.max(1, cleanNumber(payload.offerQuantity, 1));
+    const offerQuantity = bookingQuantity;
     const requestedOfferCode = normalizeOfferCode(payload.offerCode);
     let offerDiscountAmount = 0;
     let appliedOfferCode = '';
