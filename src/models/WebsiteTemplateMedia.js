@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const websiteTemplateMediaSchema = new mongoose.Schema({
   category: {
     type: String,
-    enum: ['logo', 'cover', 'header', 'about', 'gallery', 'video'],
+    enum: ['logo', 'cover', 'header', 'about', 'gallery'],
     required: true,
     index: true
   },
@@ -11,7 +11,7 @@ const websiteTemplateMediaSchema = new mongoose.Schema({
   fileUrl: { type: String, required: true },
   kind: {
     type: String,
-    enum: ['image', 'video'],
+    enum: ['image'],
     default: 'image',
     index: true
   },

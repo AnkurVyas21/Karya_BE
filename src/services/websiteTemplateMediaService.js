@@ -16,9 +16,8 @@ const cleanBoolean = (value, fallback = false) => {
   return ['true', '1', 'yes', 'on'].includes(String(value).trim().toLowerCase());
 };
 
-const TEMPLATE_CATEGORIES = ['logo', 'cover', 'header', 'about', 'gallery', 'video'];
+const TEMPLATE_CATEGORIES = ['logo', 'cover', 'header', 'about', 'gallery'];
 const IMAGE_MIME_PREFIX = 'image/';
-const VIDEO_MIME_PREFIX = 'video/';
 
 const escapeXml = (value = '') => cleanString(value)
   .replace(/&/g, '&amp;')
@@ -52,15 +51,12 @@ class WebsiteTemplateMediaService {
     return TEMPLATE_CATEGORIES.includes(category) ? category : '';
   }
 
-  inferKind(file = {}, fallback = 'image') {
+  inferKind(file = {}) {
     const mimetype = cleanString(file.mimetype).toLowerCase();
-    if (mimetype.startsWith(VIDEO_MIME_PREFIX)) {
-      return 'video';
-    }
     if (mimetype.startsWith(IMAGE_MIME_PREFIX)) {
       return 'image';
     }
-    return fallback === 'video' ? 'video' : 'image';
+    return '';
   }
 
   serialize(item) {
@@ -90,6 +86,7 @@ class WebsiteTemplateMediaService {
 
   async list({ activeOnly = false } = {}) {
     const query = activeOnly ? { isActive: true } : {};
+    query.category = { $in: TEMPLATE_CATEGORIES };
     const items = await WebsiteTemplateMedia.find(query).sort({ category: 1, createdAt: -1 }).lean();
     return {
       items: items.map((item) => this.serialize(item)),
@@ -110,11 +107,8 @@ class WebsiteTemplateMediaService {
       throw new Error('Upload a template media file');
     }
 
-    const kind = this.inferKind(file, category === 'video' ? 'video' : 'image');
-    if (category === 'video' && kind !== 'video') {
-      throw new Error('Upload a video file for the video template category');
-    }
-    if (category !== 'video' && kind !== 'image') {
+    const kind = this.inferKind(file);
+    if (kind !== 'image') {
       throw new Error('Upload an image file for this template category');
     }
 
@@ -142,7 +136,7 @@ class WebsiteTemplateMediaService {
         throw new Error('Choose a valid template category');
       }
       item.category = category;
-      item.kind = category === 'video' ? 'video' : 'image';
+      item.kind = 'image';
     }
     if (payload.title !== undefined) {
       item.title = cleanString(payload.title);
@@ -169,8 +163,7 @@ class WebsiteTemplateMediaService {
       cover: 'Cover image template',
       header: 'Header photo template',
       about: 'About business image template',
-      gallery: 'Gallery photo template',
-      video: 'Video template'
+      gallery: 'Gallery photo template'
     };
     return labels[category] || 'Website template';
   }
@@ -241,17 +234,6 @@ class WebsiteTemplateMediaService {
       const galleryTemplate = await this.randomActive(['gallery'], 'image');
       if (galleryTemplate) {
         next.gallery = [cleanString(galleryTemplate.fileUrl)];
-      }
-    }
-
-    const videoSelections = Array.isArray(selected.videos) ? selected.videos : cleanString(selected.videos) ? [selected.videos] : [];
-    const selectedVideos = await this.resolveTemplateList(videoSelections, ['video'], 'video');
-    if (selectedVideos.length) {
-      next.videos = [...next.videos, ...selectedVideos.map((item) => cleanString(item.fileUrl))];
-    } else if (!next.videos.length) {
-      const videoTemplate = await this.randomActive(['video'], 'video');
-      if (videoTemplate) {
-        next.videos = [cleanString(videoTemplate.fileUrl)];
       }
     }
 
