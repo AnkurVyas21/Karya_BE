@@ -2,10 +2,15 @@ const express = require('express');
 const User = require('../models/User');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
+const persistUploadedFiles = require('../middlewares/persistUploadedFiles');
 const adminService = require('../services/adminService');
 const advertisementCreativeService = require('../services/advertisementCreativeService');
+const websiteTemplateMediaService = require('../services/websiteTemplateMediaService');
+const multer = require('multer');
+const { getUploadDestination } = require('../utils/uploadPaths');
 
 const router = express.Router();
+const upload = multer({ dest: getUploadDestination(), limits: { fileSize: 30 * 1024 * 1024 } });
 
 router.use(authMiddleware, roleMiddleware(['admin']));
 
@@ -114,6 +119,42 @@ router.patch('/customer-requests/bookings/:id/status', async (req, res) => {
 router.patch('/customer-requests/bookings/:id/payment', async (req, res) => {
   try {
     const data = await adminService.updateCustomerRequestBookingPayment(req.params.id, req.body || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/website-template-media', async (_req, res) => {
+  try {
+    const data = await websiteTemplateMediaService.list();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/website-template-media', upload.single('media'), persistUploadedFiles, async (req, res) => {
+  try {
+    const data = await websiteTemplateMediaService.create(req.body || {}, req.file, req.user?._id);
+    res.status(201).json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/website-template-media/:id', async (req, res) => {
+  try {
+    const data = await websiteTemplateMediaService.update(req.params.id, req.body || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.delete('/website-template-media/:id', async (req, res) => {
+  try {
+    const data = await websiteTemplateMediaService.remove(req.params.id);
     res.json({ success: true, data });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });

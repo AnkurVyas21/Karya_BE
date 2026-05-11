@@ -21,6 +21,7 @@ const providerGrowthService = require('./providerGrowthService');
 const websitePaymentService = require('./websitePaymentService');
 const receiptEmailService = require('./receiptEmailService');
 const receiptPdfService = require('./receiptPdfService');
+const websiteTemplateMediaService = require('./websiteTemplateMediaService');
 
 const DEFAULT_BUSINESS_HOURS = [
   { day: 'Monday', isOpen: true, openTime: '09:00', closeTime: '18:00' },
@@ -635,14 +636,30 @@ class ProviderWebsiteService {
 
     const purchased = providerGrowthService.hasActiveWebsite(state);
 
-    const heroImage = Array.isArray(files.heroImage) && files.heroImage[0]?.path ? files.heroImage[0].path : website.heroImage;
-    const aboutImage = Array.isArray(files.aboutImage) && files.aboutImage[0]?.path
+    const hasUploadedHeroImage = Array.isArray(files.heroImage) && files.heroImage[0]?.path;
+    const hasUploadedAboutImage = Array.isArray(files.aboutImage) && files.aboutImage[0]?.path;
+    const hasUploadedLogo = Array.isArray(files.logoImage) && files.logoImage[0]?.path;
+    const heroImage = hasUploadedHeroImage ? files.heroImage[0].path : cleanString(payload.heroImage) || website.heroImage;
+    const aboutImage = hasUploadedAboutImage
       ? files.aboutImage[0].path
       : cleanString(payload.aboutImage) || website.aboutImage;
-    const logo = Array.isArray(files.logoImage) && files.logoImage[0]?.path ? files.logoImage[0].path : website.logo;
+    const logo = hasUploadedLogo ? files.logoImage[0].path : website.logo;
     const uploadedUpiQrCodeImage = Array.isArray(files.upiQrCodeImage) && files.upiQrCodeImage[0]?.path ? files.upiQrCodeImage[0].path : '';
     const uploadedGallery = Array.isArray(files.galleryImages) ? files.galleryImages.map((item) => item.path).filter(Boolean) : [];
     const uploadedVideos = Array.isArray(files.galleryVideos) ? files.galleryVideos.map((item) => item.path).filter(Boolean) : [];
+    const selectedTemplateMedia = { ...(payload.selectedTemplateMedia || {}) };
+    if (hasUploadedHeroImage) {
+      delete selectedTemplateMedia.heroImage;
+      delete selectedTemplateMedia.cover;
+      delete selectedTemplateMedia.header;
+    }
+    if (hasUploadedAboutImage) {
+      delete selectedTemplateMedia.aboutImage;
+      delete selectedTemplateMedia.about;
+    }
+    if (hasUploadedLogo) {
+      delete selectedTemplateMedia.logo;
+    }
 
     const businessHours = this.normalizeBusinessHours(payload.businessHours || website.businessHours);
     const bookingSlots = this.normalizeBookingSlots(payload.bookingSlots || website.bookingSlots);
@@ -678,11 +695,22 @@ class ProviderWebsiteService {
       lng: payload.geo?.lng ?? website.geo?.lng ?? null
     };
     website.businessHours = businessHours;
-    website.heroImage = heroImage || '';
-    website.aboutImage = aboutImage || '';
-    website.logo = logo || '';
-    website.gallery = [...normalizeGallery(payload.gallery), ...uploadedGallery].slice(0, 20);
-    website.videos = [...normalizeVideos(payload.videos), ...uploadedVideos].slice(0, 8);
+    const mediaWithTemplates = await websiteTemplateMediaService.applyTemplates(
+      website,
+      { ...payload, selectedTemplateMedia },
+      {
+        heroImage,
+        aboutImage,
+        logo,
+        gallery: [...normalizeGallery(payload.gallery), ...uploadedGallery].slice(0, 20),
+        videos: [...normalizeVideos(payload.videos), ...uploadedVideos].slice(0, 8)
+      }
+    );
+    website.heroImage = mediaWithTemplates.heroImage || '';
+    website.aboutImage = mediaWithTemplates.aboutImage || '';
+    website.logo = mediaWithTemplates.logo || '';
+    website.gallery = mediaWithTemplates.gallery;
+    website.videos = mediaWithTemplates.videos;
     website.servicesEnabled = cleanBoolean(payload.servicesEnabled, true);
     website.productsEnabled = cleanBoolean(payload.productsEnabled, false);
     website.bookingEnabled = cleanBoolean(payload.bookingEnabled, false);
@@ -710,6 +738,13 @@ class ProviderWebsiteService {
           ? payload.bookingPaymentOption
           : website
     );
+    if (
+      cleanBoolean(payload.bookingEnabled, false)
+      && bookingPaymentOptions.includes('upi_payment')
+      && !cleanString(payload.upiId)
+    ) {
+      throw new Error('Enter your UPI ID when bookings can collect advance UPI payment.');
+    }
     website.bookingPaymentOptions = bookingPaymentOptions;
     website.bookingPaymentOption = resolveBookingPaymentOption(bookingPaymentOptions);
     website.bookingWorkingDays = cleanArray(payload.bookingWorkingDays);
@@ -2128,12 +2163,12 @@ class ProviderWebsiteService {
     checklist.push({ id: 'contact-info', label: 'Contact details completed', completed: hasContactInfo });
     if (hasContactInfo) score += 20;
 
-    const hasEnoughServices = services.filter((item) => item.isActive !== false).length >= 2;
-    checklist.push({ id: 'services', label: 'Added at least 2 services', completed: hasEnoughServices });
+    const hasEnoughServices = services.filter((item) => item.isActive !== false).length >= 1;
+    checklist.push({ id: 'services', label: 'Added at least 1 service', completed: hasEnoughServices });
     if (hasEnoughServices) score += 20;
 
-    const hasGallery = (website.gallery || []).length >= 3;
-    checklist.push({ id: 'gallery', label: 'Uploaded at least 3 gallery photos', completed: hasGallery });
+    const hasGallery = (website.gallery || []).length > 0;
+    checklist.push({ id: 'gallery', label: 'Gallery photos added (optional)', completed: hasGallery, required: false });
     if (hasGallery) score += 10;
 
     const hasHours = (website.businessHours || []).some((item) => item.isOpen && item.openTime && item.closeTime);
@@ -2163,8 +2198,8 @@ class ProviderWebsiteService {
     const suggestions = {
       'business-info': 'Add your about section and category to help customers trust your page.',
       'contact-info': 'Complete your business phone, WhatsApp, or email so customers can reach you.',
-      services: 'Add at least 2 services so customers know what you offer.',
-      gallery: 'Upload 3 photos to improve trust and conversion.',
+      services: 'Add at least 1 service so customers know what you offer.',
+      gallery: 'Add gallery photos when you have them to improve trust and conversion.',
       hours: 'Set your business hours to reduce missed leads.',
       cta: 'Enable call, WhatsApp, or inquiry form to capture leads.',
       slug: 'Set your slug so your business page is easy to share.',
@@ -2175,7 +2210,7 @@ class ProviderWebsiteService {
 
   ensurePublishReady(website, services = []) {
     const completion = this.computeCompletion({ website, services });
-    const missing = completion.checklist.filter((item) => !item.completed);
+    const missing = completion.checklist.filter((item) => item.required !== false && !item.completed);
     if (missing.length === 0) {
       return;
     }
@@ -2334,7 +2369,7 @@ class ProviderWebsiteService {
 
   async buildManagerResponse(userId, websiteDoc, options = {}) {
     const website = websiteDoc.toObject ? websiteDoc.toObject() : websiteDoc;
-    const [themeConfig, seoConfig, services, products, offers, articles, leads, bookings, orders, transactions, profile, user, reviewSummary, leadCount, bookingCount, inquiryCount, callbackCount] = await Promise.all([
+    const [themeConfig, seoConfig, services, products, offers, articles, leads, bookings, orders, transactions, profile, user, reviewSummary, leadCount, bookingCount, inquiryCount, callbackCount, templateMedia] = await Promise.all([
       ProviderThemeConfig.findOne({ providerId: userId }).lean(),
       ProviderSEOConfig.findOne({ providerId: userId }).lean(),
       ProviderServiceModel.find({ providerId: userId }).sort({ sortOrder: 1, createdAt: 1 }).lean(),
@@ -2351,7 +2386,8 @@ class ProviderWebsiteService {
       ProviderLead.countDocuments({ providerId: userId }),
       ProviderBooking.countDocuments({ providerId: userId }),
       ProviderLead.countDocuments({ providerId: userId, source: { $in: ['website', 'inquiry'] } }),
-      ProviderLead.countDocuments({ providerId: userId, source: 'callback' })
+      ProviderLead.countDocuments({ providerId: userId, source: 'callback' }),
+      websiteTemplateMediaService.listForProvider()
     ]);
 
     const completion = options.completion || this.computeCompletion({ website, services });
@@ -2423,6 +2459,7 @@ class ProviderWebsiteService {
       transactions: transactions.map((item) => this.serializeTransaction(item)),
       themeConfig: themeConfig || {},
       seoConfig: seoConfig || {},
+      templateMedia,
       reviewSummary,
       voiceReady: {
         descriptionPromptSeed: [website.businessName, website.category, website.city].filter(Boolean).join(' | '),
