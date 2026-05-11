@@ -205,6 +205,17 @@ class ProfessionalService {
     return professionCatalogService.getAllProfessions();
   }
 
+  async getProfessionCatalogEntries() {
+    const entries = await professionCatalogService.getAllProfessionEntries();
+    return entries.map((entry) => ({
+      name: entry.name || entry.canonicalName || '',
+      canonicalName: entry.canonicalName || entry.name || '',
+      aliases: entry.aliases || [],
+      tags: entry.tags || [],
+      relatedProfessions: entry.relatedProfessions || []
+    })).filter((entry) => entry.name);
+  }
+
   async searchProfessionals(filters, page, limit, viewerId = null) {
     const normalizedFilters = {
       query: String(filters?.query || '').trim(),

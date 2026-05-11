@@ -30,6 +30,7 @@ const {
   createWebsiteProductOrder,
   detectProfession,
   getProfessions,
+  getProfessionCatalogEntries,
   getMyProfile,
   updateProfile,
   getRatings,
@@ -95,6 +96,7 @@ router.post(
   submitVerification
 );
 router.get('/professions', getProfessions);
+router.get('/profession-catalog', getProfessionCatalogEntries);
 router.get('/search', searchProfessionals);
 router.post('/search/ai', aiSearch);
 router.get('/bookmarks', authMiddleware, getBookmarks);
