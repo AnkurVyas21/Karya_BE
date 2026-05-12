@@ -5,6 +5,15 @@ const providerWebsiteService = require('../services/providerWebsiteService');
 const Review = require('../models/Review');
 const Bookmark = require('../models/Bookmark');
 const User = require('../models/User');
+const OTPVerification = require('../models/OTPVerification');
+const authService = require('../services/authService');
+
+const generateOtp = () => process.env.TEST_OTP || (process.env.NODE_ENV === 'production'
+  ? Math.floor(100000 + Math.random() * 900000).toString()
+  : '123456');
+
+const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+const normalizeMobile = (value) => String(value || '').replace(/\D/g, '').slice(0, 10);
 
 const parseBooleanLike = (value) => {
   if (typeof value === 'boolean') {
@@ -367,7 +376,106 @@ const getMyProfile = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Profile not found' });
     }
 
-    res.json({ success: true, data: profile });
+    res.json({
+      success: true,
+      data: {
+        ...profile,
+        email: req.user.email || '',
+        mobile: req.user.mobile || ''
+      }
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const requestContactOtp = async (req, res) => {
+  try {
+    const type = String(req.body.type || '').trim();
+    const identifier = type === 'email' ? normalizeEmail(req.body.value) : normalizeMobile(req.body.value);
+
+    if (!['email', 'mobile'].includes(type)) {
+      throw new Error('Choose email or mobile to update.');
+    }
+    if (type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier)) {
+      throw new Error('Enter a valid email address.');
+    }
+    if (type === 'mobile' && !/^\d{10}$/.test(identifier)) {
+      throw new Error('Enter a valid 10-digit mobile number.');
+    }
+    if (String(req.user[type] || '').trim().toLowerCase() === identifier.toLowerCase()) {
+      throw new Error(`This ${type} is already linked to your account.`);
+    }
+
+    const existing = await User.findOne({ [type]: identifier, _id: { $ne: req.user._id } });
+    if (existing) {
+      throw new Error(`This ${type} is already used by another account.`);
+    }
+
+    const otp = generateOtp();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await OTPVerification.deleteMany({ user: req.user._id, type });
+    await OTPVerification.create({ user: req.user._id, type, identifier, otp, expiresAt });
+
+    if (type === 'email') {
+      await authService.sendEmailWithResend({
+        to: identifier,
+        subject: 'Verify your new Nasdiya email',
+        text: `Your OTP is ${otp}. It will expire in 10 minutes.`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; color: #1f2937;">
+            <h2 style="margin-bottom: 12px;">Verify your new email</h2>
+            <p style="margin-bottom: 16px;">Use this OTP to update your provider account email:</p>
+            <div style="font-size: 32px; font-weight: 700; letter-spacing: 8px; padding: 16px 20px; background: #f3f6fb; border-radius: 12px; display: inline-block;">${otp}</div>
+            <p style="margin-top: 16px;">This OTP will expire in 10 minutes.</p>
+          </div>
+        `
+      });
+    } else {
+      console.log(`SMS OTP to ${identifier}: ${otp}`);
+    }
+
+    res.json({ success: true, message: `OTP sent to your new ${type}.` });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const verifyContactOtp = async (req, res) => {
+  try {
+    const type = String(req.body.type || '').trim();
+    const identifier = type === 'email' ? normalizeEmail(req.body.value) : normalizeMobile(req.body.value);
+    const otp = String(req.body.otp || '').trim();
+
+    if (!['email', 'mobile'].includes(type)) {
+      throw new Error('Choose email or mobile to update.');
+    }
+    if (!/^\d{6}$/.test(otp)) {
+      throw new Error('Enter the 6-digit OTP.');
+    }
+
+    const record = await OTPVerification.findOne({ user: req.user._id, type, identifier, otp });
+    if (!record || record.expiresAt < new Date()) {
+      throw new Error('Invalid or expired OTP.');
+    }
+
+    const existing = await User.findOne({ [type]: identifier, _id: { $ne: req.user._id } });
+    if (existing) {
+      throw new Error(`This ${type} is already used by another account.`);
+    }
+
+    await User.findByIdAndUpdate(req.user._id, { [type]: identifier, isVerified: true }, { runValidators: true });
+    await OTPVerification.deleteOne({ _id: record._id });
+
+    const profile = await professionalService.getProfileByUserId(req.user._id, req.user._id);
+    res.json({
+      success: true,
+      data: {
+        ...profile,
+        [type]: identifier
+      },
+      message: `${type === 'email' ? 'Email address' : 'Mobile number'} updated and verified.`
+    });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -501,6 +609,8 @@ module.exports = {
   getProfessionCatalogEntries,
   getMyProfile,
   updateProfile,
+  requestContactOtp,
+  verifyContactOtp,
   getRatings,
   getBookmarks,
   removeBookmark,
