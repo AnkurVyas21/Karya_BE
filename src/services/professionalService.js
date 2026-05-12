@@ -61,6 +61,8 @@ const SEARCH_QUERY_STOPWORDS = new Set([
   'kya', 'liye', 'me', 'mein', 'mujhe', 'of', 'or', 'please', 'someone', 'there', 'to', 'who',
   'with', 'wala', 'wali', 'want', 'chahiye', 'chahie', 'need', 'looking'
 ]);
+const ALL_INDIA_SERVICE_AREA = 'all over india';
+const ALL_INDIA_SERVICE_AREA_REGEX = /^all over india$/i;
 
 class ProfessionalService {
   async createProfile(userId, profileData) {
@@ -571,6 +573,7 @@ class ProfessionalService {
     }
 
     if (locationConditions.length > 0) {
+      locationConditions.push({ serviceAreas: ALL_INDIA_SERVICE_AREA_REGEX });
       andConditions.push({ $or: locationConditions });
     }
 
@@ -621,6 +624,7 @@ class ProfessionalService {
       tags: normalizeList(profile.tags || []).map((item) => this.normalizeSearchText(item)),
       serviceAreas: normalizeList(profile.serviceAreas || []).map((item) => this.normalizeSearchText(item))
     };
+    const hasAllIndiaCoverage = profileData.serviceAreas.includes(ALL_INDIA_SERVICE_AREA);
 
     const combinedLocation = [
       profileData.location,
@@ -666,9 +670,15 @@ class ProfessionalService {
             ...(filters.professionTerms || []).map((term) => this.matchWeightedText(combinedSearchable, term))
           );
     markSignal('profession', professionScore > 0, professionScore);
-    const genericLocationScore = this.matchWeightedText(combinedLocation, filters.location);
-    const stateScore = this.matchWeightedText(`${profileData.state} ${combinedLocation}`, filters.state);
-    const cityScore = this.matchWeightedText(`${profileData.city} ${combinedLocation}`, filters.city);
+    const genericLocationScore = hasAllIndiaCoverage && String(filters.location || '').trim()
+      ? 45
+      : this.matchWeightedText(combinedLocation, filters.location);
+    const stateScore = hasAllIndiaCoverage && String(filters.state || '').trim()
+      ? 35
+      : this.matchWeightedText(`${profileData.state} ${combinedLocation}`, filters.state);
+    const cityScore = hasAllIndiaCoverage && String(filters.city || '').trim()
+      ? 65
+      : this.matchWeightedText(`${profileData.city} ${combinedLocation}`, filters.city);
     const townScore = this.matchWeightedText(`${profileData.town} ${profileData.area} ${combinedLocation}`, filters.town);
     markSignal('location', genericLocationScore > 0, genericLocationScore);
     markSignal('state', stateScore > 0, stateScore > 0 ? Math.max(stateScore, 25) : 0);

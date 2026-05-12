@@ -13,6 +13,11 @@ const composeLocation = ({ town = '', area = '', city = '', state = '', location
   return computed || toCleanString(location);
 };
 
+const composeServiceCoverage = (serviceAreas = []) => (Array.isArray(serviceAreas) ? serviceAreas : [])
+  .map((value) => toCleanString(value))
+  .filter(Boolean)
+  .join(', ');
+
 const sanitizeUser = (user) => {
   const plain = typeof user?.toObject === 'function' ? user.toObject() : { ...(user || {}) };
   delete plain.password;
@@ -34,7 +39,7 @@ const getProfileCompletionState = (user, professionalProfile = null) => {
     city: professionalProfile?.city || user?.city,
     state: professionalProfile?.state || user?.state,
     location: professionalProfile?.location
-  });
+  }) || composeServiceCoverage(professionalProfile?.serviceAreas);
   const profession = toCleanString(professionalProfile?.profession);
   const missingRequiredFields = [];
 

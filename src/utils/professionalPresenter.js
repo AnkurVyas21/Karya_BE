@@ -136,6 +136,10 @@ const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Se
   const reviewCount = reviewStats.reviewCount || 0;
   const completion = getProfileCompletionState(user, profile);
   const callStatus = buildCallStatus({ profile, mobile: user.mobile });
+  const serviceAreas = profile.serviceAreas || [];
+  const serviceCoverageLocation = Array.isArray(serviceAreas)
+    ? serviceAreas.map((area) => String(area || '').trim()).filter(Boolean).join(', ')
+    : '';
 
   return {
     id: profile._id.toString(),
@@ -150,10 +154,10 @@ const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Se
     skills: profile.skills || [],
     specializations: profile.skills || [],
     tags: profile.tags || [],
-    serviceAreas: profile.serviceAreas || [],
+    serviceAreas,
     experience: profile.experience || 0,
     description: profile.description || '',
-    location: profile.location || '',
+    location: profile.location || serviceCoverageLocation,
     country: profile.country || 'India',
     state: profile.state || '',
     addressLine: profile.addressLine || '',
