@@ -24,13 +24,13 @@ const receiptPdfService = require('./receiptPdfService');
 const websiteTemplateMediaService = require('./websiteTemplateMediaService');
 
 const DEFAULT_BUSINESS_HOURS = [
-  { day: 'Monday', isOpen: true, openTime: '09:00', closeTime: '18:00' },
-  { day: 'Tuesday', isOpen: true, openTime: '09:00', closeTime: '18:00' },
-  { day: 'Wednesday', isOpen: true, openTime: '09:00', closeTime: '18:00' },
-  { day: 'Thursday', isOpen: true, openTime: '09:00', closeTime: '18:00' },
-  { day: 'Friday', isOpen: true, openTime: '09:00', closeTime: '18:00' },
-  { day: 'Saturday', isOpen: true, openTime: '10:00', closeTime: '16:00' },
-  { day: 'Sunday', isOpen: false, openTime: '', closeTime: '' }
+  { day: 'Monday', isOpen: true, openTime: '09:00', closeTime: '21:00' },
+  { day: 'Tuesday', isOpen: true, openTime: '09:00', closeTime: '21:00' },
+  { day: 'Wednesday', isOpen: true, openTime: '09:00', closeTime: '21:00' },
+  { day: 'Thursday', isOpen: true, openTime: '09:00', closeTime: '21:00' },
+  { day: 'Friday', isOpen: true, openTime: '09:00', closeTime: '21:00' },
+  { day: 'Saturday', isOpen: true, openTime: '09:00', closeTime: '21:00' },
+  { day: 'Sunday', isOpen: true, openTime: '09:00', closeTime: '21:00' }
 ];
 
 const DEFAULT_BOOKING_SLOTS = [
@@ -723,7 +723,7 @@ class ProviderWebsiteService {
     website.callEnabled = cleanBoolean(payload.callEnabled, true);
     website.whatsappEnabled = cleanBoolean(payload.whatsappEnabled, true);
     website.showPricing = cleanBoolean(payload.showPricing, true);
-    website.showMap = cleanBoolean(payload.showMap, false);
+    website.showMap = cleanBoolean(payload.showMap, true);
     website.showVerification = cleanBoolean(payload.showVerification, true);
     website.emergencyAvailability = cleanBoolean(payload.emergencyAvailability, false);
     website.requestCallbackMessage = cleanString(payload.requestCallbackMessage);
@@ -1863,6 +1863,7 @@ class ProviderWebsiteService {
         about: cleanString(profile?.description),
         yearsOfExperience: cleanNumber(profile?.experience, 0),
         phone: normalizeIndianPhone(user?.mobile),
+        whatsappNumber: normalizeIndianPhone(user?.mobile),
         email: cleanString(user?.email),
         address: cleanString(profile?.addressLine),
         city: cleanString(profile?.city),
@@ -1875,7 +1876,7 @@ class ProviderWebsiteService {
         videos: [],
         servicesEnabled: true,
         productsEnabled: false,
-        bookingEnabled: false,
+        bookingEnabled: true,
         paymentsEnabled: false,
         bookingConfirmationType: 'provider_approval',
         bookingPaymentOption: 'pay_later',
@@ -1889,6 +1890,7 @@ class ProviderWebsiteService {
         bookingMultipleUnitsEnabled: false,
         bookingMaxUnitsPerCustomer: 1,
         bookingDailyLimit: 0,
+        paymentInstructions: 'Complete the QR code payment and enter the transaction ID which you see on your UPI payment app after payment.',
         bookingFlow: {
           enabled: true,
           paymentModel: 'without-online-payment',
@@ -1913,9 +1915,9 @@ class ProviderWebsiteService {
         callEnabled: true,
         whatsappEnabled: true,
         showPricing: true,
-        showMap: false,
+        showMap: true,
         showVerification: true,
-        bookingWorkingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+        bookingWorkingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
         bookingSlots: DEFAULT_BOOKING_SLOTS
       });
     }
@@ -2155,13 +2157,21 @@ class ProviderWebsiteService {
     let score = 0;
     const checklist = [];
 
-    const hasBusinessInfo = Boolean(website.businessName && website.about && website.category);
-    checklist.push({ id: 'business-info', label: 'Business info added', completed: hasBusinessInfo });
+    const hasBusinessInfo = Boolean(website.businessName && website.category);
+    checklist.push({ id: 'business-info', label: 'Business name and category added', completed: hasBusinessInfo });
     if (hasBusinessInfo) score += 25;
 
-    const hasContactInfo = Boolean(isValidIndianPhone(website.phone) && (website.whatsappNumber || website.email));
+    const hasContactInfo = Boolean(isValidIndianPhone(website.phone) && website.email);
     checklist.push({ id: 'contact-info', label: 'Contact details completed', completed: hasContactInfo });
     if (hasContactInfo) score += 20;
+
+    const hasAddressInfo = Boolean(website.address && website.city && website.state && website.pincode);
+    checklist.push({ id: 'address-info', label: 'Address, city, state, and pincode added', completed: hasAddressInfo });
+    if (hasAddressInfo) score += 10;
+
+    const hasServiceAreas = Array.isArray(website.serviceAreas) && website.serviceAreas.length > 0;
+    checklist.push({ id: 'service-areas', label: 'Service areas selected', completed: hasServiceAreas });
+    if (hasServiceAreas) score += 10;
 
     const hasEnoughServices = services.filter((item) => item.isActive !== false).length >= 1;
     checklist.push({ id: 'services', label: 'Added at least 1 service', completed: hasEnoughServices });
@@ -2184,7 +2194,7 @@ class ProviderWebsiteService {
     if (hasSlug) score += 10;
 
     const hasHeroImage = Boolean(website.heroImage);
-    checklist.push({ id: 'hero-image', label: 'Hero image uploaded', completed: hasHeroImage });
+    checklist.push({ id: 'hero-image', label: 'Hero image uploaded (optional)', completed: hasHeroImage, required: false });
     if (hasHeroImage) score += 5;
 
     return {
@@ -2196,14 +2206,16 @@ class ProviderWebsiteService {
 
   toSuggestion(id) {
     const suggestions = {
-      'business-info': 'Add your about section and category to help customers trust your page.',
-      'contact-info': 'Complete your business phone, WhatsApp, or email so customers can reach you.',
+      'business-info': 'Add your business name and category to help customers understand your work.',
+      'contact-info': 'Complete your business phone and email so customers can reach you.',
+      'address-info': 'Add address, city, state, and pincode so customers know your location.',
+      'service-areas': 'Select service areas or All over India so customers know where you work.',
       services: 'Add at least 1 service so customers know what you offer.',
       gallery: 'Add gallery photos when you have them to improve trust and conversion.',
       hours: 'Set your business hours to reduce missed leads.',
       cta: 'Enable call, WhatsApp, or inquiry form to capture leads.',
       slug: 'Set your slug so your business page is easy to share.',
-      'hero-image': 'Upload a hero image so your page looks complete and trustworthy.'
+      'hero-image': 'Upload a hero image when you want the page to look more complete.'
     };
     return suggestions[id] || 'Complete more setup details to improve your business page.';
   }
