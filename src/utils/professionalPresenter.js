@@ -143,6 +143,7 @@ const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Se
     firstName: user.firstName || '',
     lastName: user.lastName || '',
     fullName: [user.firstName, user.lastName].filter(Boolean).join(' ').trim(),
+    gender: user.gender || '',
     email: profile.allowContactDisplay ? toVisibleEmail(user.email) || null : null,
     mobile: profile.allowContactDisplay ? toVisibleMobile(user.mobile) || null : null,
     profession: profile.profession || '',

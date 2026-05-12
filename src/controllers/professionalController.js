@@ -14,6 +14,11 @@ const parseBooleanLike = (value) => {
   return ['true', '1', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 };
 
+const normalizeGender = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['male', 'female', 'other', 'prefer_not_to_say'].includes(normalized) ? normalized : '';
+};
+
 const createProfile = async (req, res) => {
   try {
     const profileData = {
@@ -24,6 +29,10 @@ const createProfile = async (req, res) => {
     if ('showContactNumber' in profileData) {
       profileData.allowContactDisplay = parseBooleanLike(profileData.showContactNumber);
       delete profileData.showContactNumber;
+    }
+    if ('gender' in profileData) {
+      await User.findByIdAndUpdate(req.user._id, { gender: normalizeGender(profileData.gender) }, { runValidators: true });
+      delete profileData.gender;
     }
     const profile = await professionalService.upsertProfile(req.user._id, profileData);
     res.status(201).json({ success: true, data: profile });
@@ -378,6 +387,11 @@ const updateProfile = async (req, res) => {
     if ('lastName' in payload) {
       userUpdates.lastName = payload.lastName;
       delete payload.lastName;
+    }
+
+    if ('gender' in payload) {
+      userUpdates.gender = normalizeGender(payload.gender);
+      delete payload.gender;
     }
 
     if ('baseCharge' in payload || 'visitingCharge' in payload || 'nightCharge' in payload || 'emergencyCharge' in payload) {

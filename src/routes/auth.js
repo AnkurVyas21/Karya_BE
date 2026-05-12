@@ -33,6 +33,7 @@ const signupSchema = Joi.object({
   lastName: Joi.string().allow('').optional(),
   email: Joi.string().email().required(),
   mobile: Joi.string().required(),
+  gender: Joi.string().valid('', 'male', 'female', 'other', 'prefer_not_to_say').allow('').optional(),
   password: Joi.string().min(6).required(),
   role: Joi.string().valid('user', 'professional').default('user'),
   profession: Joi.string().allow('').optional(),
@@ -94,6 +95,7 @@ const updateCurrentUserSchema = Joi.object({
   email: Joi.string().email().allow('').optional(),
   mobile: Joi.string().allow('').optional(),
   password: Joi.string().min(6).allow('').optional(),
+  gender: Joi.string().valid('', 'male', 'female', 'other', 'prefer_not_to_say').allow('').optional(),
   profession: Joi.string().allow('').optional(),
   professionAliases: Joi.alternatives().try(
     Joi.array().items(Joi.string()),

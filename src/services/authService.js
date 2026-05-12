@@ -19,6 +19,7 @@ class AuthService {
       lastName,
       email,
       mobile,
+      gender = '',
       password,
       role = 'user',
       profession = '',
@@ -72,6 +73,7 @@ class AuthService {
       lastName: '',
       email: normalizedEmail,
       mobile: normalizedMobile,
+      gender: this.normalizeGender(gender),
       password: hashedPassword,
       socialAccounts: normalizedSocialAccount?.provider && normalizedSocialAccount?.providerId
         ? [normalizedSocialAccount]
@@ -294,6 +296,10 @@ class AuthService {
 
     if ('mobile' in payload) {
       userUpdates.mobile = nextMobile;
+    }
+
+    if ('gender' in payload) {
+      userUpdates.gender = this.normalizeGender(payload.gender);
     }
 
     ['country', 'state', 'city', 'town', 'area', 'addressLine', 'pincode'].forEach((field) => {
@@ -562,6 +568,11 @@ class AuthService {
   normalizeMobile(value) {
     const digits = String(value || '').replace(/[^\d]/g, '');
     return digits || null;
+  }
+
+  normalizeGender(value) {
+    const normalized = toCleanString(value).toLowerCase();
+    return ['male', 'female', 'other', 'prefer_not_to_say'].includes(normalized) ? normalized : '';
   }
 
   extractNameParts(displayName = '') {
