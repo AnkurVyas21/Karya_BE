@@ -1,9 +1,11 @@
 const mongoose = require('mongoose');
 
 const advertisementSchema = new mongoose.Schema({
+  campaignType: { type: String, enum: ['location', 'category'], default: 'location' },
   level: { type: String, enum: ['city', 'state', 'national'], required: true },
   city: { type: String, default: '' },
   state: { type: String, default: '' },
+  categories: [{ type: String }],
   planId: { type: String, required: true },
   planName: { type: String, required: true },
   amount: { type: Number, default: 0 },

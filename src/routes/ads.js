@@ -28,7 +28,8 @@ const toBoolean = (value, fallback = false) => {
 const activeAdsSchema = Joi.object({
   city: Joi.string().trim().allow('').max(80).optional(),
   state: Joi.string().trim().allow('').max(80).optional(),
-  placement: Joi.string().trim().valid('home', 'messages').optional(),
+  profession: Joi.string().trim().allow('').max(80).optional(),
+  placement: Joi.string().trim().valid('home', 'messages', 'search', 'category', 'internal').optional(),
   globalOnly: Joi.boolean().truthy('true').truthy('1').falsy('false').falsy('0').optional(),
   localOnly: Joi.boolean().truthy('true').truthy('1').falsy('false').falsy('0').optional(),
   debug: Joi.boolean().truthy('true').truthy('1').falsy('false').falsy('0').optional(),
@@ -48,6 +49,10 @@ const createCreativeSchema = Joi.object({
   level: Joi.string().trim().valid('city', 'state', 'national').required(),
   city: Joi.string().trim().allow('').max(80).optional(),
   state: Joi.string().trim().allow('').max(80).optional(),
+  categories: Joi.alternatives().try(
+    Joi.array().items(Joi.string().trim().max(80)).max(15),
+    Joi.string().trim().allow('').max(1400)
+  ).optional(),
   imageWidth: Joi.number().integer().min(0).max(8000).optional(),
   imageHeight: Joi.number().integer().min(0).max(8000).optional()
 });
@@ -57,6 +62,7 @@ router.get('/active', validationMiddleware(activeAdsSchema, 'query'), async (req
     const data = await advertisementCreativeService.getActiveCreatives({
       city: req.query.city,
       state: req.query.state,
+      profession: req.query.profession,
       placement: req.query.placement,
       globalOnly: toBoolean(req.query.globalOnly, false),
       localOnly: toBoolean(req.query.localOnly, false),
@@ -108,6 +114,7 @@ router.post(
         level: req.body.level,
         city: req.body.city,
         state: req.body.state,
+        categories: req.body.categories,
         imagePath: file.path,
         imageWidth: req.body.imageWidth,
         imageHeight: req.body.imageHeight

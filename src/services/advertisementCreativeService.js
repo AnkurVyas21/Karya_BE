@@ -7,6 +7,22 @@ const cleanString = (value) => String(value || '').trim();
 
 const normalizeCity = (value) => cleanString(value).replace(/\s+/g, ' ');
 const normalizeState = (value) => cleanString(value).replace(/\s+/g, ' ');
+const normalizeCategory = (value) => cleanString(value).replace(/\s+/g, ' ').slice(0, 80);
+const normalizeCategoryKey = (value) => normalizeCategory(value).toLowerCase();
+const normalizeCategories = (values = []) => {
+  const raw = Array.isArray(values) ? values : String(values || '').split(',');
+  const seen = new Set();
+  const result = [];
+  for (const value of raw) {
+    const normalized = normalizeCategory(value);
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+    if (result.length >= 15) break;
+  }
+  return result;
+};
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const getAdRunStart = (ad = {}) => ad?.startsAt || ad?.createdAt || null;
 
@@ -47,6 +63,23 @@ class AdvertisementCreativeService {
     return 0;
   }
 
+  getCategoryPriority(item, profession = '') {
+    const selected = new Set((Array.isArray(item?.categories) ? item.categories : []).map(normalizeCategoryKey).filter(Boolean));
+    const key = normalizeCategoryKey(profession);
+    if (!key || selected.size === 0 || cleanString(item?.campaignType).toLowerCase() !== 'category') {
+      return 0;
+    }
+    if (selected.has(key)) {
+      return 420;
+    }
+    for (const category of selected) {
+      if (category.includes(key) || key.includes(category)) {
+        return 380;
+      }
+    }
+    return 0;
+  }
+
   buildActiveCreativeDebugRow(item, context = {}) {
     const pack = context.pack || null;
     const normalizedPlacement = cleanString(context.placement).toLowerCase() || 'home';
@@ -75,9 +108,11 @@ class AdvertisementCreativeService {
     return {
       creativeId: item._id?.toString?.() || String(item._id || ''),
       advertisementId: String(item.advertisementId || ''),
+      campaignType: String(item.campaignType || 'location'),
       level: String(item.level || ''),
       city: item.city || '',
       state: item.state || '',
+      categories: Array.isArray(item.categories) ? item.categories : [],
       status: item.status || '',
       matchedByQuery: true,
       campaignFound: Boolean(pack),
@@ -102,7 +137,7 @@ class AdvertisementCreativeService {
     return message ? { message, createdAt: last?.createdAt || null } : null;
   }
 
-  async createOrReplaceCreative({ userId, advertisementId, level, city = '', state = '', imagePath, imageWidth = 0, imageHeight = 0 }) {
+  async createOrReplaceCreative({ userId, advertisementId, level, city = '', state = '', categories = [], imagePath, imageWidth = 0, imageHeight = 0 }) {
     const stateDoc = await ProviderGrowth.findOne({ user: userId });
     if (!stateDoc) {
       throw new Error('Advertisement pack not found');
@@ -123,6 +158,8 @@ class AdvertisementCreativeService {
 
     const normalizedCity = normalizeCity(city);
     const normalizedState = normalizeState(state);
+    const campaignType = cleanString(pack.campaignType).toLowerCase() === 'category' ? 'category' : 'location';
+    const normalizedCategories = normalizeCategories((Array.isArray(categories) && categories.length > 0) ? categories : pack.categories);
 
     if (level === 'city' && !normalizedCity) {
       throw new Error('City is required for city-level advertisements');
@@ -130,6 +167,10 @@ class AdvertisementCreativeService {
 
     if (level === 'state' && !normalizedState) {
       throw new Error('State is required for state-level advertisements');
+    }
+
+    if (campaignType === 'category' && normalizedCategories.length === 0) {
+      throw new Error('Select at least one category or profession for this category-based advertisement');
     }
 
     if (!imagePath) {
@@ -148,9 +189,11 @@ class AdvertisementCreativeService {
       user: userId,
       professionalProfile: profile?._id || null,
       advertisementId: String(advertisementId),
+      campaignType,
       level,
       city: normalizedCity,
       state: normalizedState,
+      categories: campaignType === 'category' ? normalizedCategories : [],
       imagePath: cleanString(imagePath),
       imageWidth: Number(imageWidth || 0),
       imageHeight: Number(imageHeight || 0),
@@ -192,7 +235,9 @@ class AdvertisementCreativeService {
         }
         map.set(key, {
           id: key,
+          campaignType: pack.campaignType || 'location',
           level: pack.level,
+          categories: Array.isArray(pack.categories) ? pack.categories : [],
           planId: pack.planId,
           planName: pack.planName,
           amount: Number(pack.amount || 0),
@@ -241,9 +286,11 @@ class AdvertisementCreativeService {
     return items.map((item) => ({
       id: item._id.toString(),
       advertisementId: item.advertisementId,
+      campaignType: item.campaignType || 'location',
       level: item.level,
       city: item.city || '',
       state: item.state || '',
+      categories: Array.isArray(item.categories) ? item.categories : [],
       status: item.status,
       rejectionReason: item.rejectionReason || '',
       approvedAt: item.approvedAt || null,
@@ -285,9 +332,11 @@ class AdvertisementCreativeService {
     return {
       id: creative._id.toString(),
       advertisementId: creative.advertisementId,
+      campaignType: creative.campaignType || 'location',
       level: creative.level,
       city: creative.city || '',
       state: creative.state || '',
+      categories: Array.isArray(creative.categories) ? creative.categories : [],
       status: creative.status,
       rejectionReason: creative.rejectionReason || '',
       approvedAt: creative.approvedAt || null,
@@ -489,9 +538,10 @@ class AdvertisementCreativeService {
     return campaignMap.get(String(advertisementId)) || null;
   }
 
-  async getActiveCreatives({ city = '', state = '', placement = 'home', globalOnly = false, localOnly = false, debug = false, limit = 5 } = {}) {
+  async getActiveCreatives({ city = '', state = '', profession = '', placement = 'home', globalOnly = false, localOnly = false, debug = false, limit = 5 } = {}) {
     const normalizedCity = normalizeCity(city);
     const normalizedState = normalizeState(state);
+    const normalizedProfession = normalizeCategory(profession);
     const shouldShowGlobalOnly = Boolean(globalOnly);
     const shouldShowLocalOnly = Boolean(localOnly) && !shouldShowGlobalOnly;
     const now = new Date();
@@ -499,13 +549,26 @@ class AdvertisementCreativeService {
     const match = { status: 'approved' };
     if (shouldShowGlobalOnly) {
       match.level = 'national';
+      match.campaignType = { $ne: 'category' };
     } else {
-      const locationClauses = shouldShowLocalOnly ? [] : [{ level: 'national' }];
+      const locationClauses = shouldShowLocalOnly ? [] : [{ level: 'national', campaignType: { $ne: 'category' } }];
       if (normalizedCity) {
-        locationClauses.push({ level: 'city', city: { $regex: `^${escapeRegex(normalizedCity)}$`, $options: 'i' } });
+        locationClauses.push({ level: 'city', campaignType: { $ne: 'category' }, city: { $regex: `^${escapeRegex(normalizedCity)}$`, $options: 'i' } });
       }
       if (normalizedState) {
-        locationClauses.push({ level: 'state', state: { $regex: `^${escapeRegex(normalizedState)}$`, $options: 'i' } });
+        locationClauses.push({ level: 'state', campaignType: { $ne: 'category' }, state: { $regex: `^${escapeRegex(normalizedState)}$`, $options: 'i' } });
+      }
+      if (normalizedProfession && ['search', 'category'].includes(cleanString(placement).toLowerCase())) {
+        const categoryMatch = { $regex: `^${escapeRegex(normalizedProfession)}$`, $options: 'i' };
+        if (!shouldShowLocalOnly) {
+          locationClauses.push({ level: 'national', campaignType: 'category', categories: categoryMatch });
+        }
+        if (normalizedCity) {
+          locationClauses.push({ level: 'city', campaignType: 'category', city: { $regex: `^${escapeRegex(normalizedCity)}$`, $options: 'i' }, categories: categoryMatch });
+        }
+        if (normalizedState) {
+          locationClauses.push({ level: 'state', campaignType: 'category', state: { $regex: `^${escapeRegex(normalizedState)}$`, $options: 'i' }, categories: categoryMatch });
+        }
       }
       if (locationClauses.length === 0) {
         return shouldDebug ? {
@@ -586,7 +649,7 @@ class AdvertisementCreativeService {
           placement: cleanString(placement).toLowerCase() || 'home',
           globalOnly: shouldShowGlobalOnly,
           localOnly: shouldShowLocalOnly
-        })
+        }) + this.getCategoryPriority(item, normalizedProfession)
       }));
 
     const filtered = prioritized
@@ -647,9 +710,11 @@ class AdvertisementCreativeService {
       return {
         id: item._id.toString(),
         advertisementId: item.advertisementId,
+        campaignType: item.campaignType || 'location',
         level: item.level,
         city: item.city || '',
         state: item.state || '',
+        categories: Array.isArray(item.categories) ? item.categories : [],
         imagePath: item.imagePath,
         imageWidth: Number(item.imageWidth || 0),
         imageHeight: Number(item.imageHeight || 0),
@@ -746,9 +811,11 @@ class AdvertisementCreativeService {
     for (const row of rows) {
       map.set(String(row.advertisementId), {
         id: row._id.toString(),
+        campaignType: row.campaignType || 'location',
         level: row.level,
         city: row.city || '',
         state: row.state || '',
+        categories: Array.isArray(row.categories) ? row.categories : [],
         status: row.status,
         views: Number(row.views || 0),
         clicks: Number(row.clicks || 0),

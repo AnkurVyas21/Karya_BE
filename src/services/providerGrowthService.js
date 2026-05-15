@@ -69,8 +69,9 @@ const VERIFICATION_PLAN = {
 const ADVERTISEMENT_PLANS = [
   {
     id: 'ads-50k',
-    name: 'Stadium Reach',
+    name: 'Basic Ad',
     price: 299,
+    categoryPrice: 499,
     impressions: 50000,
     durationDays: 30,
     comparison: 'About the size of a full cricket stadium crowd.',
@@ -83,8 +84,9 @@ const ADVERTISEMENT_PLANS = [
   },
   {
     id: 'ads-100k',
-    name: 'Office Reach',
-    price: 499,
+    name: 'Growth Ad',
+    price: 599,
+    categoryPrice: 799,
     impressions: 100000,
     durationDays: 30,
     comparison: 'Comparable to reaching people across about 1,000 mid-sized offices of 100 employees each.',
@@ -97,8 +99,9 @@ const ADVERTISEMENT_PLANS = [
   },
   {
     id: 'ads-250k',
-    name: 'Town Reach',
+    name: 'Premium Ad',
     price: 999,
+    categoryPrice: 1299,
     impressions: 250000,
     durationDays: 30,
     comparison: 'Comparable to the population reach of a small city or town.',
@@ -116,6 +119,20 @@ const ADVERTISEMENT_LEVELS = [
   { id: 'state', label: 'State' },
   { id: 'national', label: 'Global' }
 ];
+const ADVERTISEMENT_CAMPAIGN_TYPES = [
+  {
+    id: 'location',
+    label: 'Location-based advertisement',
+    note: 'Shown across eligible Nasdiya ad placements including homepage and relevant internal pages, depending on availability, targeting, and active campaign load.'
+  },
+  {
+    id: 'category',
+    label: 'Category / Profession-based advertisement',
+    note: 'Shown on selected profession and related service search pages for higher-intent visibility.',
+    maxCategories: 15
+  }
+];
+const MAX_AD_CATEGORIES = 15;
 
 const addDays = (date, days) => new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 const getAdRunStart = (ad = {}) => ad?.startsAt || ad?.createdAt || null;
@@ -123,6 +140,25 @@ const getAdRunStart = (ad = {}) => ad?.startsAt || ad?.createdAt || null;
 const cleanString = (value) => String(value || '').trim();
 const normalizeCity = (value) => cleanString(value).replace(/\s+/g, ' ');
 const normalizeState = (value) => cleanString(value).replace(/\s+/g, ' ');
+const normalizeCategory = (value) => cleanString(value).replace(/\s+/g, ' ').slice(0, 80);
+const normalizeCategories = (values = []) => {
+  const raw = Array.isArray(values) ? values : String(values || '').split(',');
+  const seen = new Set();
+  const result = [];
+  for (const value of raw) {
+    const normalized = normalizeCategory(value);
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(normalized);
+    if (result.length >= MAX_AD_CATEGORIES) {
+      break;
+    }
+  }
+  return result;
+};
 const pickWebsiteAudio = (website = {}) => cleanString(website.backgroundAudioFile) || cleanString(website.backgroundAudioUrl);
 
 const slugify = (value = '') => cleanString(value)
@@ -253,9 +289,11 @@ class ProviderGrowthService {
 
     const toAdvertisementRow = (item) => ({
       id: item._id.toString(),
+      campaignType: item.campaignType || 'location',
       level: item.level,
       city: cleanString(item.city),
       state: cleanString(item.state),
+      categories: Array.isArray(item.categories) ? item.categories : [],
       planId: item.planId,
       planName: item.planName,
       amount: item.amount,
@@ -327,6 +365,7 @@ class ProviderGrowthService {
         videoCount: Array.isArray(state.website?.galleryVideos) ? state.website.galleryVideos.length : 0
       },
       advertisements: {
+        campaignTypes: ADVERTISEMENT_CAMPAIGN_TYPES,
         levels: ADVERTISEMENT_LEVELS,
         plans: ADVERTISEMENT_PLANS,
         activeCount: runningAds.length,
@@ -446,15 +485,21 @@ class ProviderGrowthService {
     if (feature === 'advertisement') {
       const level = cleanString(payload.level).toLowerCase();
       const planId = cleanString(payload.planId).toLowerCase();
+      const campaignType = cleanString(payload.campaignType).toLowerCase() === 'category' ? 'category' : 'location';
       const scheduleMode = cleanString(payload.scheduleMode).toLowerCase();
       const extendFromAdId = cleanString(payload.extendFromAdId);
       const city = normalizeCity(payload.city);
       const stateName = normalizeState(payload.state);
+      const categories = normalizeCategories(payload.categories);
       const plan = ADVERTISEMENT_PLANS.find((item) => item.id === planId);
       const validLevel = ADVERTISEMENT_LEVELS.find((item) => item.id === level);
+      const amount = campaignType === 'category' ? Number(plan?.categoryPrice || plan?.price || 0) : Number(plan?.price || 0);
 
       if (!plan || !validLevel) {
         throw new Error('Invalid advertisement level or plan');
+      }
+      if (campaignType === 'category' && categories.length === 0) {
+        throw new Error('Select at least one category or profession for category-based advertisements');
       }
       if (level === 'city' && !city) {
         throw new Error('City is required for city-level advertisements');
@@ -478,12 +523,14 @@ class ProviderGrowthService {
       }
 
       state.advertisements.push({
+        campaignType,
         level,
         city: level === 'city' ? city : '',
         state: level === 'city' || level === 'state' ? stateName : '',
+        categories: campaignType === 'category' ? categories : [],
         planId: plan.id,
-        planName: `${validLevel.label} - ${plan.name}`,
-        amount: plan.price,
+        planName: `${validLevel.label} - ${campaignType === 'category' ? plan.name.replace('Ad', 'Category Ad') : plan.name}`,
+        amount,
         impressionsTotal: plan.impressions,
         impressionsUsed: 0,
         status,
@@ -507,6 +554,8 @@ class ProviderGrowthService {
                 level,
                 city: level === 'city' ? city : '',
                 state: level === 'city' || level === 'state' ? stateName : '',
+                campaignType,
+                categories: campaignType === 'category' ? categories : [],
                 imagePath: sourceCreative.imagePath,
                 imageWidth: Number(sourceCreative.imageWidth || 0),
                 imageHeight: Number(sourceCreative.imageHeight || 0),
@@ -523,7 +572,7 @@ class ProviderGrowthService {
           );
         }
       }
-      logger.info(`Advertisement activated for provider ${userId} with ${plan.id} / ${level} / ${status}`);
+      logger.info(`Advertisement activated for provider ${userId} with ${plan.id} / ${level} / ${campaignType} / ${status}`);
       const dashboard = await this.getDashboard(userId);
       return {
         ...dashboard,
@@ -747,7 +796,9 @@ class ProviderGrowthService {
       },
       activeAdvertisements: activeAds.map((item) => ({
         id: item._id.toString(),
+        campaignType: item.campaignType || 'location',
         level: item.level,
+        categories: Array.isArray(item.categories) ? item.categories : [],
         planName: item.planName,
         impressionsTotal: item.impressionsTotal,
         impressionsUsed: item.impressionsUsed,
