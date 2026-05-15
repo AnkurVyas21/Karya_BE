@@ -360,10 +360,35 @@ const getProfessions = async (_req, res) => {
   }
 };
 
-const getProfessionCatalogEntries = async (_req, res) => {
+const getProfessionCatalogEntries = async (req, res) => {
   try {
+    const search = String(req.query.search || req.query.q || '').trim().toLowerCase();
+    const skip = Math.max(0, Number(req.query.skip || 0));
+    const limit = Math.max(0, Math.min(Number(req.query.limit || 0), 100));
     const professions = await professionalService.getProfessionCatalogEntries();
-    res.json({ success: true, data: professions });
+    const filtered = search
+      ? professions.filter((entry) => {
+          const values = [
+            entry.name,
+            entry.canonicalName,
+            ...(entry.aliases || []),
+            ...(entry.tags || []),
+            ...(entry.relatedProfessions || [])
+          ].map((value) => String(value || '').toLowerCase());
+          return values.some((value) => value.includes(search));
+        })
+      : professions;
+    const data = limit > 0 ? filtered.slice(skip, skip + limit) : filtered;
+    res.json({
+      success: true,
+      data,
+      meta: {
+        total: filtered.length,
+        skip,
+        limit: limit || filtered.length,
+        hasMore: limit > 0 ? skip + limit < filtered.length : false
+      }
+    });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
