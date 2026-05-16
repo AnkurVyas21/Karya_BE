@@ -25,8 +25,48 @@ const normalizeCategories = (values = []) => {
 };
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const getAdRunStart = (ad = {}) => ad?.startsAt || ad?.createdAt || null;
+const ACTIVE_ADS_CACHE_TTL_MS = Math.max(Number(process.env.ACTIVE_ADS_CACHE_TTL_MS || 20 * 1000) || (20 * 1000), 1000);
 
 class AdvertisementCreativeService {
+  constructor() {
+    this.activeCreativesCache = new Map();
+  }
+
+  getActiveCreativesCacheKey(options = {}) {
+    return JSON.stringify({
+      city: normalizeCity(options.city).toLowerCase(),
+      state: normalizeState(options.state).toLowerCase(),
+      profession: normalizeCategory(options.profession).toLowerCase(),
+      placement: cleanString(options.placement).toLowerCase() || 'home',
+      globalOnly: Boolean(options.globalOnly),
+      localOnly: Boolean(options.localOnly),
+      limit: Math.max(1, Math.min(Number(options.limit || 5), 8))
+    });
+  }
+
+  readActiveCreativesCache(key) {
+    const entry = this.activeCreativesCache.get(key);
+    if (!entry || entry.expiresAt <= Date.now()) {
+      this.activeCreativesCache.delete(key);
+      return null;
+    }
+    return entry.value;
+  }
+
+  writeActiveCreativesCache(key, value) {
+    if (!key) {
+      return;
+    }
+    this.activeCreativesCache.set(key, {
+      value,
+      expiresAt: Date.now() + ACTIVE_ADS_CACHE_TTL_MS
+    });
+  }
+
+  invalidateActiveCreativesCache() {
+    this.activeCreativesCache.clear();
+  }
+
   cleanAdminMessage(value = '') {
     return cleanString(value).slice(0, 1200);
   }
@@ -211,6 +251,7 @@ class AdvertisementCreativeService {
       : await AdvertisementCreative.create(payload);
 
     logger.info(`Ad creative submitted: ${creative._id} for user ${userId}`);
+    this.invalidateActiveCreativesCache();
     return creative.toObject();
   }
 
@@ -404,6 +445,7 @@ class AdvertisementCreativeService {
     }
 
     await growth.save();
+    this.invalidateActiveCreativesCache();
 
     const campaignMap = await this.getCampaignMapForAdvertisementIds([creative.advertisementId]);
     return campaignMap.get(String(creative.advertisementId)) || null;
@@ -460,6 +502,7 @@ class AdvertisementCreativeService {
 
     await creative.save();
     logger.info(`Ad creative ${creativeId} status changed to ${nextStatus}`);
+    this.invalidateActiveCreativesCache();
     return creative.toObject();
   }
 
@@ -534,6 +577,7 @@ class AdvertisementCreativeService {
     );
 
     logger.info(`Advertisement ${advertisementId} deleted by ${actorRole} for user ${userId}`);
+    this.invalidateActiveCreativesCache();
     const campaignMap = await this.getCampaignMapForAdvertisementIds([String(advertisementId)]);
     return campaignMap.get(String(advertisementId)) || null;
   }
@@ -546,6 +590,20 @@ class AdvertisementCreativeService {
     const shouldShowLocalOnly = Boolean(localOnly) && !shouldShowGlobalOnly;
     const now = new Date();
     const shouldDebug = Boolean(debug);
+    const cacheKey = shouldDebug ? '' : this.getActiveCreativesCacheKey({
+      city: normalizedCity,
+      state: normalizedState,
+      profession: normalizedProfession,
+      placement,
+      globalOnly: shouldShowGlobalOnly,
+      localOnly: shouldShowLocalOnly,
+      limit
+    });
+    const cached = cacheKey ? this.readActiveCreativesCache(cacheKey) : null;
+    if (cached) {
+      return cached;
+    }
+
     const match = { status: 'approved' };
     if (shouldShowGlobalOnly) {
       match.level = 'national';
@@ -752,6 +810,7 @@ class AdvertisementCreativeService {
       };
     }
 
+    this.writeActiveCreativesCache(cacheKey, items);
     return items;
   }
 
@@ -791,6 +850,7 @@ class AdvertisementCreativeService {
     creative.views = Number(creative.views || 0) + 1;
 
     await Promise.all([growth.save(), creative.save()]);
+    this.invalidateActiveCreativesCache();
     return { ok: true };
   }
 

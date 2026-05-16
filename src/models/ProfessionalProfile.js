@@ -34,6 +34,23 @@ const professionalProfileSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+professionalProfileSchema.index({ user: 1 });
+professionalProfileSchema.index({ city: 1, state: 1, profession: 1, createdAt: -1 });
+professionalProfileSchema.index({ profession: 1, createdAt: -1 });
+professionalProfileSchema.index({ state: 1, city: 1 });
+professionalProfileSchema.index({
+  profession: 'text',
+  skills: 'text',
+  tags: 'text',
+  description: 'text',
+  location: 'text',
+  state: 'text',
+  city: 'text',
+  serviceAreas: 'text'
+}, {
+  name: 'professional_profile_search_text'
+});
+
 professionalProfileSchema.plugin(mongoosePaginate);
 
 module.exports = mongoose.model('ProfessionalProfile', professionalProfileSchema);
