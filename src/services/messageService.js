@@ -11,23 +11,25 @@ class MessageService {
       return null;
     }
 
-    let conversation = await Conversation.findOne({
-      customer: userId,
-      professional: userId,
-      professionalProfile: profile._id
-    });
-
-    if (!conversation) {
-      conversation = await Conversation.create({
+    const conversation = await Conversation.findOneAndUpdate(
+      {
         customer: userId,
         professional: userId,
-        professionalProfile: profile._id,
-        lastMessage: '',
-        lastMessageAt: new Date(),
-        customerUnreadCount: 0,
-        professionalUnreadCount: 0
-      });
-    }
+        professionalProfile: profile._id
+      },
+      {
+        $setOnInsert: {
+          customer: userId,
+          professional: userId,
+          professionalProfile: profile._id,
+          lastMessage: '',
+          lastMessageAt: new Date(),
+          customerUnreadCount: 0,
+          professionalUnreadCount: 0
+        }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
 
     this.restoreConversationForUser(conversation, userId);
     conversation.customerUnreadCount = 0;
