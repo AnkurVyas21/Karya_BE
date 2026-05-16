@@ -5,6 +5,37 @@ const messageRealtimeService = require('./messageRealtimeService');
 const { buildProfessionalSummary } = require('../utils/professionalPresenter');
 
 class MessageService {
+  async createOrGetSelfConversation(userId) {
+    const profile = await ProfessionalProfile.findOne({ user: userId }).populate('user');
+    if (!profile || !profile.user) {
+      return null;
+    }
+
+    let conversation = await Conversation.findOne({
+      customer: userId,
+      professional: userId,
+      professionalProfile: profile._id
+    });
+
+    if (!conversation) {
+      conversation = await Conversation.create({
+        customer: userId,
+        professional: userId,
+        professionalProfile: profile._id,
+        lastMessage: '',
+        lastMessageAt: new Date(),
+        customerUnreadCount: 0,
+        professionalUnreadCount: 0
+      });
+    }
+
+    this.restoreConversationForUser(conversation, userId);
+    conversation.customerUnreadCount = 0;
+    conversation.professionalUnreadCount = 0;
+    await conversation.save();
+    return conversation;
+  }
+
   async createOrGetConversation({ customerId, professionalProfileId, initialMessage = '' }) {
     const profile = await ProfessionalProfile.findById(professionalProfileId).populate('user');
     if (!profile || !profile.user) {
@@ -53,6 +84,7 @@ class MessageService {
     const senderKey = senderId.toString();
     const customerId = this.toIdString(conversation.customer);
     const professionalId = this.toIdString(conversation.professional);
+    const isSelfConversation = customerId === professionalId;
     const isParticipant = customerId === senderKey || professionalId === senderKey;
 
     if (!isParticipant) {
@@ -67,7 +99,8 @@ class MessageService {
 
     const replyTarget = await this.resolveReplyTarget(conversation._id, replyToId);
     const recipientId = customerId === senderKey ? professionalId : customerId;
-    const deliveredAt = messageRealtimeService.hasConnections(recipientId) ? new Date() : null;
+    const deliveredAt = isSelfConversation || messageRealtimeService.hasConnections(recipientId) ? new Date() : null;
+    const readAt = isSelfConversation ? new Date() : null;
     this.restoreConversationForUser(conversation, senderId);
     this.restoreConversationForUser(conversation, recipientId);
 
@@ -78,14 +111,18 @@ class MessageService {
       body: trimmedBody,
       attachments: normalizedAttachments,
       replyTo: replyTarget?._id || null,
-      deliveredAt
+      deliveredAt,
+      readAt,
+      isRead: !!readAt
     });
 
     await this.updateConversationSnapshot(conversation);
-    if (recipientId === customerId) {
-      conversation.customerUnreadCount = (Number(conversation.customerUnreadCount) || 0) + 1;
-    } else {
-      conversation.professionalUnreadCount = (Number(conversation.professionalUnreadCount) || 0) + 1;
+    if (!isSelfConversation && recipientId !== senderKey) {
+      if (recipientId === customerId) {
+        conversation.customerUnreadCount = (Number(conversation.customerUnreadCount) || 0) + 1;
+      } else {
+        conversation.professionalUnreadCount = (Number(conversation.professionalUnreadCount) || 0) + 1;
+      }
     }
     await conversation.save();
     await this.populateMessageRelations(message);
@@ -223,6 +260,10 @@ class MessageService {
   }
 
   async listConversations(userId, role) {
+    if (role === 'professional') {
+      await this.createOrGetSelfConversation(userId);
+    }
+
     const filter = role === 'professional'
       ? { professional: userId, professionalDeletedAt: null }
       : { customer: userId, customerDeletedAt: null };
@@ -400,9 +441,11 @@ class MessageService {
     const professionalSummary = profile
       ? buildProfessionalSummary({ profile, reviewStats: {}, bookmarkedIds: new Set() })
       : null;
+    const isSelfConversation = this.toIdString(conversation.customer) === this.toIdString(conversation.professional);
 
     return {
       id: conversation._id.toString(),
+      isSelfConversation,
       lastMessage: conversation.lastMessage,
       lastMessageAt: conversation.lastMessageAt,
       unreadCount: this.getUnreadCountForViewer(conversation, userId),
