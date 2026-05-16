@@ -617,12 +617,20 @@ class ProviderWebsiteService {
       providerGrowthService.getOrCreateState(userId),
       this.getOrCreateWebsite(userId)
     ]);
-    const finalSlug = await this.getOrCreateSlug(
-      userId,
-      website,
-      state,
-      payload.slug || website.slug || payload.businessName || website.businessName
-    );
+    const requestedSlug = slugify(payload.slug);
+    const currentSlug = cleanString(website.slug || state.websiteSlug);
+    let finalSlug = currentSlug;
+    if (requestedSlug && requestedSlug !== currentSlug) {
+      await this.ensureSlugAvailable(requestedSlug, userId, website._id);
+      finalSlug = requestedSlug;
+    } else {
+      finalSlug = await this.getOrCreateSlug(
+        userId,
+        website,
+        state,
+        payload.slug || website.slug || payload.businessName || website.businessName
+      );
+    }
 
     if (payload.phone && !isValidIndianPhone(payload.phone)) {
       throw new Error('Enter a valid 10-digit business phone number');
@@ -832,7 +840,8 @@ class ProviderWebsiteService {
       website.publishedAt = website.publishedAt || new Date();
     }
 
-    await website.save();
+    state.websiteSlug = website.slug;
+    await Promise.all([website.save(), state.save()]);
     await this.upsertThemeConfig(userId, website._id, payload.themeConfig || {});
     await this.upsertSeoConfig(userId, website._id, payload.seoConfig || {}, website.slug);
     await this.replaceCollection(ProviderServiceModel, website, userId, services);
@@ -2318,6 +2327,41 @@ class ProviderWebsiteService {
     if (growthConflict || websiteConflict) {
       throw new Error('That public business URL is already taken');
     }
+  }
+
+  async checkSlugAvailability(userId, rawSlug = '') {
+    const slug = slugify(rawSlug);
+    if (!slug) {
+      return {
+        slug: '',
+        available: false,
+        message: 'Enter a public business URL slug'
+      };
+    }
+
+    const website = await this.getOrCreateWebsite(userId);
+    const ownSlug = cleanString(website.slug);
+    if (slug === ownSlug) {
+      return {
+        slug,
+        available: true,
+        current: true,
+        message: 'This is your current public URL'
+      };
+    }
+
+    const [growthConflict, websiteConflict] = await Promise.all([
+      ProviderGrowth.exists({ websiteSlug: slug, user: { $ne: userId } }),
+      ProviderWebsite.exists({ slug, _id: { $ne: website._id } })
+    ]);
+
+    const available = !(growthConflict || websiteConflict);
+    return {
+      slug,
+      available,
+      current: false,
+      message: available ? 'This public URL is available' : 'That public business URL is already taken'
+    };
   }
 
   async syncWebsiteSlug(userId, website, state, slug) {
