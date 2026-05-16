@@ -101,7 +101,7 @@ router.post(
 );
 router.get('/professions', getProfessions);
 router.get('/profession-catalog', getProfessionCatalogEntries);
-router.get('/search', searchProfessionals);
+router.get('/search', optionalAuthMiddleware, searchProfessionals);
 router.post('/search/ai', aiSearch);
 router.get('/bookmarks', authMiddleware, getBookmarks);
 router.delete('/bookmark/:id', authMiddleware, removeBookmark);
@@ -112,7 +112,7 @@ router.post('/website/:slug/inquiries', optionalAuthMiddleware, createWebsiteInq
 router.post('/website/:slug/bookings', optionalAuthMiddleware, createWebsiteBooking);
 router.post('/website/:slug/orders', optionalAuthMiddleware, createWebsiteProductOrder);
 router.get('/:id/ratings', getRatings);
-router.get('/:id', getProfile);
+router.get('/:id', optionalAuthMiddleware, getProfile);
 router.post('/review', authMiddleware, createReview);
 router.post('/bookmark', authMiddleware, createBookmark);
 router.post('/subscription', authMiddleware, roleMiddleware(['professional']), createSubscription);
