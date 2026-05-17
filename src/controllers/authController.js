@@ -55,6 +55,35 @@ const resendOTP = async (req, res) => {
   }
 };
 
+const sendPasswordResetOtp = async (req, res) => {
+  try {
+    await authService.sendPasswordResetOtp(req.body.email);
+    res.json({ success: true, message: 'Password reset OTP sent successfully' });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const verifyPasswordResetOtp = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    await authService.verifyPasswordResetOtp(email, otp);
+    res.json({ success: true, message: 'OTP verified successfully' });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const resetPassword = async (req, res) => {
+  try {
+    const { email, otp, password } = req.body;
+    await authService.resetPasswordWithOtp(email, otp, password);
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const getCurrentUser = async (req, res) => {
   try {
     const user = await authService.getCurrentUserProfile(req.user._id);
@@ -121,6 +150,9 @@ module.exports = {
   login,
   verifyOTP,
   resendOTP,
+  sendPasswordResetOtp,
+  verifyPasswordResetOtp,
+  resetPassword,
   getCurrentUser,
   updateCurrentUser,
   startSocialAuth,

@@ -560,6 +560,101 @@ class AuthService {
     return true;
   }
 
+  async sendPasswordResetOtp(email) {
+    const normalizedEmail = this.normalizeEmail(email);
+    if (!normalizedEmail) {
+      throw new Error('Enter a valid email address');
+    }
+
+    const user = await User.findOne({ email: normalizedEmail });
+    if (!user) {
+      throw new Error('No account found with this email address');
+    }
+
+    const otp = process.env.TEST_OTP || (process.env.NODE_ENV === 'production' ? crypto.randomInt(100000, 999999).toString() : '123456');
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await OTPVerification.deleteMany({ user: user._id, type: 'password_reset' });
+    await OTPVerification.create({
+      user: user._id,
+      otp,
+      type: 'password_reset',
+      identifier: normalizedEmail,
+      expiresAt
+    });
+
+    await this.sendEmailWithResend({
+      to: normalizedEmail,
+      subject: 'Your Nasdiya password reset OTP',
+      text: `Your password reset OTP is ${otp}. It will expire in 10 minutes.`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; color: #1f2937;">
+          <h2 style="margin-bottom: 12px;">Reset your Nasdiya password</h2>
+          <p style="margin-bottom: 16px;">Use the following OTP to continue resetting your password:</p>
+          <div style="font-size: 32px; font-weight: 700; letter-spacing: 8px; padding: 16px 20px; background: #f3f6fb; border-radius: 12px; display: inline-block;">
+            ${otp}
+          </div>
+          <p style="margin-top: 16px;">This OTP will expire in 10 minutes. If you did not request this, you can ignore this email.</p>
+        </div>
+      `
+    });
+
+    logger.info('Password reset OTP sent', {
+      userId: user._id.toString(),
+      email: normalizedEmail
+    });
+    return true;
+  }
+
+  async verifyPasswordResetOtp(email, otp) {
+    await this.findPasswordResetOtpRecord(email, otp);
+    return true;
+  }
+
+  async resetPasswordWithOtp(email, otp, password) {
+    const nextPassword = String(password || '');
+    if (nextPassword.length < 6) {
+      throw new Error('Password must be at least 6 characters');
+    }
+
+    const { user, otpRecord } = await this.findPasswordResetOtpRecord(email, otp);
+    user.password = await bcrypt.hash(nextPassword, 10);
+    user.passwordSetupRequired = false;
+    await user.save();
+    await OTPVerification.deleteOne({ _id: otpRecord._id });
+
+    logger.info('Password reset completed', {
+      userId: user._id.toString(),
+      email: user.email
+    });
+    return true;
+  }
+
+  async findPasswordResetOtpRecord(email, otp) {
+    const normalizedEmail = this.normalizeEmail(email);
+    if (!normalizedEmail) {
+      throw new Error('Enter a valid email address');
+    }
+
+    const user = await User.findOne({ email: normalizedEmail });
+    if (!user) {
+      throw new Error('No account found with this email address');
+    }
+
+    const otpRecord = await OTPVerification.findOne({
+      user: user._id,
+      otp: String(otp || '').trim(),
+      type: 'password_reset',
+      identifier: normalizedEmail
+    });
+
+    if (!otpRecord || otpRecord.expiresAt < new Date()) {
+      throw new Error('Invalid or expired OTP');
+    }
+
+    return { user, otpRecord };
+  }
+
   normalizeEmail(value) {
     const email = toCleanString(value).toLowerCase();
     return email || null;

@@ -4,6 +4,9 @@ const {
   login,
   verifyOTP,
   resendOTP,
+  sendPasswordResetOtp,
+  verifyPasswordResetOtp,
+  resetPassword,
   getCurrentUser,
   updateCurrentUser,
   startSocialAuth,
@@ -89,6 +92,21 @@ const otpSchema = Joi.object({
   identifier: Joi.string().required() // email or mobile
 });
 
+const forgotPasswordEmailSchema = Joi.object({
+  email: Joi.string().email().required()
+});
+
+const forgotPasswordOtpSchema = Joi.object({
+  email: Joi.string().email().required(),
+  otp: Joi.string().pattern(/^\d{6}$/).required()
+});
+
+const resetPasswordSchema = Joi.object({
+  email: Joi.string().email().required(),
+  otp: Joi.string().pattern(/^\d{6}$/).required(),
+  password: Joi.string().min(6).required()
+});
+
 const updateCurrentUserSchema = Joi.object({
   firstName: Joi.string().allow('').optional(),
   lastName: Joi.string().allow('').optional(),
@@ -133,6 +151,9 @@ router.post('/signup', validationMiddleware(signupSchema), signup);
 router.post('/login', loginRateLimiter, validationMiddleware(loginSchema), login);
 router.post('/verify-otp', validationMiddleware(otpSchema), verifyOTP);
 router.post('/resend-otp', resendOTP);
+router.post('/forgot-password/send-otp', validationMiddleware(forgotPasswordEmailSchema), sendPasswordResetOtp);
+router.post('/forgot-password/verify-otp', validationMiddleware(forgotPasswordOtpSchema), verifyPasswordResetOtp);
+router.post('/forgot-password/reset', validationMiddleware(resetPasswordSchema), resetPassword);
 router.get('/me', authMiddleware, getCurrentUser);
 router.patch('/me', authMiddleware, validationMiddleware(updateCurrentUserSchema), updateCurrentUser);
 router.get('/social/:provider/start', startSocialAuth);
