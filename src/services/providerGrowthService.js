@@ -250,7 +250,7 @@ class ProviderGrowthService {
     }
 
     const user = await User.findById(userId).lean();
-    const base = slugify([user?.firstName, user?.lastName].filter(Boolean).join(' ')) || `provider-${String(userId).slice(-6)}`;
+    const base = slugify(user?.fullName || '') || `provider-${String(userId).slice(-6)}`;
     let candidate = base;
     let suffix = 2;
 
@@ -320,7 +320,7 @@ class ProviderGrowthService {
         note: 'Providers can register, complete profiles, and start appearing on the platform without paying upfront.'
       },
       profileOverview: {
-        fullName: [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim(),
+        fullName: user?.fullName || '',
         mobile: cleanString(user?.mobile),
         profession: profile?.profession || '',
         location: profile?.location || '',
@@ -652,7 +652,7 @@ class ProviderGrowthService {
       throw new Error('Aadhar Card is required for verification');
     }
 
-    const profileName = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
+    const profileName = user?.fullName || '';
     const submittedName = cleanString(payload.fullName || profileName);
     const submittedMobile = cleanString(payload.mobile || user?.mobile || '');
 

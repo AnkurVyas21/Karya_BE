@@ -426,7 +426,7 @@ class MessageService {
       replyTo: this.serializeReplyTarget(replySource),
       reactions: this.serializeReactions(message.reactions),
       senderId: message.sender?._id?.toString() || message.sender?.toString?.() || null,
-      senderName: [message.sender?.firstName, message.sender?.lastName].filter(Boolean).join(' ').trim() || 'User',
+      senderName: message.sender?.fullName || 'User',
       senderRole: message.senderRole,
       createdAt: message.createdAt,
       deliveredAt: message.deliveredAt,
@@ -453,7 +453,7 @@ class MessageService {
       unreadCount: this.getUnreadCountForViewer(conversation, userId),
       customer: conversation.customer ? {
         id: conversation.customer._id?.toString?.() || conversation.customer.toString(),
-        fullName: [conversation.customer.firstName, conversation.customer.lastName].filter(Boolean).join(' ').trim(),
+        fullName: conversation.customer.fullName || '',
         email: conversation.customer.email || '',
         mobile: conversation.customer.mobile || '',
         profilePicture: conversation.customer.profilePicture || ''
@@ -613,7 +613,7 @@ class MessageService {
       body: replyBody,
       attachments: replyAttachments,
       senderId: message.sender?._id?.toString?.() || message.sender?.toString?.() || null,
-      senderName: [message.sender?.firstName, message.sender?.lastName].filter(Boolean).join(' ').trim() || 'User',
+      senderName: message.sender?.fullName || 'User',
       isDeleted: !!message.isDeleted
     };
   }

@@ -18,11 +18,10 @@ const { composeLocation, getProfileCompletionState, toVisibleEmail, toVisibleMob
 
 const DEFAULT_ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || 'admin@karya.local').trim().toLowerCase();
 const DEFAULT_ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || 'Admin@123');
-const DEFAULT_ADMIN_FIRST_NAME = String(process.env.ADMIN_FIRST_NAME || 'Karya').trim() || 'Karya';
-const DEFAULT_ADMIN_LAST_NAME = String(process.env.ADMIN_LAST_NAME || 'Admin').trim() || 'Admin';
+const DEFAULT_ADMIN_FULL_NAME = String(process.env.ADMIN_FULL_NAME || 'Karya Admin').trim() || 'Karya Admin';
 const IST_OFFSET_MINUTES = 330;
 
-const getFullName = (entity = {}) => [entity.firstName, entity.lastName].filter(Boolean).join(' ').trim();
+const getFullName = (entity = {}) => cleanString(entity.fullName);
 
 const toObjectIdString = (value) => value?._id ? value._id.toString() : String(value || '');
 
@@ -119,8 +118,7 @@ class AdminService {
 
     const password = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
     const admin = await User.create({
-      firstName: DEFAULT_ADMIN_FIRST_NAME,
-      lastName: DEFAULT_ADMIN_LAST_NAME,
+      fullName: DEFAULT_ADMIN_FULL_NAME,
       email: DEFAULT_ADMIN_EMAIL,
       password,
       role: 'admin',
@@ -351,8 +349,6 @@ class AdminService {
       items: items.map((user) => ({
         id: user._id.toString(),
         fullName: getFullName(user) || 'Unnamed User',
-        firstName: user.firstName || '',
-        lastName: user.lastName || '',
         email: toVisibleEmail(user.email),
         mobile: toVisibleMobile(user.mobile),
         role: user.role,
@@ -384,8 +380,6 @@ class AdminService {
           id: profile._id.toString(),
           userId: user._id.toString(),
           fullName: getFullName(user) || 'Unnamed Provider',
-          firstName: user.firstName || '',
-          lastName: user.lastName || '',
           email: toVisibleEmail(user.email),
           mobile: toVisibleMobile(user.mobile),
           profession: profile.profession || 'Profession pending',
@@ -475,8 +469,6 @@ class AdminService {
         id: profile._id.toString(),
         userId: user._id.toString(),
         fullName: getFullName(user) || 'Unnamed Provider',
-        firstName: user.firstName || '',
-        lastName: user.lastName || '',
         email: toVisibleEmail(user.email),
         mobile: toVisibleMobile(user.mobile),
         profession: profile.profession || 'Profession pending',
@@ -711,7 +703,7 @@ class AdminService {
     const transactionIds = bookings.map((item) => toObjectIdString(item.transactionId)).filter(Boolean);
 
     const [providers, websites, transactions] = await Promise.all([
-      User.find({ _id: { $in: providerIds } }).select('firstName lastName email mobile role').lean(),
+      User.find({ _id: { $in: providerIds } }).select('fullName email mobile role').lean(),
       ProviderWebsite.find({ _id: { $in: websiteIds } }).select('businessName slug category city').lean(),
       WebsiteTransaction.find({ _id: { $in: transactionIds } }).lean()
     ]);

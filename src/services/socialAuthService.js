@@ -18,18 +18,6 @@ const cleanupExpiredStates = () => {
 
 setInterval(cleanupExpiredStates, STATE_TTL_MS).unref();
 
-const splitDisplayName = (displayName = '') => {
-  const parts = String(displayName || '').trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) {
-    return { firstName: '', lastName: '' };
-  }
-
-  return {
-    firstName: parts[0],
-    lastName: parts.slice(1).join(' ')
-  };
-};
-
 const toBase64Url = (buffer) => buffer
   .toString('base64')
   .replace(/\+/g, '-')
@@ -206,20 +194,13 @@ class SocialAuthService {
       provider,
       providerId: String(profile.providerId || '').trim(),
       email: String(profile.email || '').trim().toLowerCase(),
-      firstName: String(profile.firstName || '').trim(),
-      lastName: String(profile.lastName || '').trim(),
+      fullName: String(profile.fullName || profile.displayName || '').trim(),
       displayName: String(profile.displayName || '').trim(),
       mobile: String(profile.mobile || '').trim(),
       avatarUrl: String(profile.avatarUrl || '').trim(),
       profileUrl: String(profile.profileUrl || '').trim(),
       emailVerified: profile.emailVerified !== false
     };
-
-    if (!normalizedProfile.firstName && normalizedProfile.displayName) {
-      const names = splitDisplayName(normalizedProfile.displayName);
-      normalizedProfile.firstName = names.firstName;
-      normalizedProfile.lastName = normalizedProfile.lastName || names.lastName;
-    }
 
     if (!normalizedProfile.providerId) {
       throw new Error(`Unable to read ${config.label} profile details`);
@@ -330,8 +311,7 @@ class SocialAuthService {
         providerId: userInfo.sub,
         email: userInfo.email,
         emailVerified: userInfo.email_verified,
-        firstName: userInfo.given_name,
-        lastName: userInfo.family_name,
+        fullName: userInfo.name,
         displayName: userInfo.name,
         avatarUrl: userInfo.picture,
         mobile
@@ -343,8 +323,7 @@ class SocialAuthService {
       return {
         providerId: profile.id,
         email: profile.email,
-        firstName: profile.first_name,
-        lastName: profile.last_name,
+        fullName: profile.name,
         displayName: profile.name,
         avatarUrl: profile.picture?.data?.url || ''
       };
@@ -359,8 +338,7 @@ class SocialAuthService {
         providerId: profile.sub,
         email: profile.email,
         emailVerified: profile.email_verified,
-        firstName: profile.given_name,
-        lastName: profile.family_name,
+        fullName: profile.name,
         displayName: profile.name,
         avatarUrl: profile.picture,
         profileUrl: profile.profile
@@ -374,8 +352,7 @@ class SocialAuthService {
       return {
         providerId: profile.data?.id,
         displayName: profile.data?.name,
-        firstName: profile.data?.name,
-        lastName: '',
+        fullName: profile.data?.name,
         avatarUrl: profile.data?.profile_image_url,
         profileUrl: profile.data?.username ? `https://x.com/${profile.data.username}` : ''
       };
@@ -398,7 +375,7 @@ class SocialAuthService {
         provider: socialProfile.provider,
         providerId: socialProfile.providerId,
         email: socialProfile.email,
-        displayName: socialProfile.displayName || [socialProfile.firstName, socialProfile.lastName].filter(Boolean).join(' ').trim(),
+        displayName: socialProfile.displayName || socialProfile.fullName || '',
         avatarUrl: socialProfile.avatarUrl,
         profileUrl: socialProfile.profileUrl
       })

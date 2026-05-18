@@ -15,8 +15,6 @@ class AuthService {
   async signup(userData) {
     const {
       fullName,
-      firstName,
-      lastName,
       email,
       mobile,
       gender = '',
@@ -43,7 +41,7 @@ class AuthService {
 
     const normalizedEmail = this.normalizeEmail(email);
     const normalizedMobile = this.normalizeMobile(mobile);
-    const normalizedFullName = toCleanString(fullName) || [firstName, lastName].map((value) => toCleanString(value)).filter(Boolean).join(' ');
+    const normalizedFullName = toCleanString(fullName);
     if (!normalizedFullName) {
       throw new Error('Full name is required');
     }
@@ -69,8 +67,7 @@ class AuthService {
     
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new User({
-      firstName: normalizedFullName,
-      lastName: '',
+      fullName: normalizedFullName,
       email: normalizedEmail,
       mobile: normalizedMobile,
       gender: this.normalizeGender(gender),
@@ -182,8 +179,9 @@ class AuthService {
 
   async registerSocialUser(socialProfile, options = {}) {
     const role = options.role === 'professional' ? 'professional' : 'user';
-    const firstName = toCleanString(socialProfile.firstName) || this.extractNameParts(socialProfile.displayName).firstName || 'Karya';
-    const lastName = toCleanString(socialProfile.lastName) || this.extractNameParts(socialProfile.displayName).lastName || 'Member';
+    const fullName = toCleanString(socialProfile.fullName)
+      || toCleanString(socialProfile.displayName)
+      || 'Karya Member';
     const email = this.normalizeEmail(socialProfile.email) || this.buildSocialPlaceholderEmail(socialProfile);
     const mobile = this.normalizeMobile(socialProfile.mobile) || this.buildSocialPlaceholderMobile(socialProfile);
 
@@ -192,8 +190,7 @@ class AuthService {
     const password = crypto.randomBytes(32).toString('hex');
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new User({
-      firstName,
-      lastName,
+      fullName,
       email,
       mobile,
       password: hashedPassword,
@@ -204,7 +201,7 @@ class AuthService {
         provider: socialProfile.provider,
         providerId: socialProfile.providerId,
         email: socialProfile.email,
-        displayName: socialProfile.displayName || [firstName, lastName].filter(Boolean).join(' ').trim(),
+        displayName: socialProfile.displayName || fullName,
         avatarUrl: socialProfile.avatarUrl,
         profileUrl: socialProfile.profileUrl
       })]
@@ -330,12 +327,9 @@ class AuthService {
       excludeUserId: userId
     });
 
-    if ('firstName' in payload) {
-      userUpdates.firstName = toCleanString(payload.firstName);
-    }
-
-    if ('lastName' in payload) {
-      userUpdates.lastName = toCleanString(payload.lastName);
+    const providedFullName = 'fullName' in payload ? toCleanString(payload.fullName) : '';
+    if (providedFullName) {
+      userUpdates.fullName = providedFullName;
     }
 
     if ('email' in payload) {
@@ -716,18 +710,6 @@ class AuthService {
   normalizeGender(value) {
     const normalized = toCleanString(value).toLowerCase();
     return ['male', 'female', 'other', 'prefer_not_to_say'].includes(normalized) ? normalized : '';
-  }
-
-  extractNameParts(displayName = '') {
-    const parts = String(displayName || '').trim().split(/\s+/).filter(Boolean);
-    if (parts.length === 0) {
-      return { firstName: '', lastName: '' };
-    }
-
-    return {
-      firstName: parts[0],
-      lastName: parts.slice(1).join(' ')
-    };
   }
 
   buildSocialPlaceholderEmail(socialProfile = {}) {

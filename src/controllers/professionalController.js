@@ -28,6 +28,8 @@ const normalizeGender = (value) => {
   return ['male', 'female', 'other', 'prefer_not_to_say'].includes(normalized) ? normalized : '';
 };
 
+const normalizeFullName = (payload = {}) => String(payload.fullName || '').trim();
+
 const createProfile = async (req, res) => {
   try {
     const profileData = {
@@ -40,9 +42,15 @@ const createProfile = async (req, res) => {
       delete profileData.showContactNumber;
     }
     if ('gender' in profileData) {
-      await User.findByIdAndUpdate(req.user._id, { gender: normalizeGender(profileData.gender) }, { runValidators: true });
+      const userUpdates = { gender: normalizeGender(profileData.gender) };
+      const fullName = normalizeFullName(profileData);
+      if (fullName) {
+        userUpdates.fullName = fullName;
+      }
+      await User.findByIdAndUpdate(req.user._id, userUpdates, { runValidators: true });
       delete profileData.gender;
     }
+    delete profileData.fullName;
     const profile = await professionalService.upsertProfile(req.user._id, profileData);
     res.status(201).json({ success: true, data: profile });
   } catch (error) {
@@ -521,15 +529,11 @@ const updateProfile = async (req, res) => {
     const userUpdates = {};
     const files = req.files || {};
 
-    if ('firstName' in payload) {
-      userUpdates.firstName = payload.firstName;
-      delete payload.firstName;
+    const fullName = normalizeFullName(payload);
+    if (fullName) {
+      userUpdates.fullName = fullName;
     }
-
-    if ('lastName' in payload) {
-      userUpdates.lastName = payload.lastName;
-      delete payload.lastName;
-    }
+    delete payload.fullName;
 
     if ('gender' in payload) {
       userUpdates.gender = normalizeGender(payload.gender);

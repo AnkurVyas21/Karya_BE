@@ -1,5 +1,5 @@
 const toCurrency = (value) => (typeof value === 'number' ? value : 0);
-const { getProfileCompletionState, toVisibleEmail, toVisibleMobile } = require('./accountPresenter');
+const { getProfileCompletionState, toCleanString, toVisibleEmail, toVisibleMobile } = require('./accountPresenter');
 
 const INDIA_TIME_ZONE = 'Asia/Kolkata';
 const NIGHT_START_MINUTES = 20 * 60;
@@ -140,13 +140,12 @@ const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Se
   const serviceCoverageLocation = Array.isArray(serviceAreas)
     ? serviceAreas.map((area) => String(area || '').trim()).filter(Boolean).join(', ')
     : '';
+  const fullName = toCleanString(user.fullName);
 
   return {
     id: profile._id.toString(),
     userId: user._id ? user._id.toString() : null,
-    firstName: user.firstName || '',
-    lastName: user.lastName || '',
-    fullName: [user.firstName, user.lastName].filter(Boolean).join(' ').trim(),
+    fullName,
     gender: user.gender || '',
     email: profile.allowContactDisplay ? toVisibleEmail(user.email) || null : null,
     mobile: profile.allowContactDisplay ? toVisibleMobile(user.mobile) || null : null,

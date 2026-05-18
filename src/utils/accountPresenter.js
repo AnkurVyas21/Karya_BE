@@ -21,7 +21,7 @@ const composeServiceCoverage = (serviceAreas = []) => (Array.isArray(serviceArea
 const sanitizeUser = (user) => {
   const plain = typeof user?.toObject === 'function' ? user.toObject() : { ...(user || {}) };
   delete plain.password;
-  const fullName = [plain.firstName, plain.lastName].map((value) => toCleanString(value)).filter(Boolean).join(' ');
+  const fullName = toCleanString(plain.fullName);
 
   return {
     ...plain,

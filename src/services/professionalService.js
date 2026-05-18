@@ -402,7 +402,7 @@ class ProfessionalService {
       rating: review.rating,
       comment: review.comment,
       createdAt: review.createdAt,
-      userName: [review.user?.firstName, review.user?.lastName].filter(Boolean).join(' ').trim() || 'Anonymous'
+      userName: review.user?.fullName || 'Anonymous'
     }));
   }
 

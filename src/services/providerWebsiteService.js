@@ -453,7 +453,7 @@ const buildBookingReceiptPdfAttachment = ({
   providerMessage = '',
   offerInfo = null
 }) => {
-  const providerName = receipt.providerName || [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+  const providerName = receipt.providerName || provider?.fullName || website?.businessName || 'Provider';
   const providerPhone = normalizeIndianPhone(website?.phone || provider?.mobile || provider?.phone);
   const bookingId = bookingPublicReference(booking) || (receipt.contextId ? `BK-${receipt.contextId.slice(-8).toUpperCase()}` : '');
   const bookingWhen = [booking?.bookingDate, booking?.bookingTime].filter(Boolean).join(', ');
@@ -498,7 +498,7 @@ const buildBookingReceiptEmailHtml = ({
   providerMessage = '',
   offerInfo = null
 }) => {
-  const providerName = receipt.providerName || [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+  const providerName = receipt.providerName || provider?.fullName || website?.businessName || 'Provider';
   const providerPhone = normalizeIndianPhone(website?.phone || provider?.mobile || provider?.phone);
   const businessUrl = buildBusinessUrl(website);
   const providerSignupUrl = `${frontendBaseUrl()}/provider/register`;
@@ -1859,7 +1859,7 @@ class ProviderWebsiteService {
 
     let website = await ProviderWebsite.findOne({ providerId: userId });
     if (!website) {
-      const defaultName = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim() || profile?.profession || 'My Business';
+      const defaultName = user?.fullName || profile?.profession || 'My Business';
       website = await ProviderWebsite.create({
         providerId: userId,
         isPurchased: providerGrowthService.hasActiveWebsite(state),
@@ -2381,7 +2381,7 @@ class ProviderWebsiteService {
 
     const user = await User.findById(userId).lean();
     const base = slugify(seedValue)
-      || slugify([user?.firstName, user?.lastName].filter(Boolean).join(' '))
+      || slugify(user?.fullName || '')
       || `business-${String(userId).slice(-6)}`;
     let candidate = base;
     let suffix = 2;
@@ -2417,7 +2417,7 @@ class ProviderWebsiteService {
         id: item._id.toString(),
         rating: item.rating,
         comment: item.comment,
-        customerName: [item.user?.firstName, item.user?.lastName].filter(Boolean).join(' ').trim() || 'Customer',
+        customerName: item.user?.fullName || 'Customer',
         createdAt: item.createdAt
       }))
     };
@@ -2554,7 +2554,7 @@ class ProviderWebsiteService {
     return {
       id: website._id.toString(),
       providerId: userId,
-      fullName: [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim(),
+      fullName: user?.fullName || '',
       mobile: cleanString(user?.mobile),
       email: cleanString(user?.email),
       profilePicture: cleanString(profile?.profilePicture),
@@ -2697,7 +2697,7 @@ class ProviderWebsiteService {
       return false;
     }
 
-    const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+    const providerName = provider?.fullName || website?.businessName || 'Provider';
     const businessName = website?.businessName || providerName;
     const bookingWhen = [booking.bookingDate, booking.bookingTime].filter(Boolean).join(', ');
     const offerInfo = await this.getBookingOfferInfo(booking);
@@ -2744,7 +2744,7 @@ class ProviderWebsiteService {
       websiteSeed ? Promise.resolve(websiteSeed) : booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null),
       booking?.customerUserId ? User.findById(booking.customerUserId).select('email').lean() : Promise.resolve(null)
     ]);
-    const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+    const providerName = provider?.fullName || website?.businessName || 'Provider';
     const businessName = website?.businessName || providerName;
     const bookingId = bookingPublicReference(booking);
     const bookingWhen = [booking.bookingDate, booking.bookingTime].filter(Boolean).join(', ');
@@ -2818,7 +2818,7 @@ class ProviderWebsiteService {
       booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null),
       booking?.customerUserId ? User.findById(booking.customerUserId).select('email').lean() : Promise.resolve(null)
     ]);
-    const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+    const providerName = provider?.fullName || website?.businessName || 'Provider';
     const receipt = toReceiptPayload(transaction, providerName);
     const offerInfo = await this.getBookingOfferInfo(booking);
     const customerEmail = cleanString(booking.customerEmail) || cleanString(customerUser?.email);
@@ -2877,7 +2877,7 @@ class ProviderWebsiteService {
       booking?.websiteId ? ProviderWebsite.findById(booking.websiteId).lean() : Promise.resolve(null),
       booking?.customerUserId ? User.findById(booking.customerUserId).select('email').lean() : Promise.resolve(null)
     ]);
-    const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+    const providerName = provider?.fullName || website?.businessName || 'Provider';
     const bookingWhen = [booking.bookingDate, booking.bookingTime].filter(Boolean).join(' ');
     const customerMessage = providerMessage || booking.providerMessage || booking.cancellationReason || booking.rescheduleMessage || '';
     const businessUrl = buildBusinessUrl(website);
@@ -2983,7 +2983,7 @@ class ProviderWebsiteService {
       return false;
     }
 
-    const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+    const providerName = provider?.fullName || website?.businessName || 'Provider';
     const amount = cleanNumber(transaction?.refund?.amount || booking.refundAmount, 0);
     const reference = cleanString(transaction?.refund?.reference || booking.refundReference);
     const providerUpiId = cleanString(refundUpiId || transaction?.manualPayment?.upiId || website?.upiId);
@@ -3031,7 +3031,7 @@ class ProviderWebsiteService {
       return;
     }
 
-    const providerName = [provider?.firstName, provider?.lastName].filter(Boolean).join(' ').trim() || website?.businessName || 'Provider';
+    const providerName = provider?.fullName || website?.businessName || 'Provider';
     const providerPhone = normalizeIndianPhone(website?.phone || provider?.mobile || provider?.phone);
     const receipt = toReceiptPayload(transaction, providerName);
     const mailed = await receiptEmailService.sendReceipt({

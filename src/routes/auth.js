@@ -32,9 +32,7 @@ const loginRateLimiter = rateLimit({
 });
 
 const signupSchema = Joi.object({
-  fullName: Joi.string().min(2).optional(),
-  firstName: Joi.string().optional(),
-  lastName: Joi.string().allow('').optional(),
+  fullName: Joi.string().min(2).required(),
   email: Joi.string().email().required(),
   mobile: Joi.string().required(),
   gender: Joi.string().valid('', 'male', 'female', 'other', 'prefer_not_to_say').allow('').optional(),
@@ -109,8 +107,7 @@ const resetPasswordSchema = Joi.object({
 });
 
 const updateCurrentUserSchema = Joi.object({
-  firstName: Joi.string().allow('').optional(),
-  lastName: Joi.string().allow('').optional(),
+  fullName: Joi.string().allow('').optional(),
   email: Joi.string().email().allow('').optional(),
   mobile: Joi.string().allow('').optional(),
   password: Joi.string().min(6).allow('').optional(),

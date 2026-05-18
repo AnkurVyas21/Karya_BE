@@ -297,7 +297,7 @@ class AdvertisementCreativeService {
           provider: doc.user
             ? {
                 userId: doc.user._id.toString(),
-                fullName: [doc.user.firstName, doc.user.lastName].filter(Boolean).join(' ').trim(),
+                fullName: doc.user.fullName || '',
                 email: doc.user.email || '',
                 mobile: doc.user.mobile || ''
               }
@@ -348,7 +348,7 @@ class AdvertisementCreativeService {
       provider: item.user
         ? {
             userId: item.user._id.toString(),
-            fullName: [item.user.firstName, item.user.lastName].filter(Boolean).join(' ').trim(),
+            fullName: item.user.fullName || '',
             email: item.user.email || '',
             mobile: item.user.mobile || ''
           }
@@ -400,7 +400,7 @@ class AdvertisementCreativeService {
       provider: creative.user
         ? {
             userId: creative.user._id.toString(),
-            fullName: [creative.user.firstName, creative.user.lastName].filter(Boolean).join(' ').trim(),
+            fullName: creative.user.fullName || '',
             email: creative.user.email || '',
             mobile: creative.user.mobile || ''
           }
