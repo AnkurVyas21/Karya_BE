@@ -71,6 +71,7 @@ const slugify = (value = '') => cleanString(value)
   .replace(/[^a-z0-9]+/g, '-')
   .replace(/^-+|-+$/g, '')
   .slice(0, 60);
+const escapeRegex = (value = '') => cleanString(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const isValidIndianPhone = (value = '') => /^[6-9]\d{9}$/.test(String(value || '').replace(/[^\d]/g, '').slice(-10));
 const isValidUpi = (value = '') => !cleanString(value) || /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(cleanString(value));
 const isValidObjectIdString = (value = '') => /^[a-f\d]{24}$/i.test(cleanString(value));
@@ -945,6 +946,7 @@ class ProviderWebsiteService {
     const lead = await ProviderLead.create({
       providerId: website.providerId,
       websiteId: website._id,
+      customerUserId: actorUserId || null,
       source,
       name: cleanString(payload.name),
       phone: normalizedPhone,
@@ -1010,7 +1012,7 @@ class ProviderWebsiteService {
         type: source === 'callback' ? 'callback' : 'inquiry',
         title: source === 'callback' ? 'Callback request sent' : 'Inquiry sent',
         body: `Your ${sourceLabel} was sent to ${publicWebsite.website?.businessName || 'this provider'}.`,
-        linkPath: website.slug ? `/business/${website.slug}` : '',
+        linkPath: source === 'callback' ? '/my-requests?tab=callbacks' : '/my-requests?tab=inquiries',
         metadata: {
           leadId: lead._id.toString(),
           providerId: website.providerId.toString(),
@@ -1441,7 +1443,7 @@ class ProviderWebsiteService {
         type: 'booking',
         title: 'Booking request sent',
         body: `Your booking request was sent to ${publicWebsite.website?.businessName || 'this provider'}.`,
-        linkPath: website.slug ? `/business/${website.slug}` : '',
+        linkPath: '/my-requests?tab=bookings',
         metadata: {
           bookingId: booking._id.toString(),
           providerId: website.providerId.toString(),
@@ -1592,12 +1594,276 @@ class ProviderWebsiteService {
       }
     });
 
+    if (actorUserId) {
+      await notificationService.createNotification({
+        userId: actorUserId,
+        type: 'order',
+        title: 'Product order sent',
+        body: `Your order for ${product.title} was sent to ${publicWebsite.website?.businessName || 'this provider'}.`,
+        linkPath: '/my-requests?tab=orders',
+        metadata: {
+          orderId: order._id.toString(),
+          providerId: website.providerId.toString(),
+          slug: website.slug,
+          transactionId: transaction?._id?.toString?.() || ''
+        }
+      });
+    }
+
     return {
       id: order._id.toString(),
       status: order.status,
       paymentStatus: order.paymentStatus,
       createdAt: order.createdAt,
       transaction: transaction ? this.serializeTransaction(transaction) : null
+    };
+  }
+
+  async getMyRequests(userId) {
+    const user = await User.findById(userId).select('fullName mobile email').lean();
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const userIdString = toObjectIdString(userId);
+    const customerMobile = normalizeIndianPhone(user.mobile);
+    const customerEmail = cleanString(user.email).toLowerCase();
+    const emailRegex = customerEmail ? new RegExp(`^${escapeRegex(customerEmail)}$`, 'i') : null;
+    const lookupFilters = (phoneField, emailField) => {
+      const filters = [{ customerUserId: userId }];
+      if (customerMobile) {
+        filters.push({ [phoneField]: customerMobile });
+      }
+      if (emailRegex) {
+        filters.push({ [emailField]: emailRegex });
+      }
+      return filters;
+    };
+
+    const [bookings, leads, orders] = await Promise.all([
+      ProviderBooking.find({ $or: lookupFilters('customerPhone', 'customerEmail') }).sort({ createdAt: -1 }).limit(100).lean(),
+      ProviderLead.find({
+        source: { $in: ['website', 'inquiry', 'callback'] },
+        $or: lookupFilters('phone', 'email')
+      }).sort({ createdAt: -1 }).limit(100).lean(),
+      ProviderProductOrder.find({ $or: lookupFilters('customerPhone', 'customerEmail') }).sort({ createdAt: -1 }).limit(100).lean()
+    ]);
+
+    const bookingIds = bookings.map((item) => item._id).filter(Boolean);
+    const orderIds = orders.map((item) => item._id).filter(Boolean);
+    const transactionFilters = [
+      bookingIds.length ? { contextType: 'booking', contextId: { $in: bookingIds } } : null,
+      orderIds.length ? { contextType: 'product-order', contextId: { $in: orderIds } } : null
+    ].filter(Boolean);
+    const transactions = transactionFilters.length
+      ? await WebsiteTransaction.find({ $or: transactionFilters }).sort({ createdAt: -1 }).lean()
+      : [];
+
+    const providerIds = [...new Set([
+      ...bookings.map((item) => toObjectIdString(item.providerId)),
+      ...leads.map((item) => toObjectIdString(item.providerId)),
+      ...orders.map((item) => toObjectIdString(item.providerId))
+    ].filter(Boolean))];
+    const websiteIds = [...new Set([
+      ...bookings.map((item) => toObjectIdString(item.websiteId)),
+      ...leads.map((item) => toObjectIdString(item.websiteId)),
+      ...orders.map((item) => toObjectIdString(item.websiteId))
+    ].filter(Boolean))];
+
+    const [providers, profiles, websites] = await Promise.all([
+      providerIds.length
+        ? User.find({ _id: { $in: providerIds } }).select('fullName mobile email').lean()
+        : Promise.resolve([]),
+      providerIds.length
+        ? ProfessionalProfile.find({ user: { $in: providerIds } }).select('user profession profilePicture city state area').lean()
+        : Promise.resolve([]),
+      websiteIds.length
+        ? ProviderWebsite.find({ _id: { $in: websiteIds } }).select('providerId slug businessName category phone email city state address logoImage').lean()
+        : Promise.resolve([])
+    ]);
+
+    const providerMap = new Map(providers.map((item) => [toObjectIdString(item._id), item]));
+    const profileMap = new Map(profiles.map((item) => [toObjectIdString(item.user), item]));
+    const websiteMap = new Map(websites.map((item) => [toObjectIdString(item._id), item]));
+    const transactionMap = new Map(transactions.map((item) => [`${cleanString(item.contextType)}:${toObjectIdString(item.contextId)}`, item]));
+
+    const providerMeta = (providerId, websiteId) => {
+      const providerKey = toObjectIdString(providerId);
+      const website = websiteMap.get(toObjectIdString(websiteId)) || {};
+      const provider = providerMap.get(providerKey) || {};
+      const profile = profileMap.get(providerKey) || {};
+      const city = cleanString(website.city || profile.city || profile.area);
+      const state = cleanString(website.state || profile.state);
+      const businessName = cleanString(website.businessName) || cleanString(provider.fullName) || 'Provider';
+
+      return {
+        id: providerKey,
+        websiteId: toObjectIdString(websiteId),
+        fullName: cleanString(provider.fullName),
+        businessName,
+        category: cleanString(website.category || profile.profession),
+        phone: cleanString(website.phone || provider.mobile),
+        email: cleanString(website.email || provider.email),
+        location: [city, state].filter(Boolean).join(', '),
+        address: cleanString(website.address),
+        slug: cleanString(website.slug),
+        publicPath: website.slug ? `/business/${website.slug}` : '',
+        profilePicture: cleanString(profile.profilePicture),
+        logoImage: cleanString(website.logoImage)
+      };
+    };
+
+    const serializeCustomerTransaction = (transaction = null) => transaction ? {
+      id: transaction._id?.toString?.() || String(transaction.id || ''),
+      contextType: cleanString(transaction.contextType),
+      contextId: toObjectIdString(transaction.contextId),
+      contextLabel: cleanString(transaction.contextLabel),
+      paymentChannel: cleanString(transaction.paymentChannel),
+      paymentStatus: cleanString(transaction.paymentStatus),
+      amountBreakdown: transaction.amountBreakdown || {},
+      gateway: {
+        provider: cleanString(transaction.gateway?.provider),
+        status: cleanString(transaction.gateway?.status),
+        providerReference: cleanString(transaction.gateway?.providerReference),
+        orderReference: cleanString(transaction.gateway?.orderReference)
+      },
+      manualPayment: {
+        upiId: cleanString(transaction.manualPayment?.upiId),
+        payerTransactionId: cleanString(transaction.manualPayment?.payerTransactionId),
+        instructions: cleanString(transaction.manualPayment?.instructions),
+        submittedAt: transaction.manualPayment?.submittedAt || null,
+        verifiedAt: transaction.manualPayment?.verifiedAt || null,
+        verificationNote: cleanString(transaction.manualPayment?.verificationNote)
+      },
+      receipt: transaction.receipt || {},
+      refundStatus: cleanString(transaction.refundStatus),
+      refund: transaction.refund || {},
+      createdAt: transaction.createdAt,
+      updatedAt: transaction.updatedAt
+    } : null;
+
+    const serializePayment = (source, transaction = null) => ({
+      choice: cleanString(source.paymentChoice),
+      channel: cleanString(transaction?.paymentChannel || source.paymentChannel),
+      status: cleanString(transaction?.paymentStatus || source.paymentStatus),
+      amount: cleanNumber(transaction?.amountBreakdown?.totalAmount ?? source.advanceFeeAmount ?? source.totalAmount, 0),
+      advanceFeeRequired: Boolean(source.advanceFeeRequired),
+      offerCode: cleanString(source.offerCode),
+      offerDiscountAmount: cleanNumber(source.offerDiscountAmount, 0),
+      refundStatus: cleanString(transaction?.refundStatus || source.refundStatus),
+      refundAmount: cleanNumber(transaction?.refund?.amount ?? source.refundAmount, 0),
+      refundReference: cleanString(transaction?.refund?.reference || source.refundReference),
+      refundNote: cleanString(transaction?.refund?.note || source.refundNote),
+      transaction: serializeCustomerTransaction(transaction)
+    });
+
+    const requestItems = [
+      ...bookings.map((booking) => {
+        const id = toObjectIdString(booking._id);
+        const transaction = transactionMap.get(`booking:${id}`) || null;
+        return {
+          id,
+          type: 'booking',
+          reference: bookingPublicReference(booking),
+          title: cleanString(booking.serviceTitle || transaction?.contextLabel) || 'Website booking',
+          provider: providerMeta(booking.providerId, booking.websiteId),
+          status: cleanString(booking.status),
+          customer: {
+            name: cleanString(booking.customerName),
+            phone: cleanString(booking.customerPhone),
+            email: cleanString(booking.customerEmail),
+            address: cleanString(booking.customerAddress)
+          },
+          bookingDate: cleanString(booking.bookingDate),
+          bookingTime: cleanString(booking.bookingTime),
+          bookingStartTime: cleanString(booking.bookingStartTime),
+          bookingEndTime: cleanString(booking.bookingEndTime),
+          bookingDurationMinutes: cleanNumber(booking.bookingDurationMinutes, 0),
+          bookingQuantity: Math.max(1, cleanNumber(booking.bookingQuantity, 1)),
+          message: cleanString(booking.message),
+          providerMessage: cleanString(booking.providerMessage),
+          cancellationReason: cleanString(booking.cancellationReason),
+          cancelledAt: booking.cancelledAt || null,
+          rescheduleMessage: cleanString(booking.rescheduleMessage),
+          rescheduledAt: booking.rescheduledAt || null,
+          serviceOtp: cleanString(booking.serviceProofOtpCode),
+          serviceOtpGeneratedAt: booking.serviceProofOtpGeneratedAt || null,
+          serviceOtpVerifiedAt: booking.serviceProofOtpVerifiedAt || null,
+          payment: serializePayment(booking, transaction),
+          statusUpdatedAt: booking.statusUpdatedAt || null,
+          createdAt: booking.createdAt,
+          updatedAt: booking.updatedAt
+        };
+      }),
+      ...leads.map((lead) => {
+        const source = cleanString(lead.source);
+        const isCallback = source === 'callback';
+        return {
+          id: toObjectIdString(lead._id),
+          type: isCallback ? 'callback' : 'inquiry',
+          reference: `RQ-${toObjectIdString(lead._id).slice(-8).toUpperCase()}`,
+          title: isCallback ? 'Callback request' : (cleanString(lead.interestedService) || 'Inquiry'),
+          provider: providerMeta(lead.providerId, lead.websiteId),
+          status: cleanString(lead.status),
+          customer: {
+            name: cleanString(lead.name),
+            phone: cleanString(lead.phone),
+            email: cleanString(lead.email)
+          },
+          source,
+          interestedService: cleanString(lead.interestedService),
+          message: cleanString(lead.message),
+          createdAt: lead.createdAt,
+          updatedAt: lead.updatedAt
+        };
+      }),
+      ...orders.map((order) => {
+        const id = toObjectIdString(order._id);
+        const transaction = transactionMap.get(`product-order:${id}`) || null;
+        return {
+          id,
+          type: 'order',
+          reference: `OR-${id.slice(-8).toUpperCase()}`,
+          title: cleanString(order.productTitle) || 'Product order',
+          provider: providerMeta(order.providerId, order.websiteId),
+          status: cleanString(order.status),
+          customer: {
+            name: cleanString(order.customerName),
+            phone: cleanString(order.customerPhone),
+            email: cleanString(order.customerEmail)
+          },
+          productTitle: cleanString(order.productTitle),
+          quantity: Math.max(1, cleanNumber(order.quantity, 1)),
+          unitAmount: cleanNumber(order.unitAmount, 0),
+          totalAmount: cleanNumber(order.totalAmount, 0),
+          message: cleanString(order.message),
+          payment: serializePayment(order, transaction),
+          createdAt: order.createdAt,
+          updatedAt: order.updatedAt
+        };
+      })
+    ].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+    const pendingStatuses = new Set(['new', 'pending_approval', 'payment_pending', 'verification-pending', 'pending']);
+    const completedStatuses = new Set(['completed', 'closed', 'paid']);
+    return {
+      currentUser: {
+        id: userIdString,
+        fullName: cleanString(user.fullName),
+        mobile: cleanString(user.mobile),
+        email: cleanString(user.email)
+      },
+      requests: requestItems,
+      stats: {
+        total: requestItems.length,
+        bookings: requestItems.filter((item) => item.type === 'booking').length,
+        inquiries: requestItems.filter((item) => item.type === 'inquiry').length,
+        callbacks: requestItems.filter((item) => item.type === 'callback').length,
+        orders: requestItems.filter((item) => item.type === 'order').length,
+        pending: requestItems.filter((item) => pendingStatuses.has(item.status) || pendingStatuses.has(item.payment?.status)).length,
+        completed: requestItems.filter((item) => completedStatuses.has(item.status)).length,
+        otpAvailable: requestItems.filter((item) => cleanString(item.serviceOtp)).length
+      }
     };
   }
 

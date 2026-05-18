@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const providerLeadSchema = new mongoose.Schema({
   providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   websiteId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProviderWebsite', required: true, index: true },
+  customerUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
   source: { type: String, enum: ['website', 'callback', 'inquiry', 'whatsapp-click', 'call-click', 'share'], default: 'website' },
   name: { type: String, default: '' },
   phone: { type: String, default: '' },

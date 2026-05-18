@@ -16,6 +16,7 @@ const {
   getWebsitePreviewBySlug,
   getWebsiteBookingSlots,
   getWebsiteManager,
+  getMyRequests,
   checkWebsiteSlugAvailability,
   saveWebsiteManager,
   updateWebsitePublishStatus,
@@ -106,6 +107,7 @@ router.get('/profession-catalog', getProfessionCatalogEntries);
 router.get('/search', optionalAuthMiddleware, searchProfessionals);
 router.post('/search/ai', aiSearch);
 router.get('/bookmarks', authMiddleware, getBookmarks);
+router.get('/my-requests', authMiddleware, getMyRequests);
 router.delete('/bookmark/:id', authMiddleware, removeBookmark);
 router.get('/website/preview/:slug', authMiddleware, roleMiddleware(['professional', 'admin']), getWebsitePreviewBySlug);
 router.get('/website/:slug/booking-slots', optionalAuthMiddleware, getWebsiteBookingSlots);
