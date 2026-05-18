@@ -253,6 +253,54 @@ class AuthService {
     };
   }
 
+  async becomeProvider(userId) {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    if (user.role === 'admin') {
+      throw new Error('Admin accounts cannot become providers');
+    }
+
+    const locationState = {
+      country: user.country || 'India',
+      state: user.state || '',
+      city: user.city || '',
+      town: user.town || '',
+      area: user.area || '',
+      addressLine: user.addressLine || '',
+      pincode: user.pincode || ''
+    };
+    const serviceAreas = user.city ? [user.city] : [];
+
+    await ProfessionalProfile.findOneAndUpdate(
+      { user: user._id },
+      {
+        $setOnInsert: {
+          user: user._id,
+          profession: '',
+          description: '',
+          skills: [],
+          tags: [],
+          serviceAreas,
+          ...locationState,
+          location: composeLocation(locationState),
+          allowContactDisplay: false
+        }
+      },
+      { upsert: true, new: true }
+    );
+
+    if (user.role !== 'professional') {
+      user.role = 'professional';
+      await user.save();
+    }
+
+    logger.info(`User became provider: ${user._id}`);
+    return this.buildAuthenticatedSession(user);
+  }
+
   async getCurrentUserProfile(userId) {
     const user = await User.findById(userId);
     if (!user) {

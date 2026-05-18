@@ -109,6 +109,19 @@ const updateCurrentUser = async (req, res) => {
   }
 };
 
+const becomeProvider = async (req, res) => {
+  try {
+    const { user, token } = await authService.becomeProvider(req.user._id);
+    res.json({
+      success: true,
+      message: 'Provider profile started',
+      data: { user, token }
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const startSocialAuth = async (req, res) => {
   const frontendOrigin = String(req.query.frontendOrigin || '').trim();
   try {
@@ -155,6 +168,7 @@ module.exports = {
   resetPassword,
   getCurrentUser,
   updateCurrentUser,
+  becomeProvider,
   startSocialAuth,
   handleSocialCallback
 };

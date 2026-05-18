@@ -9,6 +9,7 @@ const {
   resetPassword,
   getCurrentUser,
   updateCurrentUser,
+  becomeProvider,
   startSocialAuth,
   handleSocialCallback
 } = require('../controllers/authController');
@@ -156,6 +157,7 @@ router.post('/forgot-password/verify-otp', validationMiddleware(forgotPasswordOt
 router.post('/forgot-password/reset', validationMiddleware(resetPasswordSchema), resetPassword);
 router.get('/me', authMiddleware, getCurrentUser);
 router.patch('/me', authMiddleware, validationMiddleware(updateCurrentUserSchema), updateCurrentUser);
+router.post('/me/become-provider', authMiddleware, becomeProvider);
 router.get('/social/:provider/start', startSocialAuth);
 router.get('/social/:provider/callback', handleSocialCallback);
 
