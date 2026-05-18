@@ -2,7 +2,6 @@ const ProviderGrowth = require('../models/ProviderGrowth');
 const User = require('../models/User');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
 const AdvertisementCreative = require('../models/AdvertisementCreative');
-const WebsiteTransaction = require('../models/WebsiteTransaction');
 const logger = require('../utils/logger');
 const advertisementCreativeService = require('./advertisementCreativeService');
 
@@ -133,11 +132,31 @@ const ADVERTISEMENT_CAMPAIGN_TYPES = [
   }
 ];
 const MAX_AD_CATEGORIES = 15;
+const PROVIDER_PLAN_FEATURES = new Set(['boost', 'website', 'advertisement', 'verification']);
 
 const addDays = (date, days) => new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 const getAdRunStart = (ad = {}) => ad?.startsAt || ad?.createdAt || null;
 
 const cleanString = (value) => String(value || '').trim();
+const parseBooleanLike = (value) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  return ['true', '1', 'yes', 'on'].includes(cleanString(value).toLowerCase());
+};
+const normalizePaymentMethod = (value) => {
+  const method = cleanString(value).toLowerCase();
+  return ['card', 'upi', 'netbanking'].includes(method) ? method : 'unknown';
+};
+const paymentMethodLabel = (value) => {
+  const labels = {
+    card: 'Credit / debit card',
+    upi: 'UPI',
+    netbanking: 'Net banking',
+    unknown: 'Payment method not recorded'
+  };
+  return labels[normalizePaymentMethod(value)] || labels.unknown;
+};
 const normalizeCity = (value) => cleanString(value).replace(/\s+/g, ' ');
 const normalizeState = (value) => cleanString(value).replace(/\s+/g, ' ');
 const normalizeCategory = (value) => cleanString(value).replace(/\s+/g, ' ').slice(0, 80);
@@ -425,6 +444,28 @@ class ProviderGrowthService {
     return 'Not verified';
   }
 
+  recordPurchaseTransaction(state, payload = {}) {
+    state.purchaseTransactions = Array.isArray(state.purchaseTransactions) ? state.purchaseTransactions : [];
+    state.purchaseTransactions.push({
+      feature: payload.feature,
+      relatedId: cleanString(payload.relatedId),
+      planId: cleanString(payload.planId),
+      planName: cleanString(payload.planName),
+      label: cleanString(payload.label),
+      amount: Number(payload.amount || 0),
+      currency: 'INR',
+      status: cleanString(payload.status || 'paid'),
+      paymentMethod: normalizePaymentMethod(payload.paymentMethod),
+      paymentReference: cleanString(payload.paymentReference),
+      autoPay: parseBooleanLike(payload.autoPay),
+      autoRenew: parseBooleanLike(payload.autoRenew),
+      paidAt: payload.paidAt || new Date(),
+      startsAt: payload.startsAt || null,
+      expiresAt: payload.expiresAt || null,
+      metadata: payload.metadata || {}
+    });
+  }
+
   async activateFeature(userId, payload = {}) {
     const feature = cleanString(payload.feature).toLowerCase();
     const state = await this.getOrCreateState(userId);
@@ -434,9 +475,10 @@ class ProviderGrowthService {
       const selectedReach = BOOST_REACH_OPTIONS.find((option) => option.id === cleanString(payload.reach).toLowerCase()) || BOOST_REACH_OPTIONS[0];
       const selectedDuration = BOOST_DURATION_OPTIONS.find((option) => option.id === cleanString(payload.durationId).toLowerCase()) || BOOST_DURATION_OPTIONS[0];
       const amount = selectedReach.weekPrice * selectedDuration.multiplier;
+      const expiresAt = addDays(now, selectedDuration.durationDays);
       state.boost.active = true;
       state.boost.startDate = now;
-      state.boost.expiryDate = addDays(now, selectedDuration.durationDays);
+      state.boost.expiryDate = expiresAt;
       state.boost.monthlyPrice = selectedDuration.durationMonths > 0 ? Math.round(amount / selectedDuration.durationMonths) : amount;
       state.boost.amount = amount;
       state.boost.reach = selectedReach.id;
@@ -444,6 +486,28 @@ class ProviderGrowthService {
       state.boost.state = selectedReach.id === 'city' || selectedReach.id === 'state' ? cleanString(payload.state) : '';
       state.boost.durationId = selectedDuration.id;
       state.boost.durationDays = selectedDuration.durationDays;
+      this.recordPurchaseTransaction(state, {
+        feature,
+        relatedId: `boost-${now.getTime()}`,
+        planId: `boost-${selectedReach.id}-${selectedDuration.id}`,
+        planName: `${selectedReach.label} - ${selectedDuration.label}`,
+        label: BOOST_PLAN.name,
+        amount,
+        status: 'active',
+        paymentMethod: payload.paymentMethod,
+        paymentReference: payload.paymentReference,
+        autoPay: payload.autoPay,
+        autoRenew: payload.autoRenew,
+        paidAt: now,
+        startsAt: now,
+        expiresAt,
+        metadata: {
+          reach: selectedReach.id,
+          durationId: selectedDuration.id,
+          durationDays: selectedDuration.durationDays,
+          monthlyPrice: state.boost.monthlyPrice
+        }
+      });
       await state.save();
       logger.info(`Boost activated for provider ${userId}`);
       return this.getDashboard(userId);
@@ -453,18 +517,42 @@ class ProviderGrowthService {
       const requestedMonths = Number(payload.durationMonths || 1);
       const selectedPlan = WEBSITE_BILLING_OPTIONS.find((option) => option.durationMonths === requestedMonths) || WEBSITE_BILLING_OPTIONS[0];
       const durationDays = selectedPlan.durationMonths * 30;
+      const amount = selectedPlan.monthlyPrice * selectedPlan.durationMonths;
+      const expiresAt = addDays(now, durationDays);
       state.website.active = true;
       state.website.startDate = now;
-      state.website.expiryDate = addDays(now, durationDays);
+      state.website.expiryDate = expiresAt;
       state.website.monthlyPrice = selectedPlan.monthlyPrice;
       state.boost.active = true;
       state.boost.startDate = now;
-      state.boost.expiryDate = addDays(now, durationDays);
+      state.boost.expiryDate = expiresAt;
       if (!state.website.headline || !state.website.description) {
         const profile = await ProfessionalProfile.findOne({ user: userId }).lean();
         state.website.headline = state.website.headline || cleanString(profile?.profession || 'My Service Website');
         state.website.description = state.website.description || cleanString(profile?.description);
       }
+      this.recordPurchaseTransaction(state, {
+        feature,
+        relatedId: `website-${now.getTime()}`,
+        planId: selectedPlan.id,
+        planName: `${WEBSITE_PLAN.name} - ${selectedPlan.durationMonths} month${selectedPlan.durationMonths === 1 ? '' : 's'}`,
+        label: WEBSITE_PLAN.name,
+        amount,
+        status: 'active',
+        paymentMethod: payload.paymentMethod,
+        paymentReference: payload.paymentReference,
+        autoPay: payload.autoPay,
+        autoRenew: payload.autoRenew,
+        paidAt: now,
+        startsAt: now,
+        expiresAt,
+        metadata: {
+          durationMonths: selectedPlan.durationMonths,
+          durationDays,
+          monthlyPrice: selectedPlan.monthlyPrice,
+          includesBoost: true
+        }
+      });
       await state.save();
       await this.ensureWebsiteSlug(state, userId);
       logger.info(`Website plan activated for provider ${userId}`);
@@ -477,6 +565,24 @@ class ProviderGrowthService {
       if (state.verification.status === 'not_started') {
         state.verification.reviewerNotes = 'Payment received. Upload documents to start verification.';
       }
+      this.recordPurchaseTransaction(state, {
+        feature,
+        relatedId: `verification-${now.getTime()}`,
+        planId: VERIFICATION_PLAN.id,
+        planName: VERIFICATION_PLAN.name,
+        label: VERIFICATION_PLAN.name,
+        amount: VERIFICATION_PLAN.price,
+        status: 'paid',
+        paymentMethod: payload.paymentMethod,
+        paymentReference: payload.paymentReference,
+        autoPay: payload.autoPay,
+        autoRenew: payload.autoRenew,
+        paidAt: now,
+        startsAt: now,
+        metadata: {
+          billing: VERIFICATION_PLAN.billing
+        }
+      });
       await state.save();
       logger.info(`Verification fee marked paid for provider ${userId}`);
       return this.getDashboard(userId);
@@ -538,8 +644,33 @@ class ProviderGrowthService {
         extendFromAdId,
         createdAt: now
       });
-      await state.save();
       const createdAd = state.advertisements[state.advertisements.length - 1];
+      this.recordPurchaseTransaction(state, {
+        feature,
+        relatedId: createdAd?._id ? String(createdAd._id) : '',
+        planId: plan.id,
+        planName: createdAd?.planName || `${validLevel.label} - ${plan.name}`,
+        label: 'Advertisement System',
+        amount,
+        status,
+        paymentMethod: payload.paymentMethod,
+        paymentReference: payload.paymentReference,
+        autoPay: payload.autoPay,
+        autoRenew: payload.autoRenew,
+        paidAt: now,
+        startsAt,
+        expiresAt: addDays(new Date(startsAt), Number(plan.durationDays || 30)),
+        metadata: {
+          campaignType,
+          level,
+          city: level === 'city' ? city : '',
+          state: level === 'city' || level === 'state' ? stateName : '',
+          categories: campaignType === 'category' ? categories : [],
+          impressionsTotal: plan.impressions,
+          durationDays: Number(plan.durationDays || 30)
+        }
+      });
+      await state.save();
 
       if (extendFromAdId && createdAd?._id) {
         const sourceCreative = await AdvertisementCreative.findOne({ user: userId, advertisementId: extendFromAdId });
@@ -677,88 +808,294 @@ class ProviderGrowthService {
   }
 
   async getActivity(userId) {
-    const [state, transactions] = await Promise.all([
-      this.getOrCreateState(userId),
-      WebsiteTransaction.find({ providerId: userId }).sort({ createdAt: -1 }).lean()
-    ]);
-    const items = [];
+    const state = await this.getOrCreateState(userId);
+    const items = (state.purchaseTransactions || [])
+      .filter((transaction) => PROVIDER_PLAN_FEATURES.has(cleanString(transaction.feature)))
+      .map((transaction) => this.serializePurchaseTransaction(transaction, state));
+    const existingKeys = new Set(items.map((item) => `${item.type}:${item.relatedId}`));
 
-    if (state.boost?.startDate) {
-      items.push({
-        id: `boost-${state.boost.startDate.getTime()}`,
-        type: 'boost',
-        label: BOOST_PLAN.name,
-        amount: Number(state.boost.amount || BOOST_PLAN.price),
-        status: this.hasActiveBoost(state) ? 'active' : 'expired',
-        createdAt: state.boost.startDate,
-        expiresAt: state.boost.expiryDate
-      });
-    }
-
-    if (state.website?.startDate) {
-      items.push({
-        id: `website-${state.website.startDate.getTime()}`,
-        type: 'website',
-        label: WEBSITE_PLAN.name,
-        amount: WEBSITE_PLAN.price,
-        status: this.hasActiveWebsite(state) ? 'active' : 'expired',
-        createdAt: state.website.startDate,
-        expiresAt: state.website.expiryDate
-      });
-    }
-
-    (state.advertisements || []).forEach((ad) => {
-      items.push({
-        id: ad._id.toString(),
-        type: 'advertisement',
-        label: ad.planName,
-        amount: ad.amount,
-        status: ad.status,
-        createdAt: ad.createdAt,
-        impressionsTotal: ad.impressionsTotal,
-        impressionsUsed: ad.impressionsUsed,
-        impressionsRemaining: Math.max(Number(ad.impressionsTotal || 0) - Number(ad.impressionsUsed || 0), 0)
-      });
-    });
-
-    if (state.verification?.submittedAt) {
-      items.push({
-        id: `verification-${state.verification.submittedAt.getTime()}`,
-        type: 'verification',
-        label: VERIFICATION_PLAN.name,
-        amount: VERIFICATION_PLAN.price,
-        status: state.verification.status,
-        createdAt: state.verification.submittedAt,
-        reviewedAt: state.verification.reviewedAt,
-        reason: cleanString(state.verification.rejectionReason)
-      });
-    }
-
-    transactions.forEach((transaction) => {
-      items.push({
-        id: transaction._id.toString(),
-        type: transaction.contextType === 'booking' ? 'booking-payment' : 'product-order-payment',
-        label: transaction.contextLabel || 'Website payment',
-        amount: Number(transaction.amountBreakdown?.totalAmount || 0),
-        status: transaction.paymentStatus,
-        createdAt: transaction.createdAt,
-        receiptNumber: cleanString(transaction.receipt?.receiptNumber),
-        paymentChannel: cleanString(transaction.paymentChannel),
-        refundStatus: cleanString(transaction.refundStatus),
-        reason: cleanString(transaction.refund?.note || transaction.manualPayment?.verificationNote)
-      });
-    });
-
-    items.sort((left, right) => new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime());
+    items.push(...this.buildLegacyPurchaseItems(state, existingKeys));
+    items.sort((left, right) => new Date(right.createdAt || right.paidAt || 0).getTime() - new Date(left.createdAt || left.paidAt || 0).getTime());
 
     return {
       summary: {
         total: items.length,
-        active: items.filter((item) => item.status === 'active' || item.status === 'approved' || item.status === 'pending').length,
+        active: items.filter((item) => item.currentlyActive).length,
+        autoRenew: items.filter((item) => item.autoRenew).length,
         spent: items.reduce((sum, item) => sum + Number(item.amount || 0), 0)
       },
       items
     };
+  }
+
+  serializePurchaseTransaction(transaction, state) {
+    const feature = cleanString(transaction.feature);
+    const relatedId = cleanString(transaction.relatedId);
+    const relatedAd = feature === 'advertisement'
+      ? (state.advertisements || []).find((ad) => String(ad._id) === relatedId)
+      : null;
+    const status = this.resolvePurchaseStatus(transaction, state, relatedAd);
+    const startsAt = transaction.startsAt || relatedAd?.startsAt || relatedAd?.createdAt || transaction.paidAt || transaction.createdAt;
+    const expiresAt = transaction.expiresAt || (relatedAd ? addDays(new Date(getAdRunStart(relatedAd)), 30) : null);
+    const paidAt = transaction.paidAt || transaction.createdAt || startsAt;
+
+    const item = {
+      id: transaction._id?.toString() || relatedId || `${feature}-${new Date(paidAt || 0).getTime()}`,
+      relatedId,
+      type: feature,
+      label: cleanString(transaction.label) || this.featureLabel(feature),
+      planId: cleanString(transaction.planId),
+      planName: cleanString(transaction.planName) || cleanString(transaction.label) || this.featureLabel(feature),
+      amount: Number(transaction.amount || 0),
+      currency: cleanString(transaction.currency || 'INR'),
+      status,
+      currentlyActive: this.isPurchaseCurrentlyActive(feature, status, expiresAt),
+      createdAt: paidAt,
+      paidAt,
+      startsAt,
+      expiresAt,
+      paymentMethod: normalizePaymentMethod(transaction.paymentMethod),
+      paymentMethodLabel: paymentMethodLabel(transaction.paymentMethod),
+      paymentReference: cleanString(transaction.paymentReference),
+      autoPay: Boolean(transaction.autoPay),
+      autoRenew: Boolean(transaction.autoRenew),
+      billingMode: transaction.autoPay ? 'Auto pay' : 'One-time payment',
+      renewalMode: transaction.autoRenew ? 'Auto renew enabled' : 'Manual renewal',
+      metadata: transaction.metadata || {}
+    };
+
+    if (relatedAd) {
+      item.impressionsTotal = Number(relatedAd.impressionsTotal || item.metadata?.impressionsTotal || 0);
+      item.impressionsUsed = Number(relatedAd.impressionsUsed || 0);
+      item.impressionsRemaining = Math.max(item.impressionsTotal - item.impressionsUsed, 0);
+      item.paused = Boolean(relatedAd.paused);
+      item.createdAt = relatedAd.createdAt || item.createdAt;
+    }
+
+    if (feature === 'verification') {
+      item.reviewedAt = state.verification?.reviewedAt || null;
+      item.reason = cleanString(state.verification?.rejectionReason);
+    }
+
+    return item;
+  }
+
+  resolvePurchaseStatus(transaction, state, relatedAd = null) {
+    const feature = cleanString(transaction.feature);
+    const now = new Date();
+
+    if (feature === 'advertisement' && relatedAd) {
+      if (relatedAd.status === 'active' && relatedAd.paused) {
+        return 'paused';
+      }
+      return cleanString(relatedAd.status || transaction.status || 'paid');
+    }
+
+    if (feature === 'boost' || feature === 'website') {
+      const startsAt = transaction.startsAt ? new Date(transaction.startsAt) : null;
+      const expiresAt = transaction.expiresAt ? new Date(transaction.expiresAt) : null;
+      if (startsAt && startsAt > now) {
+        return 'scheduled';
+      }
+      if (expiresAt && expiresAt < now) {
+        return 'expired';
+      }
+      if (expiresAt && expiresAt >= now) {
+        return 'active';
+      }
+    }
+
+    if (feature === 'verification') {
+      const status = cleanString(state.verification?.status || transaction.status);
+      if (status === 'approved' && state.verification?.badgeActive) {
+        return 'active';
+      }
+      if (status === 'pending' || status === 'rejected') {
+        return status;
+      }
+      return state.verification?.feePaid ? 'paid' : cleanString(transaction.status || 'paid');
+    }
+
+    return cleanString(transaction.status || 'paid');
+  }
+
+  isPurchaseCurrentlyActive(feature, status, expiresAt = null) {
+    const normalized = cleanString(status);
+    if (feature === 'verification') {
+      return normalized === 'active';
+    }
+    if (feature === 'advertisement') {
+      return normalized === 'active';
+    }
+    if (normalized !== 'active') {
+      return false;
+    }
+    if (!expiresAt) {
+      return true;
+    }
+    return new Date(expiresAt).getTime() >= Date.now();
+  }
+
+  buildLegacyPurchaseItems(state, existingKeys = new Set()) {
+    const items = [];
+    const addLegacy = (item) => {
+      const key = `${item.type}:${item.relatedId}`;
+      if (!existingKeys.has(key)) {
+        items.push({
+          ...item,
+          paymentMethod: 'unknown',
+          paymentMethodLabel: paymentMethodLabel('unknown'),
+          paymentReference: '',
+          autoPay: false,
+          autoRenew: false,
+          billingMode: 'One-time payment',
+          renewalMode: 'Manual renewal',
+          legacy: true
+        });
+      }
+    };
+
+    const boostStartTime = state.boost?.startDate ? new Date(state.boost.startDate).getTime() : 0;
+    const websiteStartTime = state.website?.startDate ? new Date(state.website.startDate).getTime() : 0;
+    const boostWasIncludedWithWebsite = boostStartTime > 0 && boostStartTime === websiteStartTime;
+
+    if (state.boost?.startDate && !boostWasIncludedWithWebsite) {
+      const startsAt = state.boost.startDate;
+      const relatedId = `boost-${new Date(startsAt).getTime()}`;
+      const reach = BOOST_REACH_OPTIONS.find((option) => option.id === cleanString(state.boost?.reach)) || BOOST_REACH_OPTIONS[0];
+      const duration = BOOST_DURATION_OPTIONS.find((option) => option.id === cleanString(state.boost?.durationId)) || null;
+      const expiresAt = state.boost.expiryDate || null;
+      const status = expiresAt && new Date(expiresAt).getTime() >= Date.now() ? 'active' : 'expired';
+      addLegacy({
+        id: relatedId,
+        relatedId,
+        type: 'boost',
+        label: BOOST_PLAN.name,
+        planId: `boost-${reach.id}-${duration?.id || 'legacy'}`,
+        planName: `${reach.label}${duration ? ` - ${duration.label}` : ''}`,
+        amount: Number(state.boost.amount || BOOST_PLAN.price),
+        currency: 'INR',
+        status,
+        currentlyActive: status === 'active',
+        createdAt: startsAt,
+        paidAt: startsAt,
+        startsAt,
+        expiresAt,
+        metadata: {
+          reach: state.boost.reach,
+          durationId: state.boost.durationId,
+          durationDays: state.boost.durationDays,
+          monthlyPrice: state.boost.monthlyPrice
+        }
+      });
+    }
+
+    if (state.website?.startDate) {
+      const startsAt = state.website.startDate;
+      const expiresAt = state.website.expiryDate || null;
+      const relatedId = `website-${new Date(startsAt).getTime()}`;
+      const durationDays = startsAt && expiresAt
+        ? Math.max(30, Math.round((new Date(expiresAt).getTime() - new Date(startsAt).getTime()) / 86400000))
+        : 30;
+      const durationMonths = Math.max(1, Math.round(durationDays / 30));
+      const amount = Number(state.website.monthlyPrice || WEBSITE_PLAN.price) * durationMonths;
+      const status = expiresAt && new Date(expiresAt).getTime() >= Date.now() ? 'active' : 'expired';
+      addLegacy({
+        id: relatedId,
+        relatedId,
+        type: 'website',
+        label: WEBSITE_PLAN.name,
+        planId: `website-${durationMonths}m`,
+        planName: `${WEBSITE_PLAN.name} - ${durationMonths} month${durationMonths === 1 ? '' : 's'}`,
+        amount,
+        currency: 'INR',
+        status,
+        currentlyActive: status === 'active',
+        createdAt: startsAt,
+        paidAt: startsAt,
+        startsAt,
+        expiresAt,
+        metadata: {
+          durationMonths,
+          monthlyPrice: state.website.monthlyPrice,
+          includesBoost: true
+        }
+      });
+    }
+
+    (state.advertisements || []).forEach((ad) => {
+      const relatedId = ad._id.toString();
+      const startsAt = getAdRunStart(ad);
+      const expiresAt = startsAt ? addDays(new Date(startsAt), 30) : null;
+      const status = ad.status === 'active' && ad.paused ? 'paused' : cleanString(ad.status || 'active');
+      addLegacy({
+        id: relatedId,
+        relatedId,
+        type: 'advertisement',
+        label: 'Advertisement System',
+        planId: cleanString(ad.planId),
+        planName: cleanString(ad.planName) || 'Advertisement pack',
+        amount: Number(ad.amount || 0),
+        currency: 'INR',
+        status,
+        currentlyActive: status === 'active',
+        createdAt: ad.createdAt,
+        paidAt: ad.createdAt,
+        startsAt,
+        expiresAt,
+        impressionsTotal: ad.impressionsTotal,
+        impressionsUsed: ad.impressionsUsed,
+        impressionsRemaining: Math.max(Number(ad.impressionsTotal || 0) - Number(ad.impressionsUsed || 0), 0),
+        paused: Boolean(ad.paused),
+        metadata: {
+          campaignType: ad.campaignType,
+          level: ad.level,
+          city: ad.city,
+          state: ad.state,
+          categories: ad.categories || []
+        }
+      });
+    });
+
+    const verificationDate = state.verification?.paidAt || state.verification?.submittedAt;
+    if (verificationDate) {
+      const status = this.resolvePurchaseStatus({
+        feature: 'verification',
+        status: state.verification?.status || 'paid'
+      }, state);
+      const relatedId = `verification-${new Date(verificationDate).getTime()}`;
+      addLegacy({
+        id: relatedId,
+        relatedId,
+        type: 'verification',
+        label: VERIFICATION_PLAN.name,
+        planId: VERIFICATION_PLAN.id,
+        planName: VERIFICATION_PLAN.name,
+        amount: Number(state.verification?.fee || VERIFICATION_PLAN.price),
+        currency: 'INR',
+        status,
+        currentlyActive: status === 'active',
+        createdAt: verificationDate,
+        paidAt: verificationDate,
+        startsAt: verificationDate,
+        expiresAt: null,
+        reviewedAt: state.verification?.reviewedAt,
+        reason: cleanString(state.verification?.rejectionReason),
+        metadata: {
+          billing: VERIFICATION_PLAN.billing
+        }
+      });
+    }
+
+    return items;
+  }
+
+  featureLabel(feature) {
+    if (feature === 'boost') return BOOST_PLAN.name;
+    if (feature === 'website') return WEBSITE_PLAN.name;
+    if (feature === 'advertisement') return 'Advertisement System';
+    if (feature === 'verification') return VERIFICATION_PLAN.name;
+    return 'Provider plan';
   }
 
   async getGrowthStatesForUsers(userIds = []) {

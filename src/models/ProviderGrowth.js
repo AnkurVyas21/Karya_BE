@@ -25,6 +25,25 @@ const advertisementSchema = new mongoose.Schema({
   deletionNote: { type: String, default: '' }
 }, { _id: true });
 
+const purchaseTransactionSchema = new mongoose.Schema({
+  feature: { type: String, enum: ['boost', 'website', 'advertisement', 'verification'], required: true, index: true },
+  relatedId: { type: String, default: '', index: true },
+  planId: { type: String, default: '' },
+  planName: { type: String, default: '' },
+  label: { type: String, default: '' },
+  amount: { type: Number, default: 0 },
+  currency: { type: String, default: 'INR' },
+  status: { type: String, default: 'paid', index: true },
+  paymentMethod: { type: String, enum: ['card', 'upi', 'netbanking', 'unknown'], default: 'unknown' },
+  paymentReference: { type: String, default: '' },
+  autoPay: { type: Boolean, default: false },
+  autoRenew: { type: Boolean, default: false },
+  paidAt: { type: Date, default: Date.now },
+  startsAt: { type: Date, default: null },
+  expiresAt: { type: Date, default: null },
+  metadata: { type: mongoose.Schema.Types.Mixed, default: () => ({}) }
+}, { _id: true, timestamps: true });
+
 const providerGrowthSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
   // Important: don't default to null. A unique index treats null as a value and will throw duplicates.
@@ -57,6 +76,7 @@ const providerGrowthSchema = new mongoose.Schema({
     appointmentNote: { type: String, default: '' }
   },
   advertisements: [advertisementSchema],
+  purchaseTransactions: [purchaseTransactionSchema],
   verification: {
     status: {
       type: String,
