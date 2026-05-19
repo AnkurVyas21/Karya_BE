@@ -122,6 +122,17 @@ const becomeProvider = async (req, res) => {
   }
 };
 
+const sendSocialPopupResponse = (res, statusCode, targetOrigin, payload) => {
+  res
+    .status(statusCode)
+    .set({
+      'Cache-Control': 'no-store',
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups'
+    })
+    .send(socialAuthService.renderPopupResponse(targetOrigin, payload));
+};
+
 const startSocialAuth = async (req, res) => {
   const frontendOrigin = String(req.query.frontendOrigin || '').trim();
   try {
@@ -133,28 +144,24 @@ const startSocialAuth = async (req, res) => {
     });
     res.redirect(authorizationUrl);
   } catch (error) {
-    res
-      .status(400)
-      .send(socialAuthService.renderPopupResponse(frontendOrigin || '*', {
-        type: 'error',
-        provider: req.params.provider,
-        message: error.message
-      }));
+    sendSocialPopupResponse(res, 400, frontendOrigin || '*', {
+      type: 'error',
+      provider: req.params.provider,
+      message: error.message
+    });
   }
 };
 
 const handleSocialCallback = async (req, res) => {
   try {
     const result = await socialAuthService.handleCallback(req.params.provider, req);
-    res.status(200).send(socialAuthService.renderPopupResponse(result.targetOrigin, result.payload));
+    sendSocialPopupResponse(res, 200, result.targetOrigin, result.payload);
   } catch (error) {
-    res
-      .status(400)
-      .send(socialAuthService.renderPopupResponse('*', {
-        type: 'error',
-        provider: req.params.provider,
-        message: error.message
-      }));
+    sendSocialPopupResponse(res, 400, '*', {
+      type: 'error',
+      provider: req.params.provider,
+      message: error.message
+    });
   }
 };
 

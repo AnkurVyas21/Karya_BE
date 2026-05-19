@@ -460,10 +460,12 @@ class SocialAuthService {
             window.opener.postMessage(payload, ${JSON.stringify(safeTargetOrigin)});
           }
         } finally {
-          window.close();
           setTimeout(function () {
-            document.body.innerHTML = '<div class="card"><p class="hint">' + (payload.message || 'You can close this window now.') + '</p></div>';
-          }, 250);
+            window.close();
+            setTimeout(function () {
+              document.body.innerHTML = '<div class="card"><p class="hint">' + (payload.message || 'You can close this window now.') + '</p></div>';
+            }, 250);
+          }, 120);
         }
       })();
     </script>
