@@ -136,6 +136,7 @@ class SocialAuthService {
       signupRole,
       frontendOrigin,
       returnUrl: String(options.returnUrl || '').trim(),
+      requestId: String(options.requestId || '').trim(),
       expiresAt: Date.now() + STATE_TTL_MS
     };
 
@@ -169,11 +170,22 @@ class SocialAuthService {
     const error = String(req.query.error || '').trim();
     if (error) {
       const errorMessage = String(req.query.error_description || req.query.error || 'Social login was cancelled').trim();
+      const state = String(req.query.state || '').trim();
+      let stateEntry = null;
+      if (state) {
+        try {
+          stateEntry = this.consumeState(state);
+        } catch (_stateError) {
+          stateEntry = null;
+        }
+      }
+
       return {
-        targetOrigin: String(req.query.frontendOrigin || '*'),
+        targetOrigin: stateEntry?.frontendOrigin || String(req.query.frontendOrigin || '*'),
         payload: {
           type: 'error',
           provider,
+          requestId: stateEntry?.requestId,
           message: errorMessage
         }
       };
@@ -226,6 +238,7 @@ class SocialAuthService {
         payload: {
           type: 'authenticated',
           provider,
+          requestId: stateEntry.requestId,
           token: session.token,
           user: session.user,
           returnUrl: stateEntry.returnUrl
@@ -240,6 +253,7 @@ class SocialAuthService {
         payload: {
           type: 'signup_required',
           provider,
+          requestId: stateEntry.requestId,
           profile: normalizedProfile,
           message: `No Nasdiya account was linked to this ${config.label} profile. Please complete signup.`
         }
@@ -254,6 +268,7 @@ class SocialAuthService {
       payload: {
         type: 'authenticated',
         provider,
+        requestId: stateEntry.requestId,
         token: session.token,
         user: session.user,
         returnUrl: stateEntry.returnUrl
@@ -412,6 +427,16 @@ class SocialAuthService {
 
   renderPopupResponse(targetOrigin, payload) {
     const safeTargetOrigin = targetOrigin || '*';
+    let frontendCallbackUrl = '';
+    try {
+      const parsedOrigin = new URL(safeTargetOrigin);
+      if (parsedOrigin.protocol === 'http:' || parsedOrigin.protocol === 'https:') {
+        frontendCallbackUrl = `${parsedOrigin.origin}/auth/social/callback`;
+      }
+    } catch (_error) {
+      frontendCallbackUrl = '';
+    }
+
     const messagePayload = JSON.stringify({
       source: 'karya-social-auth',
       ...payload
@@ -455,18 +480,27 @@ class SocialAuthService {
     <script>
       (function () {
         var payload = ${messagePayload};
+        var frontendCallbackUrl = ${JSON.stringify(frontendCallbackUrl)};
+        var encodedPayload = encodeURIComponent(JSON.stringify(payload));
         try {
           if (window.opener && !window.opener.closed) {
             window.opener.postMessage(payload, ${JSON.stringify(safeTargetOrigin)});
           }
-        } finally {
+        } catch (_error) {}
+
+        if (frontendCallbackUrl) {
+          window.location.replace(frontendCallbackUrl + '#socialAuth=' + encodedPayload);
+          return;
+        }
+
+        try {
           setTimeout(function () {
             window.close();
             setTimeout(function () {
               document.body.innerHTML = '<div class="card"><p class="hint">' + (payload.message || 'You can close this window now.') + '</p></div>';
             }, 250);
           }, 120);
-        }
+        } catch (_error) {}
       })();
     </script>
   </body>

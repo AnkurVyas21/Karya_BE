@@ -128,7 +128,7 @@ const sendSocialPopupResponse = (res, statusCode, targetOrigin, payload) => {
     .set({
       'Cache-Control': 'no-store',
       'Content-Type': 'text/html; charset=utf-8',
-      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups'
+      'Cross-Origin-Opener-Policy': 'unsafe-none'
     })
     .send(socialAuthService.renderPopupResponse(targetOrigin, payload));
 };
@@ -140,13 +140,20 @@ const startSocialAuth = async (req, res) => {
       intent: req.query.intent,
       signupRole: req.query.signupRole,
       frontendOrigin,
-      returnUrl: req.query.returnUrl
+      returnUrl: req.query.returnUrl,
+      requestId: req.query.requestId
     });
-    res.redirect(authorizationUrl);
+    res
+      .set({
+        'Cache-Control': 'no-store',
+        'Cross-Origin-Opener-Policy': 'unsafe-none'
+      })
+      .redirect(authorizationUrl);
   } catch (error) {
     sendSocialPopupResponse(res, 400, frontendOrigin || '*', {
       type: 'error',
       provider: req.params.provider,
+      requestId: req.query.requestId,
       message: error.message
     });
   }
