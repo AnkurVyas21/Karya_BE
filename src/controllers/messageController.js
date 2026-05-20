@@ -53,12 +53,9 @@ const getConversations = async (req, res) => {
 
 const createConversation = async (req, res) => {
   try {
-    if (req.user.role !== 'user') {
-      return res.status(403).json({ success: false, message: 'Only users can start new conversations.' });
-    }
-
     const conversation = await messageService.createOrGetConversation({
       customerId: req.user._id,
+      customerRole: req.user.role,
       professionalProfileId: req.body.professionalProfileId,
       initialMessage: req.body.message
     });

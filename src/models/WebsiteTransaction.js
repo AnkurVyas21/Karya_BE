@@ -22,6 +22,9 @@ const websiteTransactionSchema = new mongoose.Schema({
   refundStatus: { type: String, enum: WEBSITE_REFUND_STATUSES, default: 'none' },
   amountBreakdown: {
     baseAmount: { type: Number, default: 0 },
+    bookingBaseAmount: { type: Number, default: 0 },
+    nightChargeAmount: { type: Number, default: 0 },
+    emergencyChargeAmount: { type: Number, default: 0 },
     gatewayFeeAmount: { type: Number, default: 0 },
     totalAmount: { type: Number, default: 0 },
     providerNetAmount: { type: Number, default: 0 },

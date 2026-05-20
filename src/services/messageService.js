@@ -38,7 +38,7 @@ class MessageService {
     return conversation;
   }
 
-  async createOrGetConversation({ customerId, professionalProfileId, initialMessage = '' }) {
+  async createOrGetConversation({ customerId, customerRole = 'user', professionalProfileId, initialMessage = '' }) {
     const profile = await ProfessionalProfile.findById(professionalProfileId).populate('user');
     if (!profile || !profile.user) {
       throw new Error('Professional profile not found');
@@ -69,7 +69,7 @@ class MessageService {
       await this.sendMessage({
         conversationId: conversation._id.toString(),
         senderId: customerId,
-        senderRole: 'user',
+        senderRole: customerRole,
         body: initialMessage
       });
     }
@@ -267,7 +267,12 @@ class MessageService {
     }
 
     const filter = role === 'professional'
-      ? { professional: userId, professionalDeletedAt: null }
+      ? {
+        $or: [
+          { professional: userId, professionalDeletedAt: null },
+          { customer: userId, customerDeletedAt: null }
+        ]
+      }
       : { customer: userId, customerDeletedAt: null };
 
     const conversations = await Conversation.find(filter)
@@ -448,6 +453,7 @@ class MessageService {
     return {
       id: conversation._id.toString(),
       isSelfConversation,
+      viewerSide: this.getViewerSide(conversation, userId),
       lastMessage: conversation.lastMessage,
       lastMessageAt: conversation.lastMessageAt,
       unreadCount: this.getUnreadCountForViewer(conversation, userId),
@@ -478,6 +484,21 @@ class MessageService {
     }
 
     return 0;
+  }
+
+  getViewerSide(conversation, userId) {
+    const userKey = userId.toString();
+    if (this.toIdString(conversation.customer) === userKey || conversation.customer?._id?.toString() === userKey) {
+      return 'customer';
+    }
+    if (
+      this.toIdString(conversation.professional) === userKey ||
+      conversation.professional?._id?.toString() === userKey ||
+      conversation.professionalProfile?.user?._id?.toString() === userKey
+    ) {
+      return 'professional';
+    }
+    return '';
   }
 
   async ensureUnreadCounters(conversation) {
