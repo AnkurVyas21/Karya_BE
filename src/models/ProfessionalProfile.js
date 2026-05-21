@@ -19,6 +19,8 @@ const professionalProfileSchema = new mongoose.Schema({
   town: { type: String },
   area: { type: String },
   pincode: { type: String },
+  latitude: { type: Number, default: null },
+  longitude: { type: Number, default: null },
   availability: { type: String },
   availabilityStart: { type: String },
   availabilityEnd: { type: String },

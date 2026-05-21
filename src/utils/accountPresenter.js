@@ -82,6 +82,8 @@ const buildAuthenticatedUser = (user, professionalProfile = null) => {
     skills: professionalProfile?.skills || [],
     tags: professionalProfile?.tags || [],
     allowContactDisplay: Boolean(professionalProfile?.allowContactDisplay),
+    latitude: Number.isFinite(Number(professionalProfile?.latitude)) ? Number(professionalProfile.latitude) : null,
+    longitude: Number.isFinite(Number(professionalProfile?.longitude)) ? Number(professionalProfile.longitude) : null,
     profileId: professionalProfile?._id?.toString?.() || null,
     passwordSetupRequired: Boolean(user?.passwordSetupRequired),
     missingRequiredFields: completion.missingRequiredFields,

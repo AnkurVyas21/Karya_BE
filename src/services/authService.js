@@ -403,6 +403,14 @@ class AuthService {
         professionalUpdates.serviceAreas = providedServiceAreas;
       }
 
+      ['latitude', 'longitude'].forEach((field) => {
+        if (field in payload) {
+          const value = String(payload[field] ?? '').trim();
+          const coordinate = Number(value);
+          professionalUpdates[field] = value === '' || !Number.isFinite(coordinate) ? null : coordinate;
+        }
+      });
+
       if ('specializations' in payload || 'skills' in payload) {
         professionalUpdates.skills = providedSkills;
       }

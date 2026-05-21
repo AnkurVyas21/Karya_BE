@@ -107,6 +107,14 @@ class ProfessionalService {
       update.experience = normalizeOptionalNumber(update.experience, 0);
     }
 
+    ['latitude', 'longitude'].forEach((field) => {
+      if (field in update) {
+        const value = String(update[field] ?? '').trim();
+        const coordinate = Number(value);
+        update[field] = value === '' || !Number.isFinite(coordinate) ? null : coordinate;
+      }
+    });
+
     if ('allowContactDisplay' in update) {
       update.allowContactDisplay = ['true', '1', 'yes', 'on'].includes(String(update.allowContactDisplay).trim().toLowerCase())
         || update.allowContactDisplay === true;

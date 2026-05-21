@@ -164,6 +164,8 @@ const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Se
     town: profile.town || '',
     area: profile.area || '',
     pincode: profile.pincode || '',
+    latitude: Number.isFinite(Number(profile.latitude)) ? Number(profile.latitude) : null,
+    longitude: Number.isFinite(Number(profile.longitude)) ? Number(profile.longitude) : null,
     availability: profile.availability || '',
     availabilityStart: profile.availabilityStart || '',
     availabilityEnd: profile.availabilityEnd || '',
