@@ -60,10 +60,11 @@ const createProfile = async (req, res) => {
 
 const searchProfessionals = async (req, res) => {
   try {
-    const { q, profession, skills, location, country, state, city, town, page = 1, limit = 12 } = req.query;
+    const { q, profession, providerName, skills, location, country, state, city, town, page = 1, limit = 12 } = req.query;
     const filters = {
       query: q,
       profession,
+      providerName,
       skills: skills ? skills.split(',') : [],
       location,
       country,

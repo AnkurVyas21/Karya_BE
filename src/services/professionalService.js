@@ -1,6 +1,7 @@
 const ProfessionalProfile = require('../models/ProfessionalProfile');
 const Review = require('../models/Review');
 const Bookmark = require('../models/Bookmark');
+const User = require('../models/User');
 const mongoose = require('mongoose');
 const OpenAI = require('openai');
 const logger = require('../utils/logger');
@@ -230,6 +231,7 @@ class ProfessionalService {
     const normalizedFilters = {
       query: String(filters?.query || '').trim(),
       profession: String(filters?.profession || '').trim(),
+      providerName: String(filters?.providerName || '').trim(),
       location: String(filters?.location || '').trim(),
       country: String(filters?.country || '').trim(),
       state: String(filters?.state || '').trim(),
@@ -243,11 +245,13 @@ class ProfessionalService {
     }
 
     const semanticFilters = await professionSearchService.resolveSearchFilters(normalizedFilters);
+    const providerUserIds = await this.resolveProviderNameUserIds(normalizedFilters.providerName);
     const searchFilters = {
       ...normalizedFilters,
       profession: semanticFilters.profession || normalizedFilters.profession,
       professionCandidates: semanticFilters.professionCandidates || [],
-      professionTerms: semanticFilters.professionTerms || []
+      professionTerms: semanticFilters.professionTerms || [],
+      providerUserIds
     };
 
     const candidateQuery = this.buildSearchCandidateQuery(searchFilters);
@@ -536,6 +540,24 @@ class ProfessionalService {
     });
   }
 
+  async resolveProviderNameUserIds(providerName = '') {
+    const name = String(providerName || '').trim();
+    if (!name) {
+      return null;
+    }
+
+    const nameRegex = new RegExp(escapeRegExp(name), 'i');
+    const users = await User.find({
+      role: 'professional',
+      $or: [
+        { fullName: nameRegex },
+        { 'socialAccounts.displayName': nameRegex }
+      ]
+    }).select('_id').limit(500);
+
+    return users.map((user) => user._id);
+  }
+
   buildSearchCandidateQuery(filters = {}) {
     const query = {};
     const andConditions = [];
@@ -565,6 +587,10 @@ class ProfessionalService {
       } else {
         query.country = new RegExp(`^${escapeRegExp(filters.country)}$`, 'i');
       }
+    }
+
+    if (Array.isArray(filters.providerUserIds)) {
+      andConditions.push({ user: { $in: filters.providerUserIds } });
     }
 
     pushRegexConditions(professionConditions, ['profession', 'skills', 'tags'], filters.profession);
@@ -608,6 +634,7 @@ class ProfessionalService {
   isBroadSearch(filters = {}) {
     return !String(filters.query || '').trim()
       && !String(filters.profession || '').trim()
+      && !String(filters.providerName || '').trim()
       && !String(filters.location || '').trim()
       && !String(filters.state || '').trim()
       && !String(filters.city || '').trim()
@@ -620,6 +647,7 @@ class ProfessionalService {
     let score = 0;
 
     const profileData = {
+      providerName: this.normalizeSearchText(profile.user?.fullName || ''),
       profession: this.normalizeSearchText(profile.profession),
       location: this.normalizeSearchText(profile.location),
       country: this.normalizeSearchText(profile.country),
@@ -645,6 +673,7 @@ class ProfessionalService {
     ].filter(Boolean).join(' ');
 
     const combinedSearchable = [
+      profileData.providerName,
       profileData.profession,
       profileData.description,
       combinedLocation,
@@ -678,6 +707,9 @@ class ProfessionalService {
             ...(filters.professionTerms || []).map((term) => this.matchWeightedText(combinedSearchable, term))
           );
     markSignal('profession', professionScore > 0, professionScore);
+    const providerNameScore = this.matchWeightedText(profileData.providerName, filters.providerName);
+    markSignal('providerName', providerNameScore > 0, providerNameScore > 0 ? providerNameScore + 90 : 0);
+
     const genericLocationScore = hasAllIndiaCoverage && String(filters.location || '').trim()
       ? 45
       : this.matchWeightedText(combinedLocation, filters.location);
@@ -718,6 +750,7 @@ class ProfessionalService {
     const activeFilters = Object.entries({
       query: filters.query,
       profession: filters.profession,
+      providerName: filters.providerName,
       location: filters.location,
       country: filters.country,
       state: filters.state,
