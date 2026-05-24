@@ -7,10 +7,9 @@ const Bookmark = require('../models/Bookmark');
 const User = require('../models/User');
 const OTPVerification = require('../models/OTPVerification');
 const authService = require('../services/authService');
+const crypto = require('crypto');
 
-const generateOtp = () => process.env.TEST_OTP || (process.env.NODE_ENV === 'production'
-  ? Math.floor(100000 + Math.random() * 900000).toString()
-  : '123456');
+const generateOtp = () => process.env.TEST_OTP || crypto.randomInt(100000, 1000000).toString();
 
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 const normalizeMobile = (value) => String(value || '').replace(/\D/g, '').slice(0, 10);

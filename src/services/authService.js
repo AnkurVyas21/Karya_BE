@@ -504,7 +504,7 @@ class AuthService {
   }
 
   async sendOTP(user, type) {
-    const otp = process.env.TEST_OTP || (process.env.NODE_ENV === 'production' ? crypto.randomInt(100000, 999999).toString() : '123456');
+    const otp = process.env.TEST_OTP || crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
     await OTPVerification.create({ user: user._id, otp, type, expiresAt });
     if (type === 'email') {
@@ -621,7 +621,7 @@ class AuthService {
       throw new Error('No account found with this email address');
     }
 
-    const otp = process.env.TEST_OTP || (process.env.NODE_ENV === 'production' ? crypto.randomInt(100000, 999999).toString() : '123456');
+    const otp = process.env.TEST_OTP || crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
     await OTPVerification.deleteMany({ user: user._id, type: 'password_reset' });
