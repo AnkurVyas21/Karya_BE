@@ -41,6 +41,7 @@ const DEFAULT_BOOKING_SLOTS = [
 
 const INDIA_TIME_ZONE = 'Asia/Kolkata';
 const cleanString = (value) => String(value || '').trim();
+const isValidEmail = (value = '') => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanString(value).toLowerCase());
 const cleanArray = (value) => Array.isArray(value)
   ? value.map((item) => cleanString(item)).filter(Boolean)
   : cleanString(value)
@@ -689,6 +690,7 @@ class ProviderWebsiteService {
     website.subcategories = cleanArray(payload.subcategories);
     website.tags = cleanArray(payload.tags);
     website.about = cleanString(payload.about);
+    website.aboutImageCaption = cleanString(payload.aboutImageCaption);
     website.yearsOfExperience = cleanNumber(payload.yearsOfExperience, website.yearsOfExperience);
     website.languages = cleanArray(payload.languages);
     website.phone = normalizeIndianPhone(payload.phone);
@@ -932,12 +934,18 @@ class ProviderWebsiteService {
       ? cleanString(payload.source)
       : 'website';
 
+    const actorUser = actorUserId ? await User.findById(actorUserId).select('email').lean() : null;
+    const customerEmail = cleanString(payload.email) || cleanString(actorUser?.email);
+
     if (!['whatsapp-click', 'call-click', 'share'].includes(source)) {
       if (!cleanString(payload.name)) {
         throw new Error('Name is required');
       }
       if (!isValidIndianPhone(payload.phone)) {
         throw new Error('Enter a valid 10-digit mobile number');
+      }
+      if (!isValidEmail(customerEmail)) {
+        throw new Error('Enter a valid email address');
       }
     }
 
@@ -950,7 +958,7 @@ class ProviderWebsiteService {
       source,
       name: cleanString(payload.name),
       phone: normalizedPhone,
-      email: cleanString(payload.email),
+      email: customerEmail,
       message: cleanString(payload.message),
       interestedService: cleanString(payload.interestedService),
       status: 'new',
@@ -1202,6 +1210,11 @@ class ProviderWebsiteService {
     if (!isValidIndianPhone(payload.customerPhone)) {
       throw new Error('Enter a valid 10-digit mobile number');
     }
+    const actorUser = actorUserId ? await User.findById(actorUserId).select('email').lean() : null;
+    const customerEmail = cleanString(payload.customerEmail) || cleanString(actorUser?.email);
+    if (!isValidEmail(customerEmail)) {
+      throw new Error('Enter a valid email address');
+    }
 
     const bookingDate = cleanString(payload.bookingDate);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(bookingDate)) {
@@ -1287,8 +1300,6 @@ class ProviderWebsiteService {
       throw new Error('This time slot does not meet the minimum advance booking time');
     }
 
-    const actorUser = actorUserId ? await User.findById(actorUserId).select('email').lean() : null;
-    const customerEmail = cleanString(payload.customerEmail) || cleanString(actorUser?.email);
     const bookingFlow = normalizeBookingFlowForWebsite(website);
     const unitBaseAmount = resolveBookingPaymentDue(website, selectedService, bookingFlow);
     const baseAmount = Number((unitBaseAmount * bookingQuantity).toFixed(2));
@@ -2420,6 +2431,8 @@ class ProviderWebsiteService {
           slug: candidate,
           summary: cleanString(item.summary),
           content: cleanString(item.content),
+          contentType: cleanString(item.contentType || item.type) === 'video' ? 'video' : 'article',
+          sourceUrl: cleanString(item.sourceUrl || item.url || item.link || item.videoUrl),
           coverImage: cleanString(item.coverImage),
           status: cleanString(item.status) === 'published' ? 'published' : 'draft',
           publishedAt: cleanString(item.status) === 'published' ? new Date() : null
@@ -2813,6 +2826,11 @@ class ProviderWebsiteService {
 
     const responseTime = reviewSummary.totalReviews > 4 ? 'Usually replies within 30 minutes' : 'Usually replies within a few hours';
     const bookingSuccess = `${Math.min(90 + Math.floor((reviewSummary.totalReviews || 0) / 2), 99)}% booking response`;
+    const completedBookingCount = await ProviderBooking.countDocuments({
+      providerId: userId,
+      status: { $in: ['confirmed', 'completed'] }
+    });
+    const happyCustomers = Math.max(reviewSummary.totalReviews || 0, completedBookingCount || 0);
     const upiQrCodeImage = website.upiQrCodeSource === 'custom' && website.upiQrCodeImage
       ? website.upiQrCodeImage
       : await this.buildWebsiteUpiQrCode(website);
@@ -2858,6 +2876,9 @@ class ProviderWebsiteService {
           averageRating: reviewSummary.averageRating,
           totalReviews: reviewSummary.totalReviews
         },
+        responseTime,
+        bookingSuccessRate: bookingSuccess,
+        happyCustomers: happyCustomers ? `${happyCustomers}+` : '',
         themeConfig: themeConfig || {},
         seoConfig: seoConfig || {},
         trustIndicators: [

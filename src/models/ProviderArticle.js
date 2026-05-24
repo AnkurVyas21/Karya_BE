@@ -7,6 +7,8 @@ const providerArticleSchema = new mongoose.Schema({
   slug: { type: String, required: true },
   summary: { type: String, default: '' },
   content: { type: String, default: '' },
+  contentType: { type: String, enum: ['article', 'video'], default: 'article' },
+  sourceUrl: { type: String, default: '' },
   coverImage: { type: String, default: '' },
   status: { type: String, enum: ['draft', 'published'], default: 'draft' },
   publishedAt: { type: Date, default: null }

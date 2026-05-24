@@ -92,6 +92,7 @@ const providerWebsiteSchema = new mongoose.Schema({
   subcategories: [{ type: String }],
   tags: [{ type: String }],
   about: { type: String, default: '' },
+  aboutImageCaption: { type: String, default: '' },
   yearsOfExperience: { type: Number, default: 0 },
   languages: [{ type: String }],
   phone: { type: String, default: '' },
