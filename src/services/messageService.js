@@ -1,6 +1,7 @@
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
+const ProviderGrowth = require('../models/ProviderGrowth');
 const messageRealtimeService = require('./messageRealtimeService');
 const { buildProfessionalSummary } = require('../utils/professionalPresenter');
 
@@ -317,7 +318,7 @@ class MessageService {
       .sort({ createdAt: 1 });
 
     return {
-      ...this.serializeConversationSummary(conversation, userId),
+      ...await this.serializeConversationSummary(conversation, userId),
       statusUpdates,
       messages: messages.map((message) => this.serializeMessage(message))
     };
@@ -443,10 +444,15 @@ class MessageService {
     };
   }
 
-  serializeConversationSummary(conversation, userId) {
+  async serializeConversationSummary(conversation, userId) {
     const profile = conversation.professionalProfile;
+    const profileUserId = profile?.user?._id || profile?.user;
+    const growthState = profileUserId
+      ? await ProviderGrowth.findOne({ user: profileUserId }).lean()
+      : null;
+    const growthSummary = this.buildConversationGrowthSummary(growthState);
     const professionalSummary = profile
-      ? buildProfessionalSummary({ profile, reviewStats: {}, bookmarkedIds: new Set() })
+      ? buildProfessionalSummary({ profile, reviewStats: {}, bookmarkedIds: new Set(), growthState: growthSummary })
       : null;
     const isSelfConversation = this.toIdString(conversation.customer) === this.toIdString(conversation.professional);
 
@@ -465,6 +471,25 @@ class MessageService {
         profilePicture: conversation.customer.profilePicture || ''
       } : null,
       professional: professionalSummary
+    };
+  }
+
+  buildConversationGrowthSummary(growthState) {
+    if (!growthState) {
+      return {};
+    }
+
+    const now = new Date();
+    const websiteExpiry = growthState.website?.expiryDate ? new Date(growthState.website.expiryDate) : null;
+    const boostExpiry = growthState.boost?.expiryDate ? new Date(growthState.boost.expiryDate) : null;
+
+    return {
+      ...growthState,
+      websiteActive: Boolean(growthState.website?.active) && (!websiteExpiry || websiteExpiry > now),
+      boostActive: Boolean(growthState.boost?.active) && (!boostExpiry || boostExpiry > now),
+      verifiedBadge: Boolean(growthState.verification?.badgeActive),
+      verificationStatus: growthState.verification?.status || 'not_started',
+      websiteSlug: growthState.websiteSlug || ''
     };
   }
 
