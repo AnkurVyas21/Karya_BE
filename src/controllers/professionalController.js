@@ -60,7 +60,24 @@ const createProfile = async (req, res) => {
 
 const searchProfessionals = async (req, res) => {
   try {
-    const { q, profession, providerName, skills, location, country, state, city, town, page = 1, limit = 12 } = req.query;
+    const {
+      q,
+      profession,
+      providerName,
+      skills,
+      location,
+      country,
+      state,
+      city,
+      town,
+      sort,
+      priceBands,
+      availableToday,
+      verifiedOnly,
+      minRating,
+      page = 1,
+      limit = 12
+    } = req.query;
     const filters = {
       query: q,
       profession,
@@ -70,7 +87,12 @@ const searchProfessionals = async (req, res) => {
       country,
       state,
       city,
-      town
+      town,
+      sort,
+      priceBands: priceBands ? String(priceBands).split(',') : [],
+      availableToday,
+      verifiedOnly,
+      minRating
     };
     const result = await professionalService.searchProfessionals(filters, page, limit, req.user?._id);
     res.json({ success: true, data: result });

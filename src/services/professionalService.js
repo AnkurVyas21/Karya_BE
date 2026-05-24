@@ -2,6 +2,8 @@ const ProfessionalProfile = require('../models/ProfessionalProfile');
 const Review = require('../models/Review');
 const Bookmark = require('../models/Bookmark');
 const User = require('../models/User');
+const ProviderWebsite = require('../models/ProviderWebsite');
+const ProviderService = require('../models/ProviderService');
 const mongoose = require('mongoose');
 const OpenAI = require('openai');
 const logger = require('../utils/logger');
@@ -64,6 +66,56 @@ const SEARCH_QUERY_STOPWORDS = new Set([
 ]);
 const ALL_INDIA_SERVICE_AREA = 'all over india';
 const ALL_INDIA_SERVICE_AREA_REGEX = /^all over india$/i;
+const INDIA_TIME_ZONE = 'Asia/Kolkata';
+
+const parseTimeToMinutes = (value = '') => {
+  const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+
+  return (hours * 60) + minutes;
+};
+
+const isWithinTimeRange = (currentMinutes, startMinutes, endMinutes) => {
+  if (startMinutes === null || endMinutes === null) {
+    return true;
+  }
+
+  if (startMinutes === endMinutes) {
+    return true;
+  }
+
+  if (startMinutes < endMinutes) {
+    return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+  }
+
+  return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
+};
+
+const getIndiaDateParts = () => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: INDIA_TIME_ZONE,
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).formatToParts(new Date());
+
+  const weekday = String(parts.find((part) => part.type === 'weekday')?.value || '').toLowerCase();
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0);
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0);
+  return {
+    weekday,
+    minutes: (hour * 60) + minute
+  };
+};
 
 class ProfessionalService {
   async createProfile(userId, profileData) {
@@ -237,7 +289,12 @@ class ProfessionalService {
       state: String(filters?.state || '').trim(),
       city: String(filters?.city || '').trim(),
       town: String(filters?.town || '').trim(),
-      skills: normalizeList(filters?.skills || [])
+      skills: normalizeList(filters?.skills || []),
+      sort: this.normalizeSearchSort(filters?.sort),
+      priceBands: normalizeList(filters?.priceBands || []),
+      availableToday: this.parseBooleanFilter(filters?.availableToday),
+      verifiedOnly: this.parseBooleanFilter(filters?.verifiedOnly),
+      minRating: Math.max(0, Number(filters?.minRating || 0))
     };
 
     if (this.isBroadSearch(normalizedFilters)) {
@@ -262,7 +319,7 @@ class ProfessionalService {
       candidates.map((profile) => profile.user?._id?.toString()).filter(Boolean)
     );
 
-    const scoredProfiles = candidates
+    let scoredProfiles = candidates
       .filter((profile) => isProfessionalProfileListable(profile))
       .map((profile) => ({
         profile,
@@ -275,24 +332,22 @@ class ProfessionalService {
       }))
       .filter(({ ranking }) => ranking.include);
 
-    scoredProfiles.sort((left, right) => {
-      if (right.ranking.matchedSignals !== left.ranking.matchedSignals) {
-        return right.ranking.matchedSignals - left.ranking.matchedSignals;
-      }
-
-      if (right.ranking.score !== left.ranking.score) {
-        return right.ranking.score - left.ranking.score;
-      }
-
-      return new Date(right.profile.createdAt || 0).getTime() - new Date(left.profile.createdAt || 0).getTime();
+    const profileIdsForRanking = scoredProfiles.map((item) => item.profile._id.toString());
+    const reviewStatsForRanking = await this.getReviewStatsMap(profileIdsForRanking);
+    const searchMetadata = await this.getSearchMetadata(scoredProfiles.map((item) => item.profile));
+    scoredProfiles = this.applySearchResultFilters(scoredProfiles, normalizedFilters, {
+      reviewStats: reviewStatsForRanking,
+      metadata: searchMetadata
     });
+    this.sortSearchResults(scoredProfiles, normalizedFilters.sort, reviewStatsForRanking);
 
     const pageNumber = Math.max(Number(page) || 1, 1);
     const pageSize = Math.max(Number(limit) || 10, 1);
     const totalDocs = scoredProfiles.length;
     const totalPages = totalDocs > 0 ? Math.ceil(totalDocs / pageSize) : 1;
     const startIndex = (pageNumber - 1) * pageSize;
-    const pagedProfiles = scoredProfiles.slice(startIndex, startIndex + pageSize).map((item) => item.profile);
+    const pagedItems = scoredProfiles.slice(startIndex, startIndex + pageSize);
+    const pagedProfiles = pagedItems.map((item) => item.profile);
 
     logger.info(`Search performed with filters: ${JSON.stringify(searchFilters)}`);
 
@@ -303,13 +358,15 @@ class ProfessionalService {
     await providerGrowthService.recordAdImpressions(shownUserIds);
 
     return {
-      docs: pagedProfiles.map((profile) => {
+      docs: pagedItems.map(({ profile }) => {
         const growthState = growthStateMap.get(profile.user?._id?.toString() || '') || {};
+        const userId = profile.user?._id?.toString() || '';
         return buildProfessionalSummary({
           profile,
           reviewStats: reviewStats[profile._id.toString()] || {},
           bookmarkedIds,
-          growthState
+          growthState,
+          effectiveStartingPrice: searchMetadata.effectivePrices.get(userId) || 0
         });
       }),
       totalDocs,
@@ -328,33 +385,54 @@ class ProfessionalService {
     const pageNumber = Math.max(Number(page) || 1, 1);
     const pageSize = Math.max(Number(limit) || 10, 1);
     const candidateQuery = this.buildSearchCandidateQuery(filters);
-    const totalDocs = await ProfessionalProfile.countDocuments(candidateQuery);
+    const candidates = await ProfessionalProfile.find(candidateQuery)
+      .populate('user')
+      .sort({ createdAt: -1 });
+
+    const listableProfiles = candidates.filter((profile) => isProfessionalProfileListable(profile));
+    const shownUserIdsForGrowth = listableProfiles.map((profile) => profile.user?._id?.toString()).filter(Boolean);
+    const growthStateMap = await providerGrowthService.getGrowthStatesForUsers(shownUserIdsForGrowth);
+    const scoredProfiles = listableProfiles.map((profile) => ({
+      profile,
+      growthState: growthStateMap.get(profile.user?._id?.toString() || '') || {},
+      ranking: {
+        include: true,
+        matchedSignals: 0,
+        score: providerGrowthService.getRankingBoost(growthStateMap.get(profile.user?._id?.toString() || '') || {})
+      }
+    }));
+    const reviewStatsForRanking = await this.getReviewStatsMap(scoredProfiles.map((item) => item.profile._id.toString()));
+    const searchMetadata = await this.getSearchMetadata(scoredProfiles.map((item) => item.profile));
+    const filteredProfiles = this.applySearchResultFilters(scoredProfiles, filters, {
+      reviewStats: reviewStatsForRanking,
+      metadata: searchMetadata
+    });
+    this.sortSearchResults(filteredProfiles, this.normalizeSearchSort(filters?.sort), reviewStatsForRanking);
+
+    const totalDocs = filteredProfiles.length;
     const totalPages = totalDocs > 0 ? Math.ceil(totalDocs / pageSize) : 1;
     const startIndex = (pageNumber - 1) * pageSize;
-
-    const pagedProfiles = await ProfessionalProfile.find(candidateQuery)
-      .populate('user')
-      .sort({ createdAt: -1 })
-      .skip(startIndex)
-      .limit(pageSize);
-
-    const listableProfiles = pagedProfiles.filter((profile) => isProfessionalProfileListable(profile));
-    const profileIds = listableProfiles.map((profile) => profile._id.toString());
+    const pagedItems = filteredProfiles.slice(startIndex, startIndex + pageSize);
+    const pagedProfiles = pagedItems.map((item) => item.profile);
+    const profileIds = pagedProfiles.map((profile) => profile._id.toString());
     const reviewStats = await this.getReviewStatsMap(profileIds);
     const bookmarkedIds = await this.getBookmarkedProfileIds(viewerId, profileIds);
-    const shownUserIds = listableProfiles.map((profile) => profile.user?._id?.toString()).filter(Boolean);
-    const growthStateMap = await providerGrowthService.getGrowthStatesForUsers(shownUserIds);
+    const shownUserIds = pagedProfiles.map((profile) => profile.user?._id?.toString()).filter(Boolean);
     await providerGrowthService.recordAdImpressions(shownUserIds);
 
     logger.info(`Broad search performed with filters: ${JSON.stringify(filters)}`);
 
     return {
-      docs: listableProfiles.map((profile) => buildProfessionalSummary({
-        profile,
-        reviewStats: reviewStats[profile._id.toString()] || {},
-        bookmarkedIds,
-        growthState: growthStateMap.get(profile.user?._id?.toString() || '') || {}
-      })),
+      docs: pagedItems.map(({ profile }) => {
+        const userId = profile.user?._id?.toString() || '';
+        return buildProfessionalSummary({
+          profile,
+          reviewStats: reviewStats[profile._id.toString()] || {},
+          bookmarkedIds,
+          growthState: growthStateMap.get(userId) || {},
+          effectiveStartingPrice: searchMetadata.effectivePrices.get(userId) || 0
+        });
+      }),
       totalDocs,
       limit: pageSize,
       page: pageNumber,
@@ -365,6 +443,203 @@ class ProfessionalService {
       prevPage: pageNumber > 1 ? pageNumber - 1 : null,
       nextPage: pageNumber < totalPages ? pageNumber + 1 : null
     };
+  }
+
+  normalizeSearchSort(value = '') {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (['rating', 'verified', 'newest', 'best'].includes(normalized)) {
+      return normalized;
+    }
+    return 'best';
+  }
+
+  parseBooleanFilter(value) {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    return ['true', '1', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+  }
+
+  async getSearchMetadata(profiles = []) {
+    const userIds = profiles
+      .map((profile) => profile.user?._id || profile.user)
+      .filter(Boolean);
+
+    if (userIds.length === 0) {
+      return {
+        effectivePrices: new Map(),
+        websites: new Map()
+      };
+    }
+
+    const [websites, servicePrices] = await Promise.all([
+      ProviderWebsite.find({ providerId: { $in: userIds } })
+        .select('providerId isPurchased status businessHours bookingWorkingDays')
+        .lean(),
+      ProviderService.aggregate([
+        {
+          $match: {
+            providerId: { $in: userIds.map((id) => new mongoose.Types.ObjectId(String(id))) },
+            isActive: true,
+            price: { $gt: 0 },
+            priceType: { $in: ['fixed', 'starting'] }
+          }
+        },
+        {
+          $group: {
+            _id: '$providerId',
+            minPrice: { $min: '$price' }
+          }
+        }
+      ])
+    ]);
+
+    const websitesByUserId = new Map();
+    websites.forEach((website) => {
+      websitesByUserId.set(String(website.providerId || ''), website);
+    });
+
+    const servicePriceByUserId = new Map();
+    servicePrices.forEach((item) => {
+      servicePriceByUserId.set(String(item._id || ''), Number(item.minPrice || 0));
+    });
+
+    const effectivePrices = new Map();
+    profiles.forEach((profile) => {
+      const userId = profile.user?._id?.toString?.() || profile.user?.toString?.() || '';
+      const baseCharge = Number(profile.charges?.baseCharge || 0);
+      const visitingCharge = Number(profile.charges?.visitingCharge || 0);
+      const website = websitesByUserId.get(userId);
+      const websiteServicePrice = website && (website.isPurchased || website.status === 'published')
+        ? Number(servicePriceByUserId.get(userId) || 0)
+        : 0;
+      effectivePrices.set(userId, baseCharge || websiteServicePrice || visitingCharge || 0);
+    });
+
+    return {
+      effectivePrices,
+      websites: websitesByUserId
+    };
+  }
+
+  applySearchResultFilters(scoredProfiles = [], filters = {}, context = {}) {
+    const priceBands = normalizeList(filters.priceBands || []);
+    const minRating = Math.max(0, Number(filters.minRating || 0));
+    const reviewStats = context.reviewStats || {};
+    const metadata = context.metadata || { effectivePrices: new Map(), websites: new Map() };
+
+    return scoredProfiles.filter(({ profile, growthState }) => {
+      const profileId = profile._id.toString();
+      const userId = profile.user?._id?.toString?.() || profile.user?.toString?.() || '';
+
+      if (filters.verifiedOnly && !growthState?.verifiedBadge) {
+        return false;
+      }
+
+      if (minRating > 0 && Number(reviewStats[profileId]?.averageRating || 0) < minRating) {
+        return false;
+      }
+
+      if (priceBands.length > 0 && !this.matchesPriceBands(Number(metadata.effectivePrices.get(userId) || 0), priceBands)) {
+        return false;
+      }
+
+      if (filters.availableToday && !this.isAvailableFromWebsiteToday(metadata.websites.get(userId))) {
+        return false;
+      }
+
+      return true;
+    });
+  }
+
+  matchesPriceBands(amount, priceBands = []) {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return false;
+    }
+
+    return priceBands.some((band) => {
+      if (band === 'under2000') return amount < 2000;
+      if (band === '2000to10000') return amount >= 2000 && amount <= 10000;
+      if (band === '10000to30000') return amount > 10000 && amount <= 30000;
+      if (band === 'above30000') return amount > 30000;
+      return false;
+    });
+  }
+
+  isAvailableFromWebsiteToday(website = null) {
+    if (!website || !(website.isPurchased || website.status === 'published')) {
+      return false;
+    }
+
+    const { weekday, minutes } = getIndiaDateParts();
+    const dayMatches = (value = '') => {
+      const normalized = String(value || '').trim().toLowerCase();
+      return normalized === weekday || normalized.slice(0, 3) === weekday.slice(0, 3);
+    };
+
+    const businessHours = Array.isArray(website.businessHours) ? website.businessHours : [];
+    const todayHours = businessHours.find((item) => dayMatches(item.day));
+    if (todayHours) {
+      if (todayHours.isOpen === false) {
+        return false;
+      }
+
+      const openMinutes = parseTimeToMinutes(todayHours.openTime);
+      const closeMinutes = parseTimeToMinutes(todayHours.closeTime);
+      const breakStart = parseTimeToMinutes(todayHours.breakStartTime);
+      const breakEnd = parseTimeToMinutes(todayHours.breakEndTime);
+      const inBusinessHours = isWithinTimeRange(minutes, openMinutes, closeMinutes);
+      const inBreak = breakStart !== null && breakEnd !== null && isWithinTimeRange(minutes, breakStart, breakEnd);
+      return inBusinessHours && !inBreak;
+    }
+
+    const bookingWorkingDays = Array.isArray(website.bookingWorkingDays) ? website.bookingWorkingDays : [];
+    return bookingWorkingDays.length > 0 && bookingWorkingDays.some(dayMatches);
+  }
+
+  sortSearchResults(scoredProfiles = [], sort = 'best', reviewStats = {}) {
+    const createdAtTime = (profile) => new Date(profile.createdAt || 0).getTime();
+    const ratingValue = (profile) => Number(reviewStats[profile._id.toString()]?.averageRating || 0);
+    const reviewCount = (profile) => Number(reviewStats[profile._id.toString()]?.reviewCount || 0);
+    const bestScore = (item) => [
+      item.growthState?.boostActive ? 1 : 0,
+      item.ranking.matchedSignals,
+      item.ranking.score,
+      item.growthState?.verifiedBadge ? 1 : 0,
+      ratingValue(item.profile),
+      reviewCount(item.profile),
+      createdAtTime(item.profile)
+    ];
+    const compareTuple = (leftTuple, rightTuple) => {
+      for (let index = 0; index < leftTuple.length; index += 1) {
+        if (rightTuple[index] !== leftTuple[index]) {
+          return rightTuple[index] - leftTuple[index];
+        }
+      }
+      return 0;
+    };
+
+    scoredProfiles.sort((left, right) => {
+      if (sort === 'newest') {
+        return createdAtTime(right.profile) - createdAtTime(left.profile);
+      }
+
+      if (sort === 'rating') {
+        return compareTuple(
+          [ratingValue(left.profile), reviewCount(left.profile), left.ranking.score, createdAtTime(left.profile)],
+          [ratingValue(right.profile), reviewCount(right.profile), right.ranking.score, createdAtTime(right.profile)]
+        );
+      }
+
+      if (sort === 'verified') {
+        return compareTuple(
+          [left.growthState?.verifiedBadge ? 1 : 0, left.ranking.score, ratingValue(left.profile), createdAtTime(left.profile)],
+          [right.growthState?.verifiedBadge ? 1 : 0, right.ranking.score, ratingValue(right.profile), createdAtTime(right.profile)]
+        );
+      }
+
+      return compareTuple(bestScore(left), bestScore(right));
+    });
   }
 
   async aiSearch(input) {

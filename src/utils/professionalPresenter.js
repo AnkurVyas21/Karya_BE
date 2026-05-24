@@ -129,7 +129,7 @@ const buildCallStatus = ({ profile = {}, mobile = '' }) => {
   };
 };
 
-const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Set(), growthState = {} }) => {
+const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Set(), growthState = {}, effectiveStartingPrice = 0 }) => {
   const user = profile.user || {};
   const charges = profile.charges || {};
   const rating = reviewStats.averageRating || 0;
@@ -179,6 +179,7 @@ const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Se
       nightCharge: toCurrency(charges.nightCharge),
       emergencyCharge: toCurrency(charges.emergencyCharge)
     },
+    effectiveStartingPrice: toCurrency(effectiveStartingPrice),
     allowContactDisplay: Boolean(profile.allowContactDisplay),
     callStatus,
     missingRequiredFields: completion.missingRequiredFields,
