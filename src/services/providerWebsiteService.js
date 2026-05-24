@@ -2838,6 +2838,7 @@ class ProviderWebsiteService {
     return {
       id: website._id.toString(),
       providerId: userId,
+      profileId: profile?._id?.toString?.() || '',
       fullName: user?.fullName || '',
       mobile: cleanString(user?.mobile),
       email: cleanString(user?.email),
