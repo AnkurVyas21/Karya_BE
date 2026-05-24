@@ -3,13 +3,17 @@ class MessageRealtimeService {
     this.clientsByUser = new Map();
   }
 
-  registerClient(userId, res) {
+  registerClient(userId, res, options = {}) {
     const key = userId.toString();
     const clients = this.clientsByUser.get(key) || new Set();
+    const wasOffline = !clients.size;
     clients.add(res);
     this.clientsByUser.set(key, clients);
 
     this.sendEvent(res, 'connected', { ok: true });
+    if (wasOffline && typeof options.onPresenceChange === 'function') {
+      options.onPresenceChange(true);
+    }
 
     const heartbeat = setInterval(() => {
       this.sendEvent(res, 'heartbeat', { ts: new Date().toISOString() });
@@ -17,7 +21,10 @@ class MessageRealtimeService {
 
     const cleanup = () => {
       clearInterval(heartbeat);
-      this.unregisterClient(key, res);
+      const hasConnections = this.unregisterClient(key, res);
+      if (!hasConnections && typeof options.onPresenceChange === 'function') {
+        options.onPresenceChange(false);
+      }
     };
 
     res.on('close', cleanup);
@@ -34,7 +41,9 @@ class MessageRealtimeService {
     clients.delete(res);
     if (!clients.size) {
       this.clientsByUser.delete(key);
+      return false;
     }
+    return true;
   }
 
   hasConnections(userId) {

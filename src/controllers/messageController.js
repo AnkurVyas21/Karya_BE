@@ -42,6 +42,30 @@ const emitMessageEventToParticipants = (conversation, eventName, message) => {
   }
 };
 
+const emitPresenceForUser = async (userId, online) => {
+  const conversations = await messageService.listConversationParticipantIds(userId);
+  const emittedTo = new Set([userId.toString()]);
+
+  for (const conversation of conversations) {
+    const participantIds = [
+      conversation.customerId,
+      conversation.professionalId
+    ].filter(Boolean);
+
+    for (const participantId of participantIds) {
+      const key = participantId.toString();
+      if (emittedTo.has(key)) {
+        continue;
+      }
+      emittedTo.add(key);
+      messageRealtimeService.emitToUser(participantId, 'presence.updated', {
+        userId: userId.toString(),
+        online
+      });
+    }
+  }
+};
+
 const getConversations = async (req, res) => {
   try {
     const conversations = await messageService.listConversations(req.user._id, req.user.role);
@@ -180,6 +204,26 @@ const reactToMessage = async (req, res) => {
   }
 };
 
+const sendTyping = async (req, res) => {
+  try {
+    const participants = await messageService.getConversationParticipants(req.params.id, req.user._id);
+    const senderId = req.user._id.toString();
+    const recipientId = participants.customerId === senderId ? participants.professionalId : participants.customerId;
+
+    if (recipientId) {
+      messageRealtimeService.emitToUser(recipientId, 'message.typing', {
+        conversationId: participants.conversationId,
+        userId: senderId,
+        userName: req.user.fullName || 'User'
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const streamMessages = async (req, res) => {
   try {
     const user = await authenticateStreamUser(req);
@@ -191,7 +235,11 @@ const streamMessages = async (req, res) => {
     res.flushHeaders?.();
     res.write('retry: 5000\n\n');
 
-    messageRealtimeService.registerClient(user._id, res);
+    messageRealtimeService.registerClient(user._id, res, {
+      onPresenceChange: (online) => {
+        emitPresenceForUser(user._id, online).catch(() => undefined);
+      }
+    });
     const deliveredUpdates = await messageService.markMessagesDeliveredForUser(user._id);
     emitStatusUpdates(deliveredUpdates);
   } catch (error) {
@@ -208,5 +256,6 @@ module.exports = {
   updateMessage,
   deleteMessage,
   reactToMessage,
+  sendTyping,
   streamMessages
 };

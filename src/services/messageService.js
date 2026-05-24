@@ -324,6 +324,34 @@ class MessageService {
     };
   }
 
+  async getConversationParticipants(conversationId, userId) {
+    const conversation = await Conversation.findById(conversationId).populate('customer').populate('professional');
+    if (!conversation) {
+      throw new Error('Conversation not found');
+    }
+
+    await this.assertParticipant(conversation, userId);
+    return {
+      conversationId: conversation._id.toString(),
+      customerId: this.toIdString(conversation.customer),
+      professionalId: this.toIdString(conversation.professional)
+    };
+  }
+
+  async listConversationParticipantIds(userId) {
+    const conversations = await Conversation.find({
+      $or: [
+        { customer: userId, customerDeletedAt: null },
+        { professional: userId, professionalDeletedAt: null }
+      ]
+    }).select('customer professional').lean();
+
+    return conversations.map((conversation) => ({
+      customerId: this.toIdString(conversation.customer),
+      professionalId: this.toIdString(conversation.professional)
+    }));
+  }
+
   async markConversationAsRead(conversationOrId, userId) {
     const conversation = typeof conversationOrId === 'string'
       ? await Conversation.findById(conversationOrId)
@@ -463,6 +491,8 @@ class MessageService {
       lastMessage: conversation.lastMessage,
       lastMessageAt: conversation.lastMessageAt,
       unreadCount: this.getUnreadCountForViewer(conversation, userId),
+      customerOnline: conversation.customer ? messageRealtimeService.hasConnections(conversation.customer._id || conversation.customer) : false,
+      professionalOnline: conversation.professional ? messageRealtimeService.hasConnections(conversation.professional._id || conversation.professional) : false,
       customer: conversation.customer ? {
         id: conversation.customer._id?.toString?.() || conversation.customer.toString(),
         fullName: conversation.customer.fullName || '',
