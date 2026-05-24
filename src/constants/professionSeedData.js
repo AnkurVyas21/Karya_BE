@@ -95,6 +95,12 @@ module.exports = [
     relatedProfessions: ['Cleaner', 'Tailor', 'Leather Repair Service']
   },
   {
+    canonicalName: 'House Cleaner',
+    aliases: ['Maid', 'Housekeeper', 'Domestic Help', 'Home Cleaner', 'Cleaning Maid', 'Ghar Ki Safai Wali', '\u0918\u0930 \u0915\u0940 \u0938\u092b\u093e\u0908 \u0935\u093e\u0932\u0940'],
+    tags: ['maid', 'housekeeper', 'house cleaning', 'home cleaning', 'domestic help', 'cleaner', 'safai'],
+    relatedProfessions: ['Cleaner', 'Cook', 'Security Guard']
+  },
+  {
     canonicalName: 'Web Developer',
     aliases: ['Website Developer', 'Website Maker', 'Website Builder', 'Web Designer Developer', 'web developer', 'website banane wala', 'website develop karne wala'],
     tags: ['web developer', 'website development', 'website', 'web', 'developer', 'develop website', 'frontend', 'backend'],

@@ -25,6 +25,25 @@ const uniqueStrings = (values = []) => [...new Set(
     .map((value) => String(value || '').trim())
     .filter(Boolean)
 )];
+const nonCityLocationPhrases = new Set([
+  'me',
+  'near me',
+  'my house',
+  'my home',
+  'home',
+  'house',
+  'my location',
+  'current location',
+  'here',
+  'there'
+]);
+const cleanCitySuggestion = (value = '') => {
+  const city = String(value || '').trim();
+  if (!city) {
+    return '';
+  }
+  return nonCityLocationPhrases.has(city.toLowerCase().replace(/\s+/g, ' ')) ? '' : city;
+};
 
 class AiSearchService {
   async inferSearch(options = {}) {
@@ -109,6 +128,7 @@ class AiSearchService {
   buildPrompt(problem, professionInference, selectedLocation, currentLocation) {
     return [
       'You extract only location filters for a local-services marketplace.',
+      'Do not treat generic phrases like "my house", "my home", "home", "house", "near me", "here", or "current location" as a city.',
       'The profession candidates are already inferred semantically and should be copied from the provided suggestions.',
       `Suggested professions: ${JSON.stringify(uniqueStrings([professionInference.suggestedProfession, ...(professionInference.similarProfessions || [])]))}`,
       'Return JSON only.',
@@ -189,6 +209,7 @@ class AiSearchService {
   async askOpenAi(problem, professionInference, selectedLocation, currentLocation) {
     const instructions = [
       'You extract only location filters for a local-services marketplace.',
+      'Do not treat generic phrases like "my house", "my home", "home", "house", "near me", "here", or "current location" as a city.',
       'The profession candidates are already inferred semantically and should be copied from the provided suggestions.',
       'Return JSON only.',
       'Use only this shape:',
@@ -258,8 +279,8 @@ class AiSearchService {
     const fallbackLocation = this.pickLocationFallback(rawSuggestion.locationSource, context.selectedLocation, context.currentLocation);
     const country = String(rawSuggestion.country || fallbackLocation.country || '').trim();
     const state = String(rawSuggestion.state || fallbackLocation.state || '').trim();
-    const city = String(rawSuggestion.city || fallbackLocation.city || '').trim();
-    const town = String(rawSuggestion.town || rawSuggestion.area || fallbackLocation.town || '').trim();
+    const city = cleanCitySuggestion(rawSuggestion.city || fallbackLocation.city || '');
+    const town = cleanCitySuggestion(rawSuggestion.town || rawSuggestion.area || fallbackLocation.town || '');
     const matchedProfession = inferredProfessions[0] || '';
 
     return {
@@ -342,7 +363,7 @@ class AiSearchService {
       .trim()
       .replace(/\s+/g, ' ');
 
-    if (!cleaned) {
+    if (!cleaned || !cleanCitySuggestion(cleaned)) {
       return {};
     }
 
