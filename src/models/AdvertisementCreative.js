@@ -11,6 +11,8 @@ const advertisementCreativeSchema = new mongoose.Schema({
   level: { type: String, enum: ['city', 'state', 'national'], required: true, index: true },
   city: { type: String, default: '', index: true },
   state: { type: String, default: '', index: true },
+  cities: [{ type: String, index: true }],
+  states: [{ type: String, index: true }],
   categories: [{ type: String, index: true }],
 
   imagePath: { type: String, required: true },

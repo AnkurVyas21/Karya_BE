@@ -7,6 +7,19 @@ const cleanString = (value) => String(value || '').trim();
 
 const normalizeCity = (value) => cleanString(value).replace(/\s+/g, ' ');
 const normalizeState = (value) => cleanString(value).replace(/\s+/g, ' ');
+const normalizeLocationList = (values = []) => {
+  const raw = Array.isArray(values) ? values : String(values || '').split(',');
+  const seen = new Set();
+  const result = [];
+  for (const value of raw) {
+    const normalized = cleanString(value).replace(/\s+/g, ' ');
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+  }
+  return result;
+};
 const normalizeCategory = (value) => cleanString(value).replace(/\s+/g, ' ').slice(0, 80);
 const normalizeCategoryKey = (value) => normalizeCategory(value).toLowerCase();
 const normalizeCategories = (values = []) => {
@@ -152,6 +165,8 @@ class AdvertisementCreativeService {
       level: String(item.level || ''),
       city: item.city || '',
       state: item.state || '',
+      cities: normalizeLocationList(item.cities),
+      states: normalizeLocationList(item.states),
       categories: Array.isArray(item.categories) ? item.categories : [],
       status: item.status || '',
       matchedByQuery: true,
@@ -200,12 +215,16 @@ class AdvertisementCreativeService {
     const normalizedState = normalizeState(state);
     const campaignType = cleanString(pack.campaignType).toLowerCase() === 'category' ? 'category' : 'location';
     const normalizedCategories = normalizeCategories((Array.isArray(categories) && categories.length > 0) ? categories : pack.categories);
+    const packCities = normalizeLocationList(pack.cities);
+    const packStates = normalizeLocationList(pack.states);
+    const targetCities = level === 'city' ? normalizeLocationList(packCities.length ? packCities : [normalizedCity || pack.city]) : [];
+    const targetStates = level === 'city' || level === 'state' ? normalizeLocationList(packStates.length ? packStates : [normalizedState || pack.state]) : [];
 
-    if (level === 'city' && !normalizedCity) {
+    if (level === 'city' && targetCities.length === 0) {
       throw new Error('City is required for city-level advertisements');
     }
 
-    if (level === 'state' && !normalizedState) {
+    if ((level === 'city' || level === 'state') && targetStates.length === 0) {
       throw new Error('State is required for state-level advertisements');
     }
 
@@ -231,8 +250,10 @@ class AdvertisementCreativeService {
       advertisementId: String(advertisementId),
       campaignType,
       level,
-      city: normalizedCity,
-      state: normalizedState,
+      city: level === 'city' ? targetCities[0] || '' : '',
+      state: level === 'city' || level === 'state' ? targetStates[0] || '' : '',
+      cities: targetCities,
+      states: targetStates,
       categories: campaignType === 'category' ? normalizedCategories : [],
       imagePath: cleanString(imagePath),
       imageWidth: Number(imageWidth || 0),
@@ -289,6 +310,9 @@ class AdvertisementCreativeService {
           completedAt: pack.completedAt || null,
           deletedAt: pack.deletedAt || null,
           deletionNote: pack.deletionNote || '',
+          cities: normalizeLocationList(pack.cities),
+          states: normalizeLocationList(pack.states),
+          durationDays: Number(pack.durationDays || 30),
           paused: Boolean(pack.paused),
           pausedAt: pack.pausedAt || null,
           pauseNote: pack.pauseNote || '',
@@ -331,6 +355,8 @@ class AdvertisementCreativeService {
       level: item.level,
       city: item.city || '',
       state: item.state || '',
+      cities: normalizeLocationList(item.cities),
+      states: normalizeLocationList(item.states),
       categories: Array.isArray(item.categories) ? item.categories : [],
       status: item.status,
       rejectionReason: item.rejectionReason || '',
@@ -377,6 +403,8 @@ class AdvertisementCreativeService {
       level: creative.level,
       city: creative.city || '',
       state: creative.state || '',
+      cities: normalizeLocationList(creative.cities),
+      states: normalizeLocationList(creative.states),
       categories: Array.isArray(creative.categories) ? creative.categories : [],
       status: creative.status,
       rejectionReason: creative.rejectionReason || '',
@@ -611,10 +639,12 @@ class AdvertisementCreativeService {
     } else {
       const locationClauses = shouldShowLocalOnly ? [] : [{ level: 'national', campaignType: { $ne: 'category' } }];
       if (normalizedCity) {
-        locationClauses.push({ level: 'city', campaignType: { $ne: 'category' }, city: { $regex: `^${escapeRegex(normalizedCity)}$`, $options: 'i' } });
+        const cityMatch = { $regex: `^${escapeRegex(normalizedCity)}$`, $options: 'i' };
+        locationClauses.push({ level: 'city', campaignType: { $ne: 'category' }, $or: [{ city: cityMatch }, { cities: cityMatch }] });
       }
       if (normalizedState) {
-        locationClauses.push({ level: 'state', campaignType: { $ne: 'category' }, state: { $regex: `^${escapeRegex(normalizedState)}$`, $options: 'i' } });
+        const stateMatch = { $regex: `^${escapeRegex(normalizedState)}$`, $options: 'i' };
+        locationClauses.push({ level: 'state', campaignType: { $ne: 'category' }, $or: [{ state: stateMatch }, { states: stateMatch }] });
       }
       if (normalizedProfession && ['search', 'category'].includes(cleanString(placement).toLowerCase())) {
         const categoryMatch = { $regex: `^${escapeRegex(normalizedProfession)}$`, $options: 'i' };
@@ -622,10 +652,12 @@ class AdvertisementCreativeService {
           locationClauses.push({ level: 'national', campaignType: 'category', categories: categoryMatch });
         }
         if (normalizedCity) {
-          locationClauses.push({ level: 'city', campaignType: 'category', city: { $regex: `^${escapeRegex(normalizedCity)}$`, $options: 'i' }, categories: categoryMatch });
+          const cityMatch = { $regex: `^${escapeRegex(normalizedCity)}$`, $options: 'i' };
+          locationClauses.push({ level: 'city', campaignType: 'category', $or: [{ city: cityMatch }, { cities: cityMatch }], categories: categoryMatch });
         }
         if (normalizedState) {
-          locationClauses.push({ level: 'state', campaignType: 'category', state: { $regex: `^${escapeRegex(normalizedState)}$`, $options: 'i' }, categories: categoryMatch });
+          const stateMatch = { $regex: `^${escapeRegex(normalizedState)}$`, $options: 'i' };
+          locationClauses.push({ level: 'state', campaignType: 'category', $or: [{ state: stateMatch }, { states: stateMatch }], categories: categoryMatch });
         }
       }
       if (locationClauses.length === 0) {
@@ -679,7 +711,7 @@ class AdvertisementCreativeService {
     for (const doc of growthDocs) {
       for (const ad of doc.advertisements || []) {
         const runStart = getAdRunStart(ad);
-        const expired = runStart ? new Date(runStart).getTime() + (30 * 24 * 60 * 60 * 1000) <= now.getTime() : false;
+        const expired = runStart ? new Date(runStart).getTime() + (Number(ad.durationDays || 30) * 24 * 60 * 60 * 1000) <= now.getTime() : false;
         const hasRemainingImpressions = Number(ad.impressionsUsed || 0) < Number(ad.impressionsTotal || 0);
         const packState = {
           id: String(ad._id),
@@ -772,6 +804,8 @@ class AdvertisementCreativeService {
         level: item.level,
         city: item.city || '',
         state: item.state || '',
+        cities: normalizeLocationList(item.cities),
+        states: normalizeLocationList(item.states),
         categories: Array.isArray(item.categories) ? item.categories : [],
         imagePath: item.imagePath,
         imageWidth: Number(item.imageWidth || 0),
@@ -875,6 +909,8 @@ class AdvertisementCreativeService {
         level: row.level,
         city: row.city || '',
         state: row.state || '',
+        cities: normalizeLocationList(row.cities),
+        states: normalizeLocationList(row.states),
         categories: Array.isArray(row.categories) ? row.categories : [],
         status: row.status,
         views: Number(row.views || 0),

@@ -5,6 +5,8 @@ const advertisementSchema = new mongoose.Schema({
   level: { type: String, enum: ['city', 'state', 'national'], required: true },
   city: { type: String, default: '' },
   state: { type: String, default: '' },
+  cities: [{ type: String }],
+  states: [{ type: String }],
   categories: [{ type: String }],
   planId: { type: String, required: true },
   planName: { type: String, required: true },
@@ -22,7 +24,8 @@ const advertisementSchema = new mongoose.Schema({
   completedAt: { type: Date, default: null },
   deletedAt: { type: Date, default: null },
   deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-  deletionNote: { type: String, default: '' }
+  deletionNote: { type: String, default: '' },
+  durationDays: { type: Number, default: 30 }
 }, { _id: true });
 
 const purchaseTransactionSchema = new mongoose.Schema({

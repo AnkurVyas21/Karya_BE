@@ -167,6 +167,21 @@ const paymentMethodLabel = (value) => {
 };
 const normalizeCity = (value) => cleanString(value).replace(/\s+/g, ' ');
 const normalizeState = (value) => cleanString(value).replace(/\s+/g, ' ');
+const normalizeLocationList = (values = []) => {
+  const raw = Array.isArray(values) ? values : String(values || '').split(',');
+  const seen = new Set();
+  const result = [];
+  for (const value of raw) {
+    const normalized = cleanString(value).replace(/\s+/g, ' ');
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(normalized);
+  }
+  return result;
+};
 const normalizeCategory = (value) => cleanString(value).replace(/\s+/g, ' ').slice(0, 80);
 const normalizeCategories = (values = []) => {
   const raw = Array.isArray(values) ? values : String(values || '').split(',');
@@ -250,7 +265,7 @@ class ProviderGrowthService {
         changed = true;
       }
       const runStart = getAdRunStart(ad);
-      if (ad.status === 'active' && runStart && addDays(new Date(runStart), 30) < now) {
+      if (ad.status === 'active' && runStart && addDays(new Date(runStart), Number(ad.durationDays || 30)) < now) {
         ad.status = 'completed';
         ad.completedAt = ad.completedAt || now;
         changed = true;
@@ -320,14 +335,17 @@ class ProviderGrowthService {
       level: item.level,
       city: cleanString(item.city),
       state: cleanString(item.state),
+      cities: normalizeLocationList(item.cities),
+      states: normalizeLocationList(item.states),
       categories: Array.isArray(item.categories) ? item.categories : [],
       planId: item.planId,
       planName: item.planName,
       amount: item.amount,
+      durationDays: Number(item.durationDays || 30),
       impressionsTotal: item.impressionsTotal,
       impressionsUsed: item.impressionsUsed,
       impressionsRemaining: Math.max(Number(item.impressionsTotal || 0) - Number(item.impressionsUsed || 0), 0),
-      expiresAt: getAdRunStart(item) ? addDays(new Date(getAdRunStart(item)), 30) : null,
+      expiresAt: getAdRunStart(item) ? addDays(new Date(getAdRunStart(item)), Number(item.durationDays || 30)) : null,
       startsAt: getAdRunStart(item),
       status: item.status,
       paused: Boolean(item.paused),
@@ -606,12 +624,28 @@ class ProviderGrowthService {
       const campaignType = cleanString(payload.campaignType).toLowerCase() === 'category' ? 'category' : 'location';
       const scheduleMode = cleanString(payload.scheduleMode).toLowerCase();
       const extendFromAdId = cleanString(payload.extendFromAdId);
-      const city = normalizeCity(payload.city);
-      const stateName = normalizeState(payload.state);
+      const cities = normalizeLocationList(payload.cities);
+      const states = normalizeLocationList(payload.states);
+      const city = normalizeCity(payload.city) || cities[0] || '';
+      const stateName = normalizeState(payload.state) || states[0] || '';
       const categories = normalizeCategories(payload.categories);
       const plan = ADVERTISEMENT_PLANS.find((item) => item.id === planId);
       const validLevel = ADVERTISEMENT_LEVELS.find((item) => item.id === level);
-      const amount = campaignType === 'category' ? Number(plan?.categoryPrice || plan?.price || 0) : Number(plan?.price || 0);
+      const requestedDurationDays = Number(payload.durationDays || plan?.durationDays || 30);
+      const durationDays = [30, 60, 90, 120, 150, 180].includes(requestedDurationDays)
+        ? requestedDurationDays
+        : Number(plan?.durationDays || 30);
+      const durationMonths = Math.max(1, Math.round(durationDays / 30));
+      const durationDiscount = durationDays >= 180 ? 20 : durationDays >= 90 ? 10 : 0;
+      const baseAmount = campaignType === 'category' ? Number(plan?.categoryPrice || plan?.price || 0) : Number(plan?.price || 0);
+      const computedAmount = Math.round(baseAmount * durationMonths * (1 - durationDiscount / 100));
+      const amount = Number(payload.amount || 0) > 0 ? Number(payload.amount) : computedAmount;
+      const targetStates = level === 'city' || level === 'state'
+        ? normalizeLocationList(states.length ? states : [stateName])
+        : [];
+      const targetCities = level === 'city'
+        ? normalizeLocationList(cities.length ? cities : [city])
+        : [];
 
       if (!plan || !validLevel) {
         throw new Error('Invalid advertisement level or plan');
@@ -619,11 +653,11 @@ class ProviderGrowthService {
       if (campaignType === 'category' && categories.length === 0) {
         throw new Error('Select at least one category or profession for category-based advertisements');
       }
-      if (level === 'city' && !city) {
-        throw new Error('City is required for city-level advertisements');
+      if (level === 'city' && targetCities.length === 0) {
+        throw new Error('At least one city is required for city-level advertisements');
       }
-      if (level === 'state' && !stateName) {
-        throw new Error('State is required for state-level advertisements');
+      if ((level === 'city' || level === 'state') && targetStates.length === 0) {
+        throw new Error('At least one state is required for this advertisement');
       }
 
       let startsAt = now;
@@ -634,7 +668,8 @@ class ProviderGrowthService {
           throw new Error('Could not find the running advertisement to extend from');
         }
         const baseRunStart = getAdRunStart(baseAd);
-        startsAt = baseRunStart ? addDays(new Date(baseRunStart), 30) : addDays(now, 30);
+        const baseDurationDays = Number(baseAd.durationDays || 30);
+        startsAt = baseRunStart ? addDays(new Date(baseRunStart), baseDurationDays) : addDays(now, baseDurationDays);
         if (startsAt > now) {
           status = 'scheduled';
         }
@@ -643,8 +678,10 @@ class ProviderGrowthService {
       state.advertisements.push({
         campaignType,
         level,
-        city: level === 'city' ? city : '',
-        state: level === 'city' || level === 'state' ? stateName : '',
+        city: level === 'city' ? targetCities[0] || '' : '',
+        state: level === 'city' || level === 'state' ? targetStates[0] || '' : '',
+        cities: targetCities,
+        states: targetStates,
         categories: campaignType === 'category' ? categories : [],
         planId: plan.id,
         planName: `${validLevel.label} - ${campaignType === 'category' ? plan.name.replace('Ad', 'Category Ad') : plan.name}`,
@@ -654,7 +691,8 @@ class ProviderGrowthService {
         status,
         startsAt,
         extendFromAdId,
-        createdAt: now
+        createdAt: now,
+        durationDays
       });
       const createdAd = state.advertisements[state.advertisements.length - 1];
       this.recordPurchaseTransaction(state, {
@@ -671,15 +709,19 @@ class ProviderGrowthService {
         autoRenew: payload.autoRenew,
         paidAt: now,
         startsAt,
-        expiresAt: addDays(new Date(startsAt), Number(plan.durationDays || 30)),
+        expiresAt: addDays(new Date(startsAt), durationDays),
         metadata: {
           campaignType,
           level,
-          city: level === 'city' ? city : '',
-          state: level === 'city' || level === 'state' ? stateName : '',
+          city: level === 'city' ? targetCities[0] || '' : '',
+          state: level === 'city' || level === 'state' ? targetStates[0] || '' : '',
+          cities: targetCities,
+          states: targetStates,
           categories: campaignType === 'category' ? categories : [],
           impressionsTotal: plan.impressions,
-          durationDays: Number(plan.durationDays || 30)
+          durationDays,
+          durationMonths,
+          discountPercent: durationDiscount
         }
       });
       await state.save();
@@ -695,8 +737,10 @@ class ProviderGrowthService {
                 professionalProfile: sourceCreative.professionalProfile || null,
                 advertisementId: String(createdAd._id),
                 level,
-                city: level === 'city' ? city : '',
-                state: level === 'city' || level === 'state' ? stateName : '',
+                city: level === 'city' ? targetCities[0] || '' : '',
+                state: level === 'city' || level === 'state' ? targetStates[0] || '' : '',
+                cities: targetCities,
+                states: targetStates,
                 campaignType,
                 categories: campaignType === 'category' ? categories : [],
                 imagePath: sourceCreative.imagePath,
@@ -848,7 +892,7 @@ class ProviderGrowthService {
       : null;
     const status = this.resolvePurchaseStatus(transaction, state, relatedAd);
     const startsAt = transaction.startsAt || relatedAd?.startsAt || relatedAd?.createdAt || transaction.paidAt || transaction.createdAt;
-    const expiresAt = transaction.expiresAt || (relatedAd ? addDays(new Date(getAdRunStart(relatedAd)), 30) : null);
+    const expiresAt = transaction.expiresAt || (relatedAd ? addDays(new Date(getAdRunStart(relatedAd)), Number(relatedAd.durationDays || 30)) : null);
     const paidAt = transaction.paidAt || transaction.createdAt || startsAt;
 
     const item = {
@@ -1038,7 +1082,7 @@ class ProviderGrowthService {
     (state.advertisements || []).forEach((ad) => {
       const relatedId = ad._id.toString();
       const startsAt = getAdRunStart(ad);
-      const expiresAt = startsAt ? addDays(new Date(startsAt), 30) : null;
+      const expiresAt = startsAt ? addDays(new Date(startsAt), Number(ad.durationDays || 30)) : null;
       const status = ad.status === 'active' && ad.paused ? 'paused' : cleanString(ad.status || 'active');
       addLegacy({
         id: relatedId,
@@ -1064,7 +1108,10 @@ class ProviderGrowthService {
           level: ad.level,
           city: ad.city,
           state: ad.state,
-          categories: ad.categories || []
+          cities: normalizeLocationList(ad.cities),
+          states: normalizeLocationList(ad.states),
+          categories: ad.categories || [],
+          durationDays: Number(ad.durationDays || 30)
         }
       });
     });
