@@ -1435,14 +1435,16 @@ class ProviderWebsiteService {
       await booking.save();
     }
 
+    const bookingId = booking._id.toString();
+
     await notificationService.createNotification({
       userId: website.providerId,
       type: 'booking',
       title: 'New booking request',
       body: `${cleanString(payload.customerName) || 'A customer'} requested a booking for ${publicWebsite.website?.businessName || 'your business page'}.`,
-      linkPath: '/provider/customer-requests?tab=bookings',
+      linkPath: `/provider/customer-requests?tab=bookings&bookingId=${bookingId}`,
       metadata: {
-        bookingId: booking._id.toString(),
+        bookingId,
         slug: website.slug,
         transactionId: transaction?._id?.toString?.() || ''
       }
@@ -1454,9 +1456,9 @@ class ProviderWebsiteService {
         type: 'booking',
         title: 'Booking request sent',
         body: `Your booking request was sent to ${publicWebsite.website?.businessName || 'this provider'}.`,
-        linkPath: '/my-requests?tab=bookings',
+        linkPath: `/my-requests?tab=bookings&bookingId=${bookingId}`,
         metadata: {
-          bookingId: booking._id.toString(),
+          bookingId,
           providerId: website.providerId.toString(),
           slug: website.slug
         }
@@ -3194,14 +3196,15 @@ class ProviderWebsiteService {
     const offerInfo = await this.getBookingOfferInfo(booking);
 
     if (booking.customerUserId) {
+      const bookingId = booking._id.toString();
       await notificationService.createNotification({
         userId: booking.customerUserId,
         type: 'booking',
         title: `Booking ${statusLabel}`,
         body: `Your booking with ${providerName} is ${statusLabel}.`,
-        linkPath: website?.slug ? `/business/${website.slug}` : '',
+        linkPath: `/my-requests?tab=bookings&bookingId=${bookingId}`,
         metadata: {
-          bookingId: booking._id.toString(),
+          bookingId,
           providerId: providerUserId.toString(),
           status: cleanString(status)
         }

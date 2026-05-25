@@ -7,15 +7,28 @@ class NotificationService {
       return null;
     }
 
+    const metadata = item.metadata || {};
+    const bookingId = String(metadata.bookingId || '').trim();
+    const status = String(metadata.status || '').trim();
+    let linkPath = String(item.linkPath || '').trim();
+    if (
+      String(item.type || '').trim() === 'booking'
+      && bookingId
+      && linkPath.startsWith('/business/')
+      && ['completed', 'cancelled', 'rejected'].includes(status)
+    ) {
+      linkPath = `/my-requests?tab=bookings&bookingId=${bookingId}`;
+    }
+
     return {
       id: item._id?.toString?.() || String(item.id || ''),
       userId: item.userId?.toString?.() || String(item.userId || ''),
       type: String(item.type || 'system'),
       title: String(item.title || '').trim(),
       body: String(item.body || '').trim(),
-      linkPath: String(item.linkPath || '').trim(),
+      linkPath,
       isRead: Boolean(item.isRead),
-      metadata: item.metadata || {},
+      metadata,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt
     };
