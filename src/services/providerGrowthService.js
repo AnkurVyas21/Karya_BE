@@ -42,11 +42,19 @@ const BOOST_REACH_OPTIONS = [
 const BOOST_DURATION_OPTIONS = [
   { id: 'week', label: '1 week', multiplier: 1, durationDays: 7, durationMonths: 0 },
   { id: 'month', label: '1 month', multiplier: 2, durationDays: 30, durationMonths: 1 },
+  { id: '2months', label: '2 months', multiplier: 4, durationDays: 60, durationMonths: 2 },
+  { id: '3months', label: '3 months', multiplier: 6, durationDays: 90, durationMonths: 3 },
+  { id: '4months', label: '4 months', multiplier: 8, durationDays: 120, durationMonths: 4 },
+  { id: '5months', label: '5 months', multiplier: 10, durationDays: 150, durationMonths: 5 },
   { id: '12months', label: '12 months', multiplier: 12, durationDays: 360, durationMonths: 12 }
 ];
 
 const WEBSITE_BILLING_OPTIONS = [
   { id: 'website-1m', durationMonths: 1, monthlyPrice: 299 },
+  { id: 'website-2m', durationMonths: 2, monthlyPrice: 279 },
+  { id: 'website-3m', durationMonths: 3, monthlyPrice: 269 },
+  { id: 'website-4m', durationMonths: 4, monthlyPrice: 259 },
+  { id: 'website-5m', durationMonths: 5, monthlyPrice: 249 },
   { id: 'website-6m', durationMonths: 6, monthlyPrice: 249 },
   { id: 'website-12m', durationMonths: 12, monthlyPrice: 199 }
 ];
@@ -475,9 +483,11 @@ class ProviderGrowthService {
       const selectedReach = BOOST_REACH_OPTIONS.find((option) => option.id === cleanString(payload.reach).toLowerCase()) || BOOST_REACH_OPTIONS[0];
       const selectedDuration = BOOST_DURATION_OPTIONS.find((option) => option.id === cleanString(payload.durationId).toLowerCase()) || BOOST_DURATION_OPTIONS[0];
       const amount = selectedReach.weekPrice * selectedDuration.multiplier;
-      const expiresAt = addDays(now, selectedDuration.durationDays);
+      const currentExpiry = state.boost?.expiryDate ? new Date(state.boost.expiryDate) : null;
+      const startsAt = currentExpiry && currentExpiry > now ? currentExpiry : now;
+      const expiresAt = addDays(startsAt, selectedDuration.durationDays);
       state.boost.active = true;
-      state.boost.startDate = now;
+      state.boost.startDate = startsAt;
       state.boost.expiryDate = expiresAt;
       state.boost.monthlyPrice = selectedDuration.durationMonths > 0 ? Math.round(amount / selectedDuration.durationMonths) : amount;
       state.boost.amount = amount;
@@ -499,7 +509,7 @@ class ProviderGrowthService {
         autoPay: payload.autoPay,
         autoRenew: payload.autoRenew,
         paidAt: now,
-        startsAt: now,
+        startsAt,
         expiresAt,
         metadata: {
           reach: selectedReach.id,
@@ -518,13 +528,15 @@ class ProviderGrowthService {
       const selectedPlan = WEBSITE_BILLING_OPTIONS.find((option) => option.durationMonths === requestedMonths) || WEBSITE_BILLING_OPTIONS[0];
       const durationDays = selectedPlan.durationMonths * 30;
       const amount = selectedPlan.monthlyPrice * selectedPlan.durationMonths;
-      const expiresAt = addDays(now, durationDays);
+      const currentExpiry = state.website?.expiryDate ? new Date(state.website.expiryDate) : null;
+      const startsAt = currentExpiry && currentExpiry > now ? currentExpiry : now;
+      const expiresAt = addDays(startsAt, durationDays);
       state.website.active = true;
-      state.website.startDate = now;
+      state.website.startDate = startsAt;
       state.website.expiryDate = expiresAt;
       state.website.monthlyPrice = selectedPlan.monthlyPrice;
       state.boost.active = true;
-      state.boost.startDate = now;
+      state.boost.startDate = startsAt;
       state.boost.expiryDate = expiresAt;
       if (!state.website.headline || !state.website.description) {
         const profile = await ProfessionalProfile.findOne({ user: userId }).lean();
@@ -544,7 +556,7 @@ class ProviderGrowthService {
         autoPay: payload.autoPay,
         autoRenew: payload.autoRenew,
         paidAt: now,
-        startsAt: now,
+        startsAt,
         expiresAt,
         metadata: {
           durationMonths: selectedPlan.durationMonths,
