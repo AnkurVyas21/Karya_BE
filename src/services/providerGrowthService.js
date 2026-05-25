@@ -4,6 +4,7 @@ const ProfessionalProfile = require('../models/ProfessionalProfile');
 const AdvertisementCreative = require('../models/AdvertisementCreative');
 const logger = require('../utils/logger');
 const advertisementCreativeService = require('./advertisementCreativeService');
+const notificationService = require('./notificationService');
 
 const BOOST_PLAN = {
   id: 'boost',
@@ -427,8 +428,10 @@ class ProviderGrowthService {
       verification: {
         ...VERIFICATION_PLAN,
         status: this.getVerificationStatus(state),
+        statusLabel: this.getVerificationStatus(state),
         badgeActive: Boolean(state.verification?.badgeActive),
         feePaid: Boolean(state.verification?.feePaid),
+        documentsUploaded: Boolean(state.verification?.aadhaarDocument),
         paidAt: state.verification?.paidAt || null,
         rejectionReason: cleanString(state.verification?.rejectionReason),
         reviewerNotes: cleanString(state.verification?.reviewerNotes),
@@ -464,9 +467,11 @@ class ProviderGrowthService {
 
   getVerificationStatus(state) {
     const status = cleanString(state?.verification?.status || 'not_started');
-    if (status === 'approved') return 'Verified';
+    if (status === 'approved' && state?.verification?.badgeActive) return 'Verified';
     if (status === 'pending') return 'Under review';
     if (status === 'rejected') return 'Rejected';
+    if (state?.verification?.feePaid && !state?.verification?.submittedAt) return 'Upload document pending';
+    if (state?.verification?.feePaid) return 'Payment completed';
     return 'Not verified';
   }
 
@@ -590,6 +595,13 @@ class ProviderGrowthService {
     }
 
     if (feature === 'verification') {
+      if (this.hasVerificationBadge(state)) {
+        throw new Error('Verification badge is already active. You do not need to pay again unless your verified details change.');
+      }
+      if (state.verification?.feePaid) {
+        throw new Error('Verification payment is already completed. Please upload your documents to continue.');
+      }
+
       state.verification.feePaid = true;
       state.verification.paidAt = now;
       if (state.verification.status === 'not_started') {
@@ -614,6 +626,17 @@ class ProviderGrowthService {
         }
       });
       await state.save();
+      await notificationService.createNotification({
+        userId,
+        type: 'verification',
+        title: 'Upload document pending',
+        body: 'Your verification payment is complete. Upload your Aadhaar document to start manual review.',
+        linkPath: '/provider/verify',
+        metadata: {
+          status: 'document_upload_pending',
+          feature: 'verification'
+        }
+      });
       logger.info(`Verification fee marked paid for provider ${userId}`);
       return this.getDashboard(userId);
     }
@@ -859,6 +882,17 @@ class ProviderGrowthService {
     }
 
     await state.save();
+    await notificationService.createNotification({
+      userId,
+      type: 'verification',
+      title: 'Verification submitted',
+      body: 'Your documents were submitted successfully and are now under manual review.',
+      linkPath: '/provider/verify',
+      metadata: {
+        status: 'pending',
+        feature: 'verification'
+      }
+    });
     logger.info(`Verification submitted for provider ${userId}`);
     return this.getDashboard(userId);
   }
