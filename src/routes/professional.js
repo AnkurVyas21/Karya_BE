@@ -16,6 +16,7 @@ const {
   getWebsitePreviewBySlug,
   getWebsiteBookingSlots,
   getWebsiteManager,
+  getWebsiteManagerSummary,
   getMyRequests,
   checkWebsiteSlugAvailability,
   saveWebsiteManager,
@@ -60,6 +61,7 @@ router.post('/profile/contact/verify-otp', authMiddleware, roleMiddleware(['prof
 router.get('/dashboard/summary', authMiddleware, roleMiddleware(['professional', 'admin']), getDashboardSummary);
 router.get('/growth/dashboard', authMiddleware, roleMiddleware(['professional', 'admin']), getGrowthDashboard);
 router.get('/growth/activity', authMiddleware, roleMiddleware(['professional', 'admin']), getGrowthActivity);
+router.get('/growth/website-manager/summary', authMiddleware, roleMiddleware(['professional', 'admin']), getWebsiteManagerSummary);
 router.get('/growth/website-manager', authMiddleware, roleMiddleware(['professional', 'admin']), getWebsiteManager);
 router.get('/growth/website-manager/slug-availability', authMiddleware, roleMiddleware(['professional', 'admin']), checkWebsiteSlugAvailability);
 router.post('/growth/activate', authMiddleware, roleMiddleware(['professional']), activateGrowthFeature);

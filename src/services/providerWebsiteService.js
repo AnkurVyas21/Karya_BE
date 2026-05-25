@@ -15,6 +15,7 @@ const ProviderThemeConfig = require('../models/ProviderThemeConfig');
 const ProviderSEOConfig = require('../models/ProviderSEOConfig');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
 const Review = require('../models/Review');
+const SiteVisit = require('../models/SiteVisit');
 const User = require('../models/User');
 const logger = require('../utils/logger');
 const providerGrowthService = require('./providerGrowthService');
@@ -611,6 +612,34 @@ class ProviderWebsiteService {
   async getManager(userId) {
     const website = await this.getOrCreateWebsite(userId);
     return this.buildManagerResponse(userId, website);
+  }
+
+  async getManagerSummary(userId) {
+    const [website, profile, leads, bookings, leadCount, bookingCount, inquiryCount, callbackCount] = await Promise.all([
+      this.getOrCreateWebsite(userId),
+      ProfessionalProfile.findOne({ user: userId }).lean(),
+      ProviderLead.find({ providerId: userId }).sort({ createdAt: -1 }).limit(30).lean(),
+      ProviderBooking.find({ providerId: userId }).sort({ createdAt: -1 }).limit(30).lean(),
+      ProviderLead.countDocuments({ providerId: userId }),
+      ProviderBooking.countDocuments({ providerId: userId }),
+      ProviderLead.countDocuments({ providerId: userId, source: { $in: ['website', 'inquiry'] } }),
+      ProviderLead.countDocuments({ providerId: userId, source: 'callback' })
+    ]);
+
+    const weekly = await this.buildWeeklyRequestStats(userId, website, profile);
+
+    return {
+      stats: {
+        inquiriesCount: inquiryCount,
+        callbacksCount: callbackCount,
+        leadsCount: leadCount,
+        bookingsCount: bookingCount,
+        viewsCount: Number(profile?.viewCount || 0),
+        weekly
+      },
+      leads,
+      bookings
+    };
   }
 
   async saveManager(userId, rawPayload = {}, files = {}) {
@@ -2761,6 +2790,7 @@ class ProviderWebsiteService {
         leadsCount: leadCount,
         bookingsCount: bookingCount,
         viewsCount: Number(profile?.viewCount || 0),
+        weekly: await this.buildWeeklyRequestStats(userId, website, profile),
         serviceCount: services.length,
         productCount: products.length,
         articleCount: articles.length
@@ -2802,6 +2832,51 @@ class ProviderWebsiteService {
         descriptionPromptSeed: [website.businessName, website.category, website.city].filter(Boolean).join(' | '),
         aiHooks: ['descriptionDraft', 'serviceTagSuggestion', 'voiceProfileImport']
       }
+    };
+  }
+
+  async buildWeeklyRequestStats(userId, website = {}, profile = null) {
+    const now = new Date();
+    const currentStart = new Date(now);
+    currentStart.setDate(currentStart.getDate() - 7);
+    const previousStart = new Date(now);
+    previousStart.setDate(previousStart.getDate() - 14);
+    const currentRange = { $gte: currentStart, $lte: now };
+    const previousRange = { $gte: previousStart, $lt: currentStart };
+    const profilePaths = [
+      profile?._id ? `/provider/${profile._id}` : '',
+      website?.slug ? `/provider/site/${website.slug}` : '',
+      website?.slug ? `/business/${website.slug}` : ''
+    ].filter(Boolean);
+    const profileViewMatch = profilePaths.length
+      ? { path: { $in: profilePaths } }
+      : { pageType: 'provider-profile', path: /\/provider\// };
+
+    const [
+      viewsCurrent,
+      viewsPrevious,
+      inquiriesCurrent,
+      inquiriesPrevious,
+      callbacksCurrent,
+      callbacksPrevious,
+      bookingsCurrent,
+      bookingsPrevious
+    ] = await Promise.all([
+      SiteVisit.countDocuments({ ...profileViewMatch, createdAt: currentRange }),
+      SiteVisit.countDocuments({ ...profileViewMatch, createdAt: previousRange }),
+      ProviderLead.countDocuments({ providerId: userId, source: { $in: ['website', 'inquiry'] }, createdAt: currentRange }),
+      ProviderLead.countDocuments({ providerId: userId, source: { $in: ['website', 'inquiry'] }, createdAt: previousRange }),
+      ProviderLead.countDocuments({ providerId: userId, source: 'callback', createdAt: currentRange }),
+      ProviderLead.countDocuments({ providerId: userId, source: 'callback', createdAt: previousRange }),
+      ProviderBooking.countDocuments({ providerId: userId, createdAt: currentRange }),
+      ProviderBooking.countDocuments({ providerId: userId, createdAt: previousRange })
+    ]);
+
+    return {
+      views: { current: viewsCurrent, previous: viewsPrevious },
+      inquiries: { current: inquiriesCurrent, previous: inquiriesPrevious },
+      callbacks: { current: callbacksCurrent, previous: callbacksPrevious },
+      bookings: { current: bookingsCurrent, previous: bookingsPrevious }
     };
   }
 

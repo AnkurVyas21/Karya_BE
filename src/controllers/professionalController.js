@@ -273,6 +273,15 @@ const getWebsiteManager = async (req, res) => {
   }
 };
 
+const getWebsiteManagerSummary = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.getManagerSummary(req.user._id);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const getMyRequests = async (req, res) => {
   try {
     const data = await providerWebsiteService.getMyRequests(req.user._id);
@@ -661,6 +670,7 @@ module.exports = {
   getWebsitePreviewBySlug,
   getWebsiteBookingSlots,
   getWebsiteManager,
+  getWebsiteManagerSummary,
   getMyRequests,
   checkWebsiteSlugAvailability,
   saveWebsiteManager,
