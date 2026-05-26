@@ -6,6 +6,9 @@ const logger = require('../utils/logger');
 const { getProfileCompletionState } = require('../utils/accountPresenter');
 const advertisementCreativeService = require('./advertisementCreativeService');
 const notificationService = require('./notificationService');
+const receiptEmailService = require('./receiptEmailService');
+const receiptPdfService = require('./receiptPdfService');
+const websitePaymentService = require('./websitePaymentService');
 
 const BOOST_PLAN = {
   id: 'boost',
@@ -167,6 +170,31 @@ const paymentMethodLabel = (value) => {
   };
   return labels[normalizePaymentMethod(value)] || labels.unknown;
 };
+const escapeHtml = (value) => cleanString(value)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+const formatInr = (value) => `Rs ${Number(value || 0).toLocaleString('en-IN')}`;
+const formatIndiaDateTime = (value) => {
+  if (!value) {
+    return '-';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
+  return new Intl.DateTimeFormat('en-IN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'Asia/Kolkata'
+  }).format(date);
+};
+const safeFilenamePart = (value) => cleanString(value)
+  .replace(/[^a-zA-Z0-9_-]/g, '-')
+  .replace(/-+/g, '-')
+  .slice(0, 80) || 'receipt';
 const normalizeCity = (value) => cleanString(value).replace(/\s+/g, ' ');
 const normalizeState = (value) => cleanString(value).replace(/\s+/g, ' ');
 const normalizeLocationList = (values = []) => {
@@ -499,8 +527,142 @@ class ProviderGrowthService {
       paidAt: payload.paidAt || new Date(),
       startsAt: payload.startsAt || null,
       expiresAt: payload.expiresAt || null,
+      receipt: payload.receipt || {},
       metadata: payload.metadata || {}
     });
+    return state.purchaseTransactions[state.purchaseTransactions.length - 1];
+  }
+
+  receiptPrefixForFeature(feature = '') {
+    if (feature === 'boost') return 'BST';
+    if (feature === 'website') return 'WEB';
+    if (feature === 'advertisement') return 'ADS';
+    if (feature === 'verification') return 'VER';
+    return 'RCPT';
+  }
+
+  preparePurchaseReceipt(transaction) {
+    if (!transaction) {
+      return null;
+    }
+
+    transaction.receipt = transaction.receipt || {};
+    transaction.receipt.receiptNumber = transaction.receipt.receiptNumber
+      || websitePaymentService.buildReceiptNumber(this.receiptPrefixForFeature(cleanString(transaction.feature)));
+    transaction.receipt.issuedAt = transaction.receipt.issuedAt || new Date();
+    return transaction;
+  }
+
+  buildPurchaseReceiptRows({ user = {}, profile = {}, transaction = {} } = {}) {
+    const customerName = cleanString(user?.fullName) || cleanString(profile?.fullName) || 'Provider';
+    const providerName = cleanString(profile?.businessName) || cleanString(profile?.companyName) || customerName;
+    const metadata = transaction.metadata || {};
+    const rows = [
+      { label: 'Receipt No.', value: cleanString(transaction.receipt?.receiptNumber) },
+      { label: 'Provider name', value: providerName },
+      { label: 'Customer name', value: customerName },
+      { label: 'Feature', value: this.featureLabel(cleanString(transaction.feature)) },
+      { label: 'Plan type', value: cleanString(transaction.planName) || cleanString(transaction.label) || this.featureLabel(cleanString(transaction.feature)) },
+      { label: 'Plan ID', value: cleanString(transaction.planId) || '-' },
+      { label: 'Amount paid', value: formatInr(transaction.amount) },
+      { label: 'Payment mode', value: paymentMethodLabel(transaction.paymentMethod) },
+      { label: 'Payment reference', value: cleanString(transaction.paymentReference) || '-' },
+      { label: 'Purchase date', value: formatIndiaDateTime(transaction.paidAt || transaction.createdAt) },
+      { label: 'Plan starts', value: formatIndiaDateTime(transaction.startsAt || transaction.paidAt || transaction.createdAt) },
+      { label: 'Expiry date', value: transaction.expiresAt ? formatIndiaDateTime(transaction.expiresAt) : 'No expiry / one-time purchase' },
+      { label: 'Payment status', value: 'Paid' },
+      { label: 'Plan status', value: cleanString(transaction.status || 'active') },
+      { label: 'Billing', value: transaction.autoPay ? 'Auto pay enabled' : 'One-time payment' },
+      { label: 'Renewal', value: transaction.autoRenew ? 'Auto renew enabled' : 'Manual renewal' }
+    ];
+
+    if (metadata.durationDays || metadata.durationMonths) {
+      rows.push({ label: 'Duration', value: metadata.durationMonths ? `${metadata.durationMonths} month(s)` : `${metadata.durationDays} day(s)` });
+    }
+    if (metadata.reach || metadata.level) {
+      rows.push({ label: 'Reach', value: cleanString(metadata.reach || metadata.level) });
+    }
+    if (metadata.impressionsTotal) {
+      rows.push({ label: 'Impressions', value: Number(metadata.impressionsTotal || 0).toLocaleString('en-IN') });
+    }
+    if (metadata.includesBoost) {
+      rows.push({ label: 'Included benefit', value: 'Visibility Boost included with website plan' });
+    }
+
+    rows.push({ label: 'Issued at', value: formatIndiaDateTime(transaction.receipt?.issuedAt) });
+    return rows;
+  }
+
+  buildPurchaseReceiptEmailHtml({ user = {}, profile = {}, transaction = {}, rows = [] } = {}) {
+    const customerName = cleanString(user?.fullName) || cleanString(profile?.fullName) || 'Provider';
+    const planName = cleanString(transaction.planName) || cleanString(transaction.label) || this.featureLabel(cleanString(transaction.feature));
+    const rowHtml = rows.map((row) => `
+      <tr>
+        <td style="padding:12px 14px;background:#f8fafc;color:#667085;border-bottom:1px solid #eef2f7">${escapeHtml(row.label)}</td>
+        <td style="padding:12px 14px;border-bottom:1px solid #eef2f7"><strong>${escapeHtml(row.value)}</strong></td>
+      </tr>
+    `).join('');
+
+    return `
+      <div style="margin:0;background:#f3f6fb;padding:24px;font-family:Arial,sans-serif;color:#111827">
+        <div style="max-width:680px;margin:0 auto;background:#fff;border:1px solid #dbe7fb;border-radius:14px;overflow:hidden">
+          <div style="padding:22px 24px;background:#155dfc;color:#fff">
+            <p style="margin:0 0 6px;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Nasdiya payment receipt</p>
+            <h1 style="margin:0;font-size:24px;line-height:1.25">Payment received for ${escapeHtml(planName)}</h1>
+          </div>
+          <div style="padding:22px 24px">
+            <p style="margin:0 0 16px;line-height:1.6">Hi ${escapeHtml(customerName)}, your purchase is confirmed. A PDF receipt is attached with your plan and payment details.</p>
+            <table role="presentation" cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;border:1px solid #eef2f7;border-radius:10px;overflow:hidden">${rowHtml}</table>
+            <p style="margin:18px 0 0;color:#667085;font-size:13px;line-height:1.6">Keep this receipt for your records. Contact Nasdiya support if any detail looks incorrect.</p>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  async sendPurchaseReceipt(userId, transaction) {
+    if (!transaction) {
+      return false;
+    }
+
+    try {
+      const [user, profile] = await Promise.all([
+        User.findById(userId).lean(),
+        ProfessionalProfile.findOne({ user: userId }).lean()
+      ]);
+      const email = cleanString(user?.email);
+      if (!email || /@social\.karya\.local$/i.test(email)) {
+        return false;
+      }
+
+      const prepared = this.preparePurchaseReceipt(transaction);
+      const rows = this.buildPurchaseReceiptRows({ user, profile, transaction: prepared });
+      const receiptNumber = cleanString(prepared.receipt?.receiptNumber);
+      const planName = cleanString(prepared.planName) || cleanString(prepared.label) || this.featureLabel(cleanString(prepared.feature));
+      const attachment = receiptPdfService.buildAttachment({
+        filename: `nasdiya-${safeFilenamePart(receiptNumber || planName)}`,
+        title: 'Nasdiya payment receipt',
+        subtitle: `${planName} - ${formatInr(prepared.amount)}`,
+        rows
+      });
+      const sent = await receiptEmailService.sendReceipt({
+        to: [email],
+        subject: `Nasdiya receipt ${receiptNumber || ''}`.trim(),
+        html: this.buildPurchaseReceiptEmailHtml({ user, profile, transaction: prepared, rows }),
+        attachments: [attachment]
+      });
+
+      if (sent && prepared._id) {
+        await ProviderGrowth.updateOne(
+          { user: userId, 'purchaseTransactions._id': prepared._id },
+          { $set: { 'purchaseTransactions.$.receipt.emailedAt': new Date() } }
+        );
+      }
+      return sent;
+    } catch (error) {
+      logger.warn(`Purchase receipt email failed for provider ${userId}: ${error.message}`);
+      return false;
+    }
   }
 
   async activateFeature(userId, payload = {}) {
@@ -525,7 +687,7 @@ class ProviderGrowthService {
       state.boost.state = selectedReach.id === 'city' || selectedReach.id === 'state' ? cleanString(payload.state) : '';
       state.boost.durationId = selectedDuration.id;
       state.boost.durationDays = selectedDuration.durationDays;
-      this.recordPurchaseTransaction(state, {
+      const purchaseTransaction = this.recordPurchaseTransaction(state, {
         feature,
         relatedId: `boost-${now.getTime()}`,
         planId: `boost-${selectedReach.id}-${selectedDuration.id}`,
@@ -547,7 +709,9 @@ class ProviderGrowthService {
           monthlyPrice: state.boost.monthlyPrice
         }
       });
+      this.preparePurchaseReceipt(purchaseTransaction);
       await state.save();
+      await this.sendPurchaseReceipt(userId, purchaseTransaction);
       logger.info(`Boost activated for provider ${userId}`);
       return this.getDashboard(userId);
     }
@@ -572,7 +736,7 @@ class ProviderGrowthService {
         state.website.headline = state.website.headline || cleanString(profile?.profession || 'My Service Website');
         state.website.description = state.website.description || cleanString(profile?.description);
       }
-      this.recordPurchaseTransaction(state, {
+      const purchaseTransaction = this.recordPurchaseTransaction(state, {
         feature,
         relatedId: `website-${now.getTime()}`,
         planId: selectedPlan.id,
@@ -594,8 +758,10 @@ class ProviderGrowthService {
           includesBoost: true
         }
       });
+      this.preparePurchaseReceipt(purchaseTransaction);
       await state.save();
       await this.ensureWebsiteSlug(state, userId);
+      await this.sendPurchaseReceipt(userId, purchaseTransaction);
       logger.info(`Website plan activated for provider ${userId}`);
       return this.getDashboard(userId);
     }
@@ -613,7 +779,7 @@ class ProviderGrowthService {
       if (state.verification.status === 'not_started') {
         state.verification.reviewerNotes = 'Payment received. Upload documents to start verification.';
       }
-      this.recordPurchaseTransaction(state, {
+      const purchaseTransaction = this.recordPurchaseTransaction(state, {
         feature,
         relatedId: `verification-${now.getTime()}`,
         planId: VERIFICATION_PLAN.id,
@@ -631,7 +797,9 @@ class ProviderGrowthService {
           billing: VERIFICATION_PLAN.billing
         }
       });
+      this.preparePurchaseReceipt(purchaseTransaction);
       await state.save();
+      await this.sendPurchaseReceipt(userId, purchaseTransaction);
       await notificationService.createNotification({
         userId,
         type: 'verification',
@@ -724,7 +892,7 @@ class ProviderGrowthService {
         durationDays
       });
       const createdAd = state.advertisements[state.advertisements.length - 1];
-      this.recordPurchaseTransaction(state, {
+      const purchaseTransaction = this.recordPurchaseTransaction(state, {
         feature,
         relatedId: createdAd?._id ? String(createdAd._id) : '',
         planId: plan.id,
@@ -753,7 +921,9 @@ class ProviderGrowthService {
           discountPercent: durationDiscount
         }
       });
+      this.preparePurchaseReceipt(purchaseTransaction);
       await state.save();
+      await this.sendPurchaseReceipt(userId, purchaseTransaction);
 
       if (extendFromAdId && createdAd?._id) {
         const sourceCreative = await AdvertisementCreative.findOne({ user: userId, advertisementId: extendFromAdId });
@@ -953,6 +1123,11 @@ class ProviderGrowthService {
       paymentMethod: normalizePaymentMethod(transaction.paymentMethod),
       paymentMethodLabel: paymentMethodLabel(transaction.paymentMethod),
       paymentReference: cleanString(transaction.paymentReference),
+      receipt: {
+        receiptNumber: cleanString(transaction.receipt?.receiptNumber),
+        issuedAt: transaction.receipt?.issuedAt || null,
+        emailedAt: transaction.receipt?.emailedAt || null
+      },
       autoPay: Boolean(transaction.autoPay),
       autoRenew: Boolean(transaction.autoRenew),
       billingMode: transaction.autoPay ? 'Auto pay' : 'One-time payment',

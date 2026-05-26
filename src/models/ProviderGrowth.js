@@ -44,6 +44,11 @@ const purchaseTransactionSchema = new mongoose.Schema({
   paidAt: { type: Date, default: Date.now },
   startsAt: { type: Date, default: null },
   expiresAt: { type: Date, default: null },
+  receipt: {
+    receiptNumber: { type: String, default: '' },
+    issuedAt: { type: Date, default: null },
+    emailedAt: { type: Date, default: null }
+  },
   metadata: { type: mongoose.Schema.Types.Mixed, default: () => ({}) }
 }, { _id: true, timestamps: true });
 
