@@ -1,6 +1,7 @@
 const ProviderGrowth = require('../models/ProviderGrowth');
 const User = require('../models/User');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
+const Review = require('../models/Review');
 const AdvertisementCreative = require('../models/AdvertisementCreative');
 const logger = require('../utils/logger');
 const { getProfileCompletionState } = require('../utils/accountPresenter');
@@ -389,6 +390,19 @@ class ProviderGrowthService {
     });
 
     const completionState = getProfileCompletionState(user, profile);
+    const reviewStats = profile?._id
+      ? await Review.aggregate([
+        { $match: { professional: profile._id } },
+        {
+          $group: {
+            _id: '$professional',
+            averageRating: { $avg: '$rating' },
+            reviewCount: { $sum: 1 }
+          }
+        }
+      ])
+      : [];
+    const reviewOverview = reviewStats[0] || {};
 
     return {
       freeSignup: {
@@ -417,6 +431,8 @@ class ProviderGrowthService {
         activeSince: profile?.createdAt || user?.createdAt || null,
         profilePicture: cleanString(profile?.profilePicture),
         profileViews: Number(profile?.viewCount || 0),
+        averageRating: Number(Number(reviewOverview.averageRating || 0).toFixed(1)),
+        reviewCount: Number(reviewOverview.reviewCount || 0),
         websiteUrlPath: websiteSlug ? `/provider/site/${websiteSlug}` : '',
         missingRequiredFields: completionState.missingRequiredFields,
         isProfileComplete: completionState.isProfileComplete,
