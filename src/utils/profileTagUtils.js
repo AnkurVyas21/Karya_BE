@@ -260,9 +260,9 @@ const deriveProfileTags = ({
     .filter(Boolean);
   const professionAnchors = uniqueStrings([
     sanitizeTag(profession) || profession,
+    ...providedTags,
     ...relatedProfessionTags,
-    ...specializationTags,
-    ...providedTags
+    ...specializationTags
   ]).filter(Boolean);
   const relevantDescriptionTags = uniqueStrings([
     ...descriptionPhrases,
@@ -277,9 +277,9 @@ const deriveProfileTags = ({
 
   return uniqueStrings([
     sanitizeTag(profession) || profession,
+    ...providedTags,
     ...relatedProfessionTags,
     ...specializationTags,
-    ...providedTags,
     ...relevantDescriptionTags,
     ...locationTags
   ]);

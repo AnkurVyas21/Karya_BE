@@ -3,6 +3,7 @@ const User = require('../models/User');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
 const AdvertisementCreative = require('../models/AdvertisementCreative');
 const logger = require('../utils/logger');
+const { getProfileCompletionState } = require('../utils/accountPresenter');
 const advertisementCreativeService = require('./advertisementCreativeService');
 const notificationService = require('./notificationService');
 
@@ -359,6 +360,8 @@ class ProviderGrowthService {
       createdAt: item.createdAt
     });
 
+    const completionState = getProfileCompletionState(user, profile);
+
     return {
       freeSignup: {
         enabled: true,
@@ -375,7 +378,10 @@ class ProviderGrowthService {
         profilePicture: cleanString(profile?.profilePicture),
         profileViews: Number(profile?.viewCount || 0),
         websiteUrlPath: websiteSlug ? `/provider/site/${websiteSlug}` : '',
-        isProfileComplete: Boolean(profile?.profession && (profile?.location || profile?.city || profile?.state))
+        missingRequiredFields: completionState.missingRequiredFields,
+        isProfileComplete: completionState.isProfileComplete,
+        isListed: completionState.isListed,
+        completionPercent: completionState.isProfileComplete ? 100 : 46
       },
       boost: {
         ...BOOST_PLAN,

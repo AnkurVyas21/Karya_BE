@@ -147,7 +147,7 @@ class ProfessionCatalogService {
         0
       );
       return score >= 0.18;
-    }).slice(0, 8);
+    }).slice(0, 12);
   }
 
   normalizeProfessionKey(value = '') {
@@ -522,7 +522,38 @@ class ProfessionCatalogService {
       return '';
     }
 
-    const existing = await this.findBestProfessionMatch(cleaned);
+    const preserveInput = options.preserveInput === true;
+    const entries = preserveInput ? await this.getAllProfessionEntries() : null;
+    const exactCanonical = entries?.find((entry) => this.normalizeProfessionKey(entry.canonicalName || entry.name || '') === this.normalizeProfessionKey(cleaned));
+    if (exactCanonical) {
+      return exactCanonical.canonicalName || exactCanonical.name || cleaned;
+    }
+
+    const existing = preserveInput
+      ? this.findBestProfessionMatchSync(cleaned, entries || [])
+      : await this.findBestProfessionMatch(cleaned);
+    if (preserveInput && existing && this.normalizeProfessionKey(existing.canonicalName || existing.name || '') !== this.normalizeProfessionKey(cleaned)) {
+      await ProfessionCatalog.updateOne(
+        { normalizedKey: this.normalizeProfessionKey(cleaned) },
+        {
+          $setOnInsert: {
+            canonicalName: cleaned,
+            normalizedKey: this.normalizeProfessionKey(cleaned),
+            normalizedName: this.normalizeProfessionKey(cleaned),
+            source: options.source || 'learned'
+          },
+          $addToSet: {
+            aliases: { $each: uniqueStrings(options.aliases || []) },
+            tags: { $each: uniqueStrings(options.tags || []) },
+            relatedProfessions: { $each: uniqueStrings(options.relatedProfessions || []) }
+          }
+        },
+        { upsert: true }
+      );
+      this.invalidateCache();
+      return cleaned;
+    }
+
     if (existing) {
       return existing.canonicalName || existing.name || '';
     }

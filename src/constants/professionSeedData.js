@@ -98,7 +98,7 @@ module.exports = [
     canonicalName: 'House Cleaner',
     aliases: ['Maid', 'Housekeeper', 'Domestic Help', 'Home Cleaner', 'Cleaning Maid', 'Ghar Ki Safai Wali', '\u0918\u0930 \u0915\u0940 \u0938\u092b\u093e\u0908 \u0935\u093e\u0932\u0940'],
     tags: ['maid', 'housekeeper', 'house cleaning', 'home cleaning', 'domestic help', 'cleaner', 'safai'],
-    relatedProfessions: ['Cleaner', 'Cook', 'Security Guard']
+    relatedProfessions: ['Cleaner', 'Security Guard']
   },
   {
     canonicalName: 'Web Developer',
