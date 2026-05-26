@@ -615,7 +615,7 @@ class ProviderWebsiteService {
   }
 
   async getManagerSummary(userId) {
-    const [website, profile, leads, bookings, leadCount, bookingCount, inquiryCount, callbackCount] = await Promise.all([
+    const [website, profile, leads, bookings, leadCount, bookingCount, inquiryCount, callbackCount, reviewSummary] = await Promise.all([
       this.getOrCreateWebsite(userId),
       ProfessionalProfile.findOne({ user: userId }).lean(),
       ProviderLead.find({ providerId: userId }).sort({ createdAt: -1 }).limit(30).lean(),
@@ -623,7 +623,8 @@ class ProviderWebsiteService {
       ProviderLead.countDocuments({ providerId: userId }),
       ProviderBooking.countDocuments({ providerId: userId }),
       ProviderLead.countDocuments({ providerId: userId, source: { $in: ['website', 'inquiry'] } }),
-      ProviderLead.countDocuments({ providerId: userId, source: 'callback' })
+      ProviderLead.countDocuments({ providerId: userId, source: 'callback' }),
+      this.getReviewSummary(userId)
     ]);
 
     const weekly = await this.buildWeeklyRequestStats(userId, website, profile);
@@ -637,6 +638,7 @@ class ProviderWebsiteService {
         viewsCount: Number(profile?.viewCount || 0),
         weekly
       },
+      reviewSummary,
       leads,
       bookings
     };
