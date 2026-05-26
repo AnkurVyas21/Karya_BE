@@ -1,6 +1,8 @@
 const Notification = require('../models/Notification');
 const messageRealtimeService = require('./messageRealtimeService');
 
+const ALLOWED_NOTIFICATION_TYPES = new Set(['inquiry', 'callback', 'booking', 'order', 'verification', 'system']);
+
 class NotificationService {
   serialize(item) {
     if (!item) {
@@ -39,9 +41,13 @@ class NotificationService {
       return null;
     }
 
+    const safeType = ALLOWED_NOTIFICATION_TYPES.has(String(type || '').trim())
+      ? String(type).trim()
+      : 'system';
+
     const notification = await Notification.create({
       userId,
-      type,
+      type: safeType,
       title: String(title).trim(),
       body: String(body || '').trim(),
       linkPath: String(linkPath || '').trim(),
