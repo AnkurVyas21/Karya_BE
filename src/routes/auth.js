@@ -10,6 +10,9 @@ const {
   getCurrentUser,
   updateCurrentUser,
   becomeProvider,
+  requestBecomeProviderOtp,
+  verifyBecomeProviderOtp,
+  resendBecomeProviderOtp,
   startSocialAuth,
   handleSocialCallback
 } = require('../controllers/authController');
@@ -17,8 +20,12 @@ const authMiddleware = require('../middlewares/authMiddleware');
 const validationMiddleware = require('../middlewares/validationMiddleware');
 const Joi = require('joi');
 const rateLimit = require('express-rate-limit');
+const multer = require('multer');
+const persistUploadedFiles = require('../middlewares/persistUploadedFiles');
+const { getUploadDestination } = require('../utils/uploadPaths');
 
 const router = express.Router();
+const upload = multer({ dest: getUploadDestination(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -106,6 +113,10 @@ const resetPasswordSchema = Joi.object({
   password: Joi.string().min(6).required()
 });
 
+const providerConversionOtpSchema = Joi.object({
+  otp: Joi.string().pattern(/^\d{6}$/).required()
+});
+
 const updateCurrentUserSchema = Joi.object({
   fullName: Joi.string().allow('').optional(),
   email: Joi.string().email().allow('').optional(),
@@ -154,7 +165,16 @@ router.post('/forgot-password/verify-otp', validationMiddleware(forgotPasswordOt
 router.post('/forgot-password/reset', validationMiddleware(resetPasswordSchema), resetPassword);
 router.get('/me', authMiddleware, getCurrentUser);
 router.patch('/me', authMiddleware, validationMiddleware(updateCurrentUserSchema), updateCurrentUser);
-router.post('/me/become-provider', authMiddleware, becomeProvider);
+router.post('/me/become-provider/request-otp', authMiddleware, requestBecomeProviderOtp);
+router.post('/me/become-provider/verify-otp', authMiddleware, validationMiddleware(providerConversionOtpSchema), verifyBecomeProviderOtp);
+router.post('/me/become-provider/resend-otp', authMiddleware, resendBecomeProviderOtp);
+router.post(
+  '/me/become-provider',
+  authMiddleware,
+  upload.fields([{ name: 'profilePicture', maxCount: 1 }, { name: 'certificates', maxCount: 5 }]),
+  persistUploadedFiles,
+  becomeProvider
+);
 router.get('/social/:provider/start', startSocialAuth);
 router.get('/social/:provider/callback', handleSocialCallback);
 

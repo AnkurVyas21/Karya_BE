@@ -10,6 +10,7 @@ const { normalizeSocialAccount } = require('../utils/socialAccountUtils');
 const { deriveProfileTags, normalizeList } = require('../utils/profileTagUtils');
 const professionCatalogService = require('./professionCatalogService');
 const professionInferenceService = require('./professionInferenceService');
+const professionalService = require('./professionalService');
 
 class AuthService {
   async signup(userData) {
@@ -250,7 +251,7 @@ class AuthService {
     };
   }
 
-  async becomeProvider(userId) {
+  async becomeProvider(userId, profileData = null, userUpdates = {}) {
     const user = await User.findById(userId);
     if (!user) {
       throw new Error('User not found');
@@ -260,42 +261,141 @@ class AuthService {
       throw new Error('Admin accounts cannot become providers');
     }
 
-    const locationState = {
-      country: user.country || 'India',
-      state: user.state || '',
-      city: user.city || '',
-      town: user.town || '',
-      area: user.area || '',
-      addressLine: user.addressLine || '',
-      pincode: user.pincode || ''
-    };
-    const serviceAreas = user.city ? [user.city] : [];
+    const hasProfilePayload = profileData && Object.keys(profileData).length > 0;
+    let profile = null;
 
-    await ProfessionalProfile.findOneAndUpdate(
-      { user: user._id },
-      {
-        $setOnInsert: {
-          user: user._id,
-          profession: '',
-          description: '',
-          skills: [],
-          tags: [],
-          serviceAreas,
-          ...locationState,
-          location: composeLocation(locationState),
-          allowContactDisplay: false
-        }
-      },
-      { upsert: true, new: true }
-    );
+    if (hasProfilePayload) {
+      profile = await professionalService.upsertProfile(user._id, profileData);
+    } else {
+      const locationState = {
+        country: user.country || 'India',
+        state: user.state || '',
+        city: user.city || '',
+        town: user.town || '',
+        area: user.area || '',
+        addressLine: user.addressLine || '',
+        pincode: user.pincode || ''
+      };
+      const serviceAreas = user.city ? [user.city] : [];
+
+      profile = await ProfessionalProfile.findOneAndUpdate(
+        { user: user._id },
+        {
+          $setOnInsert: {
+            user: user._id,
+            profession: '',
+            description: '',
+            skills: [],
+            tags: [],
+            serviceAreas,
+            ...locationState,
+            location: composeLocation(locationState),
+            allowContactDisplay: false
+          }
+        },
+        { upsert: true, new: true }
+      );
+    }
+
+    Object.entries(userUpdates || {}).forEach(([key, value]) => {
+      user[key] = value;
+    });
 
     if (user.role !== 'professional') {
       user.role = 'professional';
-      await user.save();
     }
+    await user.save();
 
     logger.info(`User became provider: ${user._id}`);
-    return this.buildAuthenticatedSession(user);
+    const session = await this.buildAuthenticatedSession(user);
+    return {
+      ...session,
+      profile
+    };
+  }
+
+  async requestProviderConversionOtp(userId, profileData = {}, userUpdates = {}) {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    if (user.role === 'admin') {
+      throw new Error('Admin accounts cannot become providers');
+    }
+
+    if (user.role === 'professional') {
+      throw new Error('This account is already a provider');
+    }
+
+    const email = this.normalizeEmail(user.email);
+    if (!email) {
+      throw new Error('Add an email to your user account before becoming a provider');
+    }
+
+    const otp = process.env.TEST_OTP || crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await OTPVerification.deleteMany({ user: user._id, type: 'provider_conversion' });
+    await OTPVerification.create({
+      user: user._id,
+      otp,
+      type: 'provider_conversion',
+      identifier: email,
+      payload: { profileData, userUpdates },
+      expiresAt
+    });
+
+    await this.sendEmailWithResend({
+      to: email,
+      subject: 'Verify becoming a Nasdiya provider',
+      text: `Your OTP to become a provider is ${otp}. It will expire in 10 minutes.`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; color: #1f2937;">
+          <h2 style="margin-bottom: 12px;">Verify provider registration</h2>
+          <p style="margin-bottom: 16px;">Use this OTP to confirm that you want to become a provider on Nasdiya:</p>
+          <div style="font-size: 32px; font-weight: 700; letter-spacing: 8px; padding: 16px 20px; background: #f3f6fb; border-radius: 12px; display: inline-block;">
+            ${otp}
+          </div>
+          <p style="margin-top: 16px;">This OTP will expire in 10 minutes. If you did not request this, you can ignore this email.</p>
+        </div>
+      `
+    });
+
+    logger.info('Provider conversion OTP sent', {
+      userId: user._id.toString(),
+      email
+    });
+
+    return sanitizeUser(user);
+  }
+
+  async resendProviderConversionOtp(userId) {
+    const pending = await OTPVerification.findOne({ user: userId, type: 'provider_conversion' }).sort({ expiresAt: -1 });
+    if (!pending) {
+      throw new Error('No pending provider verification found');
+    }
+
+    const payload = pending.payload || {};
+    return this.requestProviderConversionOtp(userId, payload.profileData || {}, payload.userUpdates || {});
+  }
+
+  async verifyProviderConversionOtp(userId, otp) {
+    const otpRecord = await OTPVerification.findOne({
+      user: userId,
+      type: 'provider_conversion',
+      otp: String(otp || '').trim()
+    });
+    if (!otpRecord || otpRecord.expiresAt < new Date()) {
+      throw new Error('Invalid or expired OTP');
+    }
+
+    const payload = otpRecord.payload || {};
+    const session = await this.becomeProvider(userId, payload.profileData || {}, {
+      ...(payload.userUpdates || {}),
+      isVerified: true
+    });
+    await OTPVerification.deleteOne({ _id: otpRecord._id });
+    return session;
   }
 
   async getCurrentUserProfile(userId) {

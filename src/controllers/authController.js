@@ -1,6 +1,70 @@
 const authService = require('../services/authService');
 const { socialAuthService } = require('../services/socialAuthService');
 
+const parseBooleanLike = (value) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  return ['true', '1', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+};
+
+const normalizeGender = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['male', 'female', 'other', 'prefer_not_to_say'].includes(normalized) ? normalized : '';
+};
+
+const normalizeFullName = (payload = {}) => String(payload.fullName || '').trim();
+
+const buildProviderConversionPayload = (body = {}, files = {}) => {
+  const payload = { ...(body || {}) };
+  const userUpdates = {};
+
+  const fullName = normalizeFullName(payload);
+  if (fullName) {
+    userUpdates.fullName = fullName;
+  }
+  delete payload.fullName;
+
+  if ('gender' in payload) {
+    userUpdates.gender = normalizeGender(payload.gender);
+    delete payload.gender;
+  }
+
+  delete payload.email;
+  delete payload.mobile;
+  delete payload.password;
+  delete payload.confirmPassword;
+
+  if ('baseCharge' in payload || 'visitingCharge' in payload || 'nightCharge' in payload || 'emergencyCharge' in payload) {
+    payload.charges = {
+      baseCharge: payload.baseCharge,
+      visitingCharge: payload.visitingCharge,
+      nightCharge: payload.nightCharge,
+      emergencyCharge: payload.emergencyCharge
+    };
+    delete payload.baseCharge;
+    delete payload.visitingCharge;
+    delete payload.nightCharge;
+    delete payload.emergencyCharge;
+  }
+
+  if ('showContactNumber' in payload) {
+    payload.allowContactDisplay = parseBooleanLike(payload.showContactNumber);
+    delete payload.showContactNumber;
+  }
+
+  if (files.profilePicture && files.profilePicture[0]) {
+    payload.profilePicture = files.profilePicture[0].path;
+  }
+
+  if (files.certificates && files.certificates.length > 0) {
+    payload.certificates = files.certificates.map((file) => file.path);
+  }
+
+  return { payload, userUpdates };
+};
+
 const signup = async (req, res) => {
   try {
     const user = await authService.signup(req.body);
@@ -111,11 +175,52 @@ const updateCurrentUser = async (req, res) => {
 
 const becomeProvider = async (req, res) => {
   try {
-    const { user, token } = await authService.becomeProvider(req.user._id);
+    const { payload, userUpdates } = buildProviderConversionPayload(req.body, req.files || {});
+    const { user, token, profile } = await authService.becomeProvider(req.user._id, payload, userUpdates);
     res.json({
       success: true,
       message: 'Provider profile started',
-      data: { user, token }
+      data: { user, token, profile }
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const requestBecomeProviderOtp = async (req, res) => {
+  try {
+    const { payload, userUpdates } = buildProviderConversionPayload(req.body);
+    const user = await authService.requestProviderConversionOtp(req.user._id, payload, userUpdates);
+    res.json({
+      success: true,
+      message: 'OTP sent to your account email',
+      data: { user }
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const verifyBecomeProviderOtp = async (req, res) => {
+  try {
+    const { user, token, profile } = await authService.verifyProviderConversionOtp(req.user._id, req.body?.otp);
+    res.json({
+      success: true,
+      message: 'Provider account verified',
+      data: { user, token, profile }
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const resendBecomeProviderOtp = async (req, res) => {
+  try {
+    const user = await authService.resendProviderConversionOtp(req.user._id);
+    res.json({
+      success: true,
+      message: 'OTP resent to your account email',
+      data: { user }
     });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -183,6 +288,9 @@ module.exports = {
   getCurrentUser,
   updateCurrentUser,
   becomeProvider,
+  requestBecomeProviderOtp,
+  verifyBecomeProviderOtp,
+  resendBecomeProviderOtp,
   startSocialAuth,
   handleSocialCallback
 };
