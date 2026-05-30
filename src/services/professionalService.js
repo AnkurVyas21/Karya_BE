@@ -702,6 +702,21 @@ class ProfessionalService {
     return this.getProfileByUserId(userId, userId);
   }
 
+  async activateProviderAccount(userId) {
+    const profile = await ProfessionalProfile.findOne({ user: userId });
+    if (!profile) {
+      throw new Error('Provider profile not found');
+    }
+
+    profile.accountStatus = 'active';
+    profile.deactivatedAt = null;
+    profile.deletionRequestedAt = null;
+    profile.deletionScheduledAt = null;
+    await profile.save();
+
+    return this.getProfileByUserId(userId, userId);
+  }
+
   async requestProviderAccountDeletion(userId) {
     const profile = await ProfessionalProfile.findOne({ user: userId });
     if (!profile) {

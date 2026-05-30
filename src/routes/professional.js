@@ -39,6 +39,7 @@ const {
   requestContactOtp,
   verifyContactOtp,
   deactivateProviderAccount,
+  activateProviderAccount,
   requestProviderAccountDeletion,
   getRatings,
   getBookmarks,
@@ -61,6 +62,7 @@ router.put('/profile', authMiddleware, roleMiddleware(['professional', 'admin'])
 router.post('/profile/contact/request-otp', authMiddleware, roleMiddleware(['professional']), requestContactOtp);
 router.post('/profile/contact/verify-otp', authMiddleware, roleMiddleware(['professional']), verifyContactOtp);
 router.post('/profile/account/deactivate', authMiddleware, roleMiddleware(['professional']), deactivateProviderAccount);
+router.post('/profile/account/activate', authMiddleware, roleMiddleware(['professional']), activateProviderAccount);
 router.post('/profile/account/request-deletion', authMiddleware, roleMiddleware(['professional']), requestProviderAccountDeletion);
 router.get('/dashboard/summary', authMiddleware, roleMiddleware(['professional', 'admin']), getDashboardSummary);
 router.get('/growth/dashboard', authMiddleware, roleMiddleware(['professional', 'admin']), getGrowthDashboard);
