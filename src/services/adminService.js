@@ -27,6 +27,14 @@ const toObjectIdString = (value) => value?._id ? value._id.toString() : String(v
 
 const cleanString = (value) => String(value || '').trim();
 const isValidEmail = (value = '') => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanString(value).toLowerCase());
+const providerAccountStatus = (profile = {}) => cleanString(profile.accountStatus || 'active') || 'active';
+const isProviderAccountInactive = (profile = {}) => ['deactivated', 'deletion_scheduled'].includes(providerAccountStatus(profile));
+const providerAccountStatusLabel = (profile = {}) => {
+  const status = providerAccountStatus(profile);
+  if (status === 'deletion_scheduled') return 'Deletion scheduled';
+  if (status === 'deactivated') return 'Deactivated';
+  return 'Active';
+};
 
 const normalizeDateInput = (value) => String(value || '').trim();
 
@@ -402,6 +410,12 @@ class AdminService {
           boostActive: Boolean(growth.boost?.active),
           isBanned: Boolean(user.isBanned),
           isListed: completionState.isListed,
+          accountStatus: providerAccountStatus(profile),
+          accountStatusLabel: providerAccountStatusLabel(profile),
+          isAccountInactive: isProviderAccountInactive(profile),
+          deactivatedAt: profile.deactivatedAt || null,
+          deletionRequestedAt: profile.deletionRequestedAt || null,
+          deletionScheduledAt: profile.deletionScheduledAt || null,
           createdAt: profile.createdAt || user.createdAt
         };
       });
@@ -417,6 +431,7 @@ class AdminService {
         verified: items.filter((item) => item.isVerified).length,
         verifiedBadges: items.filter((item) => item.verifiedBadge).length,
         pendingVerification: items.filter((item) => item.verificationPending).length,
+        deactivated: items.filter((item) => item.isAccountInactive).length,
         banned: items.filter((item) => item.isBanned).length,
         totalProfileViews: items.reduce((sum, item) => sum + item.viewCount, 0)
       },
@@ -495,6 +510,12 @@ class AdminService {
         isVerified: Boolean(user.isVerified),
         isBanned: Boolean(user.isBanned),
         isListed: completionState.isListed,
+        accountStatus: providerAccountStatus(profile),
+        accountStatusLabel: providerAccountStatusLabel(profile),
+        isAccountInactive: isProviderAccountInactive(profile),
+        deactivatedAt: profile.deactivatedAt || null,
+        deletionRequestedAt: profile.deletionRequestedAt || null,
+        deletionScheduledAt: profile.deletionScheduledAt || null,
         createdAt: profile.createdAt || user.createdAt
       },
       growth: {
@@ -558,6 +579,20 @@ class AdminService {
         profession: item.professionalProfile?.profession || profile.profession || ''
       }))
     };
+  }
+
+  async activateProviderAccount(providerId) {
+    const { profile } = await this.resolveProviderProfile(providerId);
+    await ProfessionalProfile.findByIdAndUpdate(profile._id, {
+      $set: {
+        accountStatus: 'active',
+        deactivatedAt: null,
+        deletionRequestedAt: null,
+        deletionScheduledAt: null
+      }
+    }, { runValidators: true });
+
+    return this.getProviderDetails(profile._id.toString());
   }
 
   async setProviderVerification(providerId, payload = {}) {

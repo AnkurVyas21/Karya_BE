@@ -62,6 +62,19 @@ router.patch('/providers/:id/verification', async (req, res) => {
   }
 });
 
+router.patch('/providers/:id/account/activate', async (req, res) => {
+  try {
+    const data = await adminService.activateProviderAccount(req.params.id);
+    res.json({
+      success: true,
+      data,
+      message: 'Provider account activated. Any pending deletion request has been cancelled.'
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/transactions', async (_req, res) => {
   try {
     const data = await adminService.getTransactions();
