@@ -136,6 +136,7 @@ const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Se
   const reviewCount = reviewStats.reviewCount || 0;
   const completion = getProfileCompletionState(user, profile);
   const callStatus = buildCallStatus({ profile, mobile: user.mobile });
+  const accountStatus = toCleanString(profile.accountStatus || 'active') || 'active';
   const serviceAreas = profile.serviceAreas || [];
   const serviceCoverageLocation = Array.isArray(serviceAreas)
     ? serviceAreas.map((area) => String(area || '').trim()).filter(Boolean).join(', ')
@@ -182,6 +183,11 @@ const buildProfessionalSummary = ({ profile, reviewStats, bookmarkedIds = new Se
     effectiveStartingPrice: toCurrency(effectiveStartingPrice),
     allowContactDisplay: Boolean(profile.allowContactDisplay),
     callStatus,
+    accountStatus,
+    isAccountDeactivated: accountStatus === 'deactivated' || accountStatus === 'deletion_scheduled',
+    deactivatedAt: profile.deactivatedAt || null,
+    deletionRequestedAt: profile.deletionRequestedAt || null,
+    deletionScheduledAt: profile.deletionScheduledAt || null,
     missingRequiredFields: completion.missingRequiredFields,
     isProfileComplete: completion.isProfileComplete,
     isListed: completion.isListed,

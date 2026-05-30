@@ -32,6 +32,15 @@ const professionalProfileSchema = new mongoose.Schema({
     emergencyCharge: { type: Number }
   },
   allowContactDisplay: { type: Boolean, default: false },
+  accountStatus: {
+    type: String,
+    enum: ['active', 'deactivated', 'deletion_scheduled'],
+    default: 'active',
+    index: true
+  },
+  deactivatedAt: { type: Date, default: null },
+  deletionRequestedAt: { type: Date, default: null },
+  deletionScheduledAt: { type: Date, default: null },
   viewCount: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now }
 });

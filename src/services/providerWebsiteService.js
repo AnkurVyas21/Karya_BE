@@ -42,6 +42,8 @@ const DEFAULT_BOOKING_SLOTS = [
 
 const INDIA_TIME_ZONE = 'Asia/Kolkata';
 const cleanString = (value) => String(value || '').trim();
+const providerAccountStatus = (profile = {}) => cleanString(profile?.accountStatus || 'active') || 'active';
+const isProviderAccountInactive = (profile = {}) => ['deactivated', 'deletion_scheduled'].includes(providerAccountStatus(profile));
 const isValidEmail = (value = '') => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanString(value).toLowerCase());
 const cleanArray = (value) => Array.isArray(value)
   ? value.map((item) => cleanString(item)).filter(Boolean)
@@ -937,7 +939,9 @@ class ProviderWebsiteService {
       return null;
     }
 
-    await ProfessionalProfile.findOneAndUpdate({ user: website.providerId }, { $inc: { viewCount: 1 } });
+    if (!data.isAccountDeactivated) {
+      await ProfessionalProfile.findOneAndUpdate({ user: website.providerId }, { $inc: { viewCount: 1 } });
+    }
     return data;
   }
 
@@ -959,6 +963,9 @@ class ProviderWebsiteService {
     const publicWebsite = await this.getPublicWebsiteBySlug(slug);
     if (!publicWebsite) {
       throw new Error('Business page not found');
+    }
+    if (publicWebsite.isAccountDeactivated) {
+      throw new Error('This account is deactivated. Contact Nasdiya regarding any query.');
     }
 
     const source = ['website', 'callback', 'inquiry', 'whatsapp-click', 'call-click', 'share'].includes(cleanString(payload.source))
@@ -1082,6 +1089,11 @@ class ProviderWebsiteService {
     const normalizedState = state ? await providerGrowthService.normalizeState(state) : null;
     if (!website || website.status !== 'published' || !providerGrowthService.hasActiveWebsite(normalizedState) || !website.bookingEnabled) {
       throw new Error('Booking is not available for this business page');
+    }
+
+    const providerProfile = await ProfessionalProfile.findOne({ user: website.providerId }).select('accountStatus').lean();
+    if (isProviderAccountInactive(providerProfile)) {
+      throw new Error('This account is deactivated. Contact Nasdiya regarding any query.');
     }
 
     const bookingDate = cleanString(dateString);
@@ -1231,6 +1243,9 @@ class ProviderWebsiteService {
     const publicWebsite = await this.getPublicWebsiteBySlug(slug);
     if (!publicWebsite) {
       throw new Error('Business page not found');
+    }
+    if (publicWebsite.isAccountDeactivated) {
+      throw new Error('This account is deactivated. Contact Nasdiya regarding any query.');
     }
     if (!publicWebsite.website?.bookingEnabled) {
       throw new Error('Booking is disabled for this business page');
@@ -1520,6 +1535,9 @@ class ProviderWebsiteService {
     const publicWebsite = await this.getPublicWebsiteBySlug(slug);
     if (!publicWebsite) {
       throw new Error('Business page not found');
+    }
+    if (publicWebsite.isAccountDeactivated) {
+      throw new Error('This account is deactivated. Contact Nasdiya regarding any query.');
     }
     if (!publicWebsite.website?.productsEnabled || publicWebsite.website?.productFlow?.enabled === false) {
       throw new Error('Product orders are not enabled for this business page');
@@ -2905,6 +2923,8 @@ class ProviderWebsiteService {
 
     const responseTime = reviewSummary.totalReviews > 4 ? 'Usually replies within 30 minutes' : 'Usually replies within a few hours';
     const bookingSuccess = `${Math.min(90 + Math.floor((reviewSummary.totalReviews || 0) / 2), 99)}% booking response`;
+    const accountStatus = providerAccountStatus(profile);
+    const accountInactive = isProviderAccountInactive(profile);
     const completedBookingCount = await ProviderBooking.countDocuments({
       providerId: userId,
       status: { $in: ['confirmed', 'completed'] }
@@ -2928,7 +2948,11 @@ class ProviderWebsiteService {
       reviewCount: reviewSummary.totalReviews,
       viewCount: Number(profile?.viewCount || 0),
       isVerifiedProvider: providerGrowthService.hasVerificationBadge(state),
-      websiteActive: true,
+      websiteActive: !accountInactive,
+      accountStatus,
+      isAccountDeactivated: accountInactive,
+      deactivatedAt: profile?.deactivatedAt || null,
+      deletionScheduledAt: profile?.deletionScheduledAt || null,
       websiteSlug: website.slug,
       tags: website.tags || [],
       serviceAreas: website.serviceAreas || [],
@@ -2941,6 +2965,14 @@ class ProviderWebsiteService {
       pincode: website.pincode || cleanString(profile?.pincode),
       website: {
         ...website,
+        callEnabled: accountInactive ? false : website.callEnabled,
+        whatsappEnabled: accountInactive ? false : website.whatsappEnabled,
+        callbackEnabled: accountInactive ? false : website.callbackEnabled,
+        inquiryFormEnabled: accountInactive ? false : website.inquiryFormEnabled,
+        bookingEnabled: accountInactive ? false : website.bookingEnabled,
+        productsEnabled: accountInactive ? false : website.productsEnabled,
+        accountDeactivated: accountInactive,
+        accountStatus,
         upiQrCodeImage,
         publicPath: website.slug ? `/business/${website.slug}` : '',
         legacyPublicPath: website.slug ? `/provider/site/${website.slug}` : '',

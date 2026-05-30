@@ -65,7 +65,9 @@ const getProfileCompletionState = (user, professionalProfile = null) => {
     missingRequiredFields,
     isProfileComplete: missingRequiredFields.length === 0,
     needsProfileCompletion: missingRequiredFields.length > 0,
-    isListed: role === 'professional' && missingRequiredFields.length === 0
+    isListed: role === 'professional'
+      && missingRequiredFields.length === 0
+      && ['active', ''].includes(toCleanString(professionalProfile?.accountStatus || 'active'))
   };
 };
 

@@ -67,6 +67,7 @@ const SEARCH_QUERY_STOPWORDS = new Set([
 const ALL_INDIA_SERVICE_AREA = 'all over india';
 const ALL_INDIA_SERVICE_AREA_REGEX = /^all over india$/i;
 const INDIA_TIME_ZONE = 'Asia/Kolkata';
+const PROVIDER_DELETION_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
 
 const parseTimeToMinutes = (value = '') => {
   const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})$/);
@@ -676,10 +677,45 @@ class ProfessionalService {
 
   async getProfile(id, viewerId = null) {
     const profile = await ProfessionalProfile.findById(id).populate('user');
+    if (profile && !isProfessionalProfileListable(profile)) {
+      return null;
+    }
     if (profile) {
       await ProfessionalProfile.findByIdAndUpdate(id, { $inc: { viewCount: 1 } });
     }
     return profile ? this.formatProfile(profile, viewerId) : null;
+  }
+
+  async deactivateProviderAccount(userId) {
+    const profile = await ProfessionalProfile.findOne({ user: userId });
+    if (!profile) {
+      throw new Error('Provider profile not found');
+    }
+
+    const now = new Date();
+    profile.accountStatus = 'deactivated';
+    profile.deactivatedAt = profile.deactivatedAt || now;
+    profile.deletionRequestedAt = null;
+    profile.deletionScheduledAt = null;
+    await profile.save();
+
+    return this.getProfileByUserId(userId, userId);
+  }
+
+  async requestProviderAccountDeletion(userId) {
+    const profile = await ProfessionalProfile.findOne({ user: userId });
+    if (!profile) {
+      throw new Error('Provider profile not found');
+    }
+
+    const now = new Date();
+    profile.accountStatus = 'deletion_scheduled';
+    profile.deactivatedAt = profile.deactivatedAt || now;
+    profile.deletionRequestedAt = now;
+    profile.deletionScheduledAt = new Date(now.getTime() + PROVIDER_DELETION_DELAY_MS);
+    await profile.save();
+
+    return this.getProfileByUserId(userId, userId);
   }
 
   async getRatings(profileId) {
@@ -741,7 +777,7 @@ class ProfessionalService {
     const bookmarkedIds = new Set(profileIds);
 
     return bookmarks
-      .filter((bookmark) => bookmark.professional)
+      .filter((bookmark) => bookmark.professional && isProfessionalProfileListable(bookmark.professional))
       .map((bookmark) => ({
         id: bookmark._id.toString(),
         createdAt: bookmark.createdAt,

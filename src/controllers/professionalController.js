@@ -563,6 +563,32 @@ const verifyContactOtp = async (req, res) => {
   }
 };
 
+const deactivateProviderAccount = async (req, res) => {
+  try {
+    const profile = await professionalService.deactivateProviderAccount(req.user._id);
+    res.json({
+      success: true,
+      data: profile,
+      message: 'Provider account deactivated. Your public profile and new customer actions are now hidden.'
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const requestProviderAccountDeletion = async (req, res) => {
+  try {
+    const profile = await professionalService.requestProviderAccountDeletion(req.user._id);
+    res.json({
+      success: true,
+      data: profile,
+      message: 'Provider account deletion scheduled. Your account will remain deactivated for 30 days.'
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const updateProfile = async (req, res) => {
   try {
     const payload = { ...req.body };
@@ -692,6 +718,8 @@ module.exports = {
   updateProfile,
   requestContactOtp,
   verifyContactOtp,
+  deactivateProviderAccount,
+  requestProviderAccountDeletion,
   getRatings,
   getBookmarks,
   removeBookmark,

@@ -5,6 +5,8 @@ const ProviderGrowth = require('../models/ProviderGrowth');
 const messageRealtimeService = require('./messageRealtimeService');
 const { buildProfessionalSummary } = require('../utils/professionalPresenter');
 
+const isProviderAccountInactive = (profile = {}) => ['deactivated', 'deletion_scheduled'].includes(String(profile?.accountStatus || 'active'));
+
 class MessageService {
   async createOrGetSelfConversation(userId) {
     const profile = await ProfessionalProfile.findOne({ user: userId }).populate('user');
@@ -43,6 +45,9 @@ class MessageService {
     const profile = await ProfessionalProfile.findById(professionalProfileId).populate('user');
     if (!profile || !profile.user) {
       throw new Error('Professional profile not found');
+    }
+    if (isProviderAccountInactive(profile)) {
+      throw new Error('This provider account is deactivated and cannot receive new messages.');
     }
 
     let conversation = await Conversation.findOne({
@@ -92,6 +97,13 @@ class MessageService {
 
     if (!isParticipant) {
       throw new Error('Access denied');
+    }
+
+    if (!isSelfConversation && senderKey === customerId) {
+      const profile = await ProfessionalProfile.findById(conversation.professionalProfile).select('accountStatus').lean();
+      if (isProviderAccountInactive(profile)) {
+        throw new Error('This provider account is deactivated and cannot receive new messages.');
+      }
     }
 
     const trimmedBody = String(body || '').trim();
