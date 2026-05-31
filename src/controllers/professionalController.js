@@ -164,6 +164,33 @@ const createReview = async (req, res) => {
   }
 };
 
+const updateReview = async (req, res) => {
+  try {
+    const professional = req.body.professional || req.body.professionalId;
+    const { rating, comment } = req.body;
+    const profile = await ProfessionalProfile.findById(professional).select('user');
+    if (!profile) {
+      return res.status(404).json({ success: false, message: 'Provider profile not found' });
+    }
+
+    if (String(profile.user || '') === String(req.user._id || '')) {
+      return res.status(403).json({ success: false, message: 'You cannot rate or review your own provider profile.' });
+    }
+
+    const review = await Review.findOne({ user: req.user._id, professional });
+    if (!review) {
+      return res.status(404).json({ success: false, message: 'Review not found. Please write a review first.' });
+    }
+
+    review.rating = rating;
+    review.comment = comment;
+    await review.save();
+    res.json({ success: true, data: review });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const createBookmark = async (req, res) => {
   try {
     const professional = req.body.professional || req.body.professionalId;
@@ -716,6 +743,7 @@ module.exports = {
   aiSearch,
   getProfile,
   createReview,
+  updateReview,
   createBookmark,
   createSubscription,
   getGrowthDashboard,

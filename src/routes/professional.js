@@ -5,6 +5,7 @@ const {
   aiSearch,
   getProfile,
   createReview,
+  updateReview,
   createBookmark,
   createSubscription,
   getGrowthDashboard,
@@ -126,6 +127,7 @@ router.post('/website/:slug/orders', optionalAuthMiddleware, createWebsiteProduc
 router.get('/:id/ratings', getRatings);
 router.get('/:id', optionalAuthMiddleware, getProfile);
 router.post('/review', authMiddleware, createReview);
+router.patch('/review', authMiddleware, updateReview);
 router.post('/bookmark', authMiddleware, createBookmark);
 router.post('/subscription', authMiddleware, roleMiddleware(['professional']), createSubscription);
 router.post('/detect-profession', detectProfession);
