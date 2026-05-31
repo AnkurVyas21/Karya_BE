@@ -737,6 +737,7 @@ class ProfessionalService {
     const reviews = await Review.find({ professional: profileId }).populate('user').sort({ createdAt: -1 });
     return reviews.map((review) => ({
       id: review._id.toString(),
+      userId: review.user?._id?.toString?.() || review.user?.toString?.() || '',
       rating: review.rating,
       comment: review.comment,
       createdAt: review.createdAt,

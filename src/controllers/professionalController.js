@@ -3,6 +3,7 @@ const paymentService = require('../services/paymentService');
 const providerGrowthService = require('../services/providerGrowthService');
 const providerWebsiteService = require('../services/providerWebsiteService');
 const Review = require('../models/Review');
+const ProfessionalProfile = require('../models/ProfessionalProfile');
 const Bookmark = require('../models/Bookmark');
 const User = require('../models/User');
 const OTPVerification = require('../models/OTPVerification');
@@ -138,10 +139,27 @@ const createReview = async (req, res) => {
   try {
     const professional = req.body.professional || req.body.professionalId;
     const { rating, comment } = req.body;
+    const profile = await ProfessionalProfile.findById(professional).select('user');
+    if (!profile) {
+      return res.status(404).json({ success: false, message: 'Provider profile not found' });
+    }
+
+    if (String(profile.user || '') === String(req.user._id || '')) {
+      return res.status(403).json({ success: false, message: 'You cannot rate or review your own provider profile.' });
+    }
+
+    const existingReview = await Review.findOne({ user: req.user._id, professional });
+    if (existingReview) {
+      return res.status(409).json({ success: false, message: 'You have already rated and reviewed this provider.' });
+    }
+
     const review = new Review({ user: req.user._id, professional, rating, comment });
     await review.save();
     res.status(201).json({ success: true, data: review });
   } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(409).json({ success: false, message: 'You have already rated and reviewed this provider.' });
+    }
     res.status(400).json({ success: false, message: error.message });
   }
 };
