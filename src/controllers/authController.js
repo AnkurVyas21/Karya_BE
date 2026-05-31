@@ -195,6 +195,45 @@ const updateCurrentUserProfilePicture = async (req, res) => {
   }
 };
 
+const deactivateCurrentUserAccount = async (req, res) => {
+  try {
+    const user = await authService.deactivateCurrentUserAccount(req.user._id);
+    res.json({
+      success: true,
+      message: 'Account deactivated. You can sign in and activate it again from your profile.',
+      data: user
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const activateCurrentUserAccount = async (req, res) => {
+  try {
+    const user = await authService.activateCurrentUserAccount(req.user._id);
+    res.json({
+      success: true,
+      message: 'Account activated. Any pending deletion request has been cancelled.',
+      data: user
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const requestCurrentUserAccountDeletion = async (req, res) => {
+  try {
+    const user = await authService.requestCurrentUserAccountDeletion(req.user._id);
+    res.json({
+      success: true,
+      message: 'Account deletion scheduled. Your account will stay deactivated for 30 days first.',
+      data: user
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const becomeProvider = async (req, res) => {
   try {
     const { payload, userUpdates } = buildProviderConversionPayload(req.body, req.files || {});
@@ -310,6 +349,9 @@ module.exports = {
   getCurrentUser,
   updateCurrentUser,
   updateCurrentUserProfilePicture,
+  deactivateCurrentUserAccount,
+  activateCurrentUserAccount,
+  requestCurrentUserAccountDeletion,
   becomeProvider,
   requestBecomeProviderOtp,
   verifyBecomeProviderOtp,

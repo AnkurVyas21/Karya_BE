@@ -12,6 +12,8 @@ const professionCatalogService = require('./professionCatalogService');
 const professionInferenceService = require('./professionInferenceService');
 const professionalService = require('./professionalService');
 
+const ACCOUNT_DELETION_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
+
 class AuthService {
   async signup(userData) {
     const {
@@ -598,6 +600,102 @@ class AuthService {
         { user: userId },
         {
           $set: { profilePicture: normalizedProfilePicture },
+          $setOnInsert: { user: userId }
+        },
+        { upsert: true, new: true, runValidators: true }
+      );
+    }
+
+    return this.getCurrentUserProfile(userId);
+  }
+
+  async deactivateCurrentUserAccount(userId) {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const now = new Date();
+    user.accountStatus = 'deactivated';
+    user.deactivatedAt = user.deactivatedAt || now;
+    user.deletionRequestedAt = null;
+    user.deletionScheduledAt = null;
+    await user.save();
+
+    if (user.role === 'professional') {
+      await ProfessionalProfile.findOneAndUpdate(
+        { user: userId },
+        {
+          $set: {
+            accountStatus: 'deactivated',
+            deactivatedAt: now,
+            deletionRequestedAt: null,
+            deletionScheduledAt: null
+          },
+          $setOnInsert: { user: userId }
+        },
+        { upsert: true, new: true, runValidators: true }
+      );
+    }
+
+    return this.getCurrentUserProfile(userId);
+  }
+
+  async activateCurrentUserAccount(userId) {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    user.accountStatus = 'active';
+    user.deactivatedAt = null;
+    user.deletionRequestedAt = null;
+    user.deletionScheduledAt = null;
+    await user.save();
+
+    if (user.role === 'professional') {
+      await ProfessionalProfile.findOneAndUpdate(
+        { user: userId },
+        {
+          $set: {
+            accountStatus: 'active',
+            deactivatedAt: null,
+            deletionRequestedAt: null,
+            deletionScheduledAt: null
+          },
+          $setOnInsert: { user: userId }
+        },
+        { upsert: true, new: true, runValidators: true }
+      );
+    }
+
+    return this.getCurrentUserProfile(userId);
+  }
+
+  async requestCurrentUserAccountDeletion(userId) {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const now = new Date();
+    const deletionScheduledAt = new Date(now.getTime() + ACCOUNT_DELETION_DELAY_MS);
+    user.accountStatus = 'deletion_scheduled';
+    user.deactivatedAt = user.deactivatedAt || now;
+    user.deletionRequestedAt = now;
+    user.deletionScheduledAt = deletionScheduledAt;
+    await user.save();
+
+    if (user.role === 'professional') {
+      await ProfessionalProfile.findOneAndUpdate(
+        { user: userId },
+        {
+          $set: {
+            accountStatus: 'deletion_scheduled',
+            deactivatedAt: user.deactivatedAt,
+            deletionRequestedAt: now,
+            deletionScheduledAt
+          },
           $setOnInsert: { user: userId }
         },
         { upsert: true, new: true, runValidators: true }

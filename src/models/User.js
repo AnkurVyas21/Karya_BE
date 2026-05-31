@@ -13,6 +13,15 @@ const userSchema = new mongoose.Schema({
   mobile: { type: String, unique: true, sparse: true, default: null },
   gender: { type: String, enum: ['', 'male', 'female', 'other', 'prefer_not_to_say'], default: '' },
   profilePicture: { type: String, default: '' },
+  accountStatus: {
+    type: String,
+    enum: ['active', 'deactivated', 'deletion_scheduled'],
+    default: 'active',
+    index: true
+  },
+  deactivatedAt: { type: Date, default: null },
+  deletionRequestedAt: { type: Date, default: null },
+  deletionScheduledAt: { type: Date, default: null },
   password: { type: String, required: true },
   passwordSetupRequired: { type: Boolean, default: false },
   socialAccounts: [{

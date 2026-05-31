@@ -33,6 +33,7 @@ const sanitizeUser = (user) => {
 
 const getProfileCompletionState = (user, professionalProfile = null) => {
   const role = toCleanString(user?.role) || 'user';
+  const userAccountStatus = toCleanString(user?.accountStatus || 'active') || 'active';
   const location = composeLocation({
     town: professionalProfile?.town || user?.town,
     area: professionalProfile?.area || user?.area,
@@ -66,6 +67,7 @@ const getProfileCompletionState = (user, professionalProfile = null) => {
     isProfileComplete: missingRequiredFields.length === 0,
     needsProfileCompletion: missingRequiredFields.length > 0,
     isListed: role === 'professional'
+      && userAccountStatus === 'active'
       && missingRequiredFields.length === 0
       && ['active', ''].includes(toCleanString(professionalProfile?.accountStatus || 'active'))
   };
@@ -74,9 +76,15 @@ const getProfileCompletionState = (user, professionalProfile = null) => {
 const buildAuthenticatedUser = (user, professionalProfile = null) => {
   const safeUser = sanitizeUser(user);
   const completion = getProfileCompletionState(user, professionalProfile);
+  const accountStatus = toCleanString(user?.accountStatus || 'active') || 'active';
 
   return {
     ...safeUser,
+    accountStatus,
+    isAccountDeactivated: accountStatus === 'deactivated' || accountStatus === 'deletion_scheduled',
+    deactivatedAt: user?.deactivatedAt || null,
+    deletionRequestedAt: user?.deletionRequestedAt || null,
+    deletionScheduledAt: user?.deletionScheduledAt || null,
     profession: completion.profession,
     location: completion.location,
     description: professionalProfile?.description || '',

@@ -10,6 +10,9 @@ const {
   getCurrentUser,
   updateCurrentUser,
   updateCurrentUserProfilePicture,
+  deactivateCurrentUserAccount,
+  activateCurrentUserAccount,
+  requestCurrentUserAccountDeletion,
   becomeProvider,
   requestBecomeProviderOtp,
   verifyBecomeProviderOtp,
@@ -178,6 +181,9 @@ router.post('/forgot-password/reset', validationMiddleware(resetPasswordSchema),
 router.get('/me', authMiddleware, getCurrentUser);
 router.patch('/me', authMiddleware, validationMiddleware(updateCurrentUserSchema), updateCurrentUser);
 router.post('/me/profile-picture', authMiddleware, profilePictureUpload.single('profilePicture'), persistUploadedFiles, updateCurrentUserProfilePicture);
+router.post('/me/account/deactivate', authMiddleware, deactivateCurrentUserAccount);
+router.post('/me/account/activate', authMiddleware, activateCurrentUserAccount);
+router.post('/me/account/request-deletion', authMiddleware, requestCurrentUserAccountDeletion);
 router.post('/me/become-provider/request-otp', authMiddleware, requestBecomeProviderOtp);
 router.post('/me/become-provider/verify-otp', authMiddleware, validationMiddleware(providerConversionOtpSchema), verifyBecomeProviderOtp);
 router.post('/me/become-provider/resend-otp', authMiddleware, resendBecomeProviderOtp);
