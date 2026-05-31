@@ -578,6 +578,35 @@ class AuthService {
     return this.getCurrentUserProfile(userId);
   }
 
+  async updateCurrentUserProfilePicture(userId, profilePicture = '') {
+    const normalizedProfilePicture = toCleanString(profilePicture);
+    if (!normalizedProfilePicture) {
+      throw new Error('Profile image is required');
+    }
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { profilePicture: normalizedProfilePicture },
+      { new: true, runValidators: true }
+    );
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    if (user.role === 'professional') {
+      await ProfessionalProfile.findOneAndUpdate(
+        { user: userId },
+        {
+          $set: { profilePicture: normalizedProfilePicture },
+          $setOnInsert: { user: userId }
+        },
+        { upsert: true, new: true, runValidators: true }
+      );
+    }
+
+    return this.getCurrentUserProfile(userId);
+  }
+
   async verifyOTP(identifier, otp, type) {
     if (type !== 'email') {
       throw new Error('Only email OTP verification is enabled right now');

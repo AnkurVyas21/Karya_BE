@@ -173,6 +173,28 @@ const updateCurrentUser = async (req, res) => {
   }
 };
 
+const updateCurrentUserProfilePicture = async (req, res) => {
+  try {
+    const file = req.file || req.files?.profilePicture?.[0] || req.files?.image?.[0];
+    if (!file?.path) {
+      return res.status(400).json({ success: false, message: 'Profile image is required' });
+    }
+
+    if (!String(file.mimetype || '').toLowerCase().startsWith('image/')) {
+      return res.status(400).json({ success: false, message: 'Upload a valid image file' });
+    }
+
+    const user = await authService.updateCurrentUserProfilePicture(req.user._id, file.path);
+    res.json({
+      success: true,
+      message: 'Profile image updated',
+      data: user
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const becomeProvider = async (req, res) => {
   try {
     const { payload, userUpdates } = buildProviderConversionPayload(req.body, req.files || {});
@@ -287,6 +309,7 @@ module.exports = {
   resetPassword,
   getCurrentUser,
   updateCurrentUser,
+  updateCurrentUserProfilePicture,
   becomeProvider,
   requestBecomeProviderOtp,
   verifyBecomeProviderOtp,
