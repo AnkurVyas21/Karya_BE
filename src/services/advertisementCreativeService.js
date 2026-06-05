@@ -177,6 +177,9 @@ class AdvertisementCreativeService {
       hasRemainingImpressions: Boolean(pack?.hasRemainingImpressions),
       impressionsUsed: Number(pack?.impressionsUsed || 0),
       impressionsTotal: Number(pack?.impressionsTotal || 0),
+      durationDays: Number(pack?.durationDays || 0),
+      runStart: pack?.runStart || null,
+      expiresAt: pack?.expiresAt || null,
       priority,
       reason
     };
@@ -711,13 +714,18 @@ class AdvertisementCreativeService {
     for (const doc of growthDocs) {
       for (const ad of doc.advertisements || []) {
         const runStart = getAdRunStart(ad);
-        const expired = runStart ? new Date(runStart).getTime() + (Number(ad.durationDays || 30) * 24 * 60 * 60 * 1000) <= now.getTime() : false;
+        const durationDays = Number(ad.durationDays || 30);
+        const expiresAt = runStart ? new Date(new Date(runStart).getTime() + (durationDays * 24 * 60 * 60 * 1000)) : null;
+        const expired = expiresAt ? expiresAt.getTime() <= now.getTime() : false;
         const hasRemainingImpressions = Number(ad.impressionsUsed || 0) < Number(ad.impressionsTotal || 0);
         const packState = {
           id: String(ad._id),
           status: String(ad.status || ''),
           paused: Boolean(ad.paused),
           expired,
+          durationDays,
+          runStart,
+          expiresAt,
           hasRemainingImpressions,
           impressionsUsed: Number(ad.impressionsUsed || 0),
           impressionsTotal: Number(ad.impressionsTotal || 0)
@@ -867,7 +875,8 @@ class AdvertisementCreativeService {
       return null;
     }
     const packRunStart = getAdRunStart(pack);
-    if (packRunStart && new Date(packRunStart).getTime() + (30 * 24 * 60 * 60 * 1000) <= Date.now()) {
+    const durationDays = Number(pack.durationDays || 30);
+    if (packRunStart && new Date(packRunStart).getTime() + (durationDays * 24 * 60 * 60 * 1000) <= Date.now()) {
       pack.status = 'completed';
       pack.completedAt = pack.completedAt || new Date();
       await growth.save();
