@@ -336,6 +336,48 @@ class AdvertisementCreativeService {
     return map;
   }
 
+  async getReconciledGrowthDocsForAdvertisementIds(advertisementIds = [], now = new Date()) {
+    const ids = (advertisementIds || []).map((id) => String(id)).filter(Boolean);
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const idSet = new Set(ids);
+    const growthDocs = await ProviderGrowth.find({ 'advertisements._id': { $in: ids } });
+
+    for (const doc of growthDocs) {
+      let changed = false;
+      for (const ad of doc.advertisements || []) {
+        const adId = String(ad._id);
+        if (!idSet.has(adId)) {
+          continue;
+        }
+
+        if (ad.status === 'scheduled' && ad.startsAt && new Date(ad.startsAt).getTime() <= now.getTime()) {
+          ad.status = 'active';
+          changed = true;
+        }
+
+        const runStart = getAdRunStart(ad);
+        const durationDays = Number(ad.durationDays || 30);
+        const expiresAt = runStart ? new Date(new Date(runStart).getTime() + (durationDays * 24 * 60 * 60 * 1000)) : null;
+        const expired = expiresAt ? expiresAt.getTime() <= now.getTime() : false;
+        const impressionsExhausted = Number(ad.impressionsUsed || 0) >= Number(ad.impressionsTotal || 0);
+        if (ad.status === 'active' && (expired || impressionsExhausted)) {
+          ad.status = 'completed';
+          ad.completedAt = ad.completedAt || now;
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        await doc.save();
+      }
+    }
+
+    return growthDocs.map((doc) => doc.toObject());
+  }
+
   async listForAdmin({ status = '' } = {}) {
     const normalizedStatus = cleanString(status).toLowerCase();
     const match = {};
@@ -707,7 +749,7 @@ class AdvertisementCreativeService {
 
     // Filter out creatives whose packs have completed or are no longer active.
     const advertisementIds = creatives.map((item) => String(item.advertisementId));
-    const growthDocs = await ProviderGrowth.find({ 'advertisements._id': { $in: advertisementIds } }).lean();
+    const growthDocs = await this.getReconciledGrowthDocsForAdvertisementIds(advertisementIds, now);
     const activePackIds = new Set();
     const packById = new Map();
 
@@ -868,7 +910,13 @@ class AdvertisementCreativeService {
     }
 
     const pack = (growth.advertisements || []).find((item) => String(item._id) === String(creative.advertisementId));
-    if (!pack || pack.status !== 'active') {
+    if (!pack) {
+      return null;
+    }
+    if (pack.status === 'scheduled' && pack.startsAt && new Date(pack.startsAt).getTime() <= Date.now()) {
+      pack.status = 'active';
+    }
+    if (pack.status !== 'active') {
       return null;
     }
     if (pack.paused) {
