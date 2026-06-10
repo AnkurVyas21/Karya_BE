@@ -378,6 +378,82 @@ class AdvertisementCreativeService {
     return growthDocs.map((doc) => doc.toObject());
   }
 
+  getActivePackMaps(growthDocs = [], now = new Date()) {
+    const activePackIds = new Set();
+    const packById = new Map();
+
+    for (const doc of growthDocs) {
+      for (const ad of doc.advertisements || []) {
+        const runStart = getAdRunStart(ad);
+        const durationDays = Number(ad.durationDays || 30);
+        const expiresAt = runStart ? new Date(new Date(runStart).getTime() + (durationDays * 24 * 60 * 60 * 1000)) : null;
+        const expired = expiresAt ? expiresAt.getTime() <= now.getTime() : false;
+        const hasRemainingImpressions = Number(ad.impressionsUsed || 0) < Number(ad.impressionsTotal || 0);
+        const packState = {
+          id: String(ad._id),
+          status: String(ad.status || ''),
+          paused: Boolean(ad.paused),
+          expired,
+          durationDays,
+          runStart,
+          expiresAt,
+          hasRemainingImpressions,
+          impressionsUsed: Number(ad.impressionsUsed || 0),
+          impressionsTotal: Number(ad.impressionsTotal || 0)
+        };
+        packById.set(String(ad._id), packState);
+        if (ad.status === 'active' && !ad.paused && !expired && hasRemainingImpressions) {
+          activePackIds.add(String(ad._id));
+        }
+      }
+    }
+
+    return { activePackIds, packById };
+  }
+
+  async hydrateActiveCreativeItems(filtered = []) {
+    const userIds = [...new Set(filtered.map((item) => String(item.user)))];
+    const [profiles, growthStates] = await Promise.all([
+      ProfessionalProfile.find({ user: { $in: userIds } }).lean(),
+      ProviderGrowth.find({ user: { $in: userIds } }).lean()
+    ]);
+    const profileByUser = new Map(profiles.map((p) => [String(p.user), p]));
+    const growthByUser = new Map(growthStates.map((g) => [String(g.user), g]));
+
+    return filtered.map((item) => {
+      const profile = profileByUser.get(String(item.user));
+      const growth = growthByUser.get(String(item.user));
+      const websiteSlug = cleanString(growth?.websiteSlug) || '';
+      const hasWebsite = Boolean(growth?.website?.active) && Boolean(growth?.website?.expiryDate) && new Date(growth.website.expiryDate) > new Date() && Boolean(websiteSlug);
+      const targetPath = hasWebsite
+        ? `/provider/site/${websiteSlug}`
+        : profile?._id
+          ? `/provider/${profile._id.toString()}`
+          : '/search';
+
+      return {
+        id: item._id.toString(),
+        advertisementId: item.advertisementId,
+        campaignType: item.campaignType || 'location',
+        level: item.level,
+        city: item.city || '',
+        state: item.state || '',
+        cities: normalizeLocationList(item.cities),
+        states: normalizeLocationList(item.states),
+        categories: Array.isArray(item.categories) ? item.categories : [],
+        imagePath: item.imagePath,
+        imageWidth: Number(item.imageWidth || 0),
+        imageHeight: Number(item.imageHeight || 0),
+        providerName: '',
+        profession: cleanString(profile?.profession || ''),
+        targetPath,
+        ctaMessage: hasWebsite
+          ? 'Clicking this ad opens the provider website.'
+          : 'Clicking this ad opens the provider profile where customers can call or message.'
+      };
+    });
+  }
+
   async listForAdmin({ status = '' } = {}) {
     const normalizedStatus = cleanString(status).toLowerCase();
     const match = {};
@@ -706,28 +782,28 @@ class AdvertisementCreativeService {
         }
       }
       if (locationClauses.length === 0) {
-        return shouldDebug ? {
-          items: [],
-          debug: {
-            query: {
-              city: normalizedCity,
-              state: normalizedState,
-              placement: cleanString(placement).toLowerCase() || 'home',
-              globalOnly: shouldShowGlobalOnly,
-              localOnly: shouldShowLocalOnly,
-              limit: Math.max(1, Math.min(Number(limit || 5), 8))
-            },
-            matchedCreatives: 0,
-            rows: []
-          }
-        } : [];
+        match._allowUntargetedFallback = true;
+      } else {
+        match.$or = locationClauses;
       }
-      match.$or = locationClauses;
     }
 
-    const creatives = await AdvertisementCreative.find(match)
-      .sort({ updatedAt: -1, createdAt: -1 })
-      .lean();
+    const allowUntargetedFallback = Boolean(match._allowUntargetedFallback);
+    delete match._allowUntargetedFallback;
+
+    let creatives = [];
+    if (!allowUntargetedFallback) {
+      creatives = await AdvertisementCreative.find(match)
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .lean();
+    }
+
+    const usedUntargetedFallback = allowUntargetedFallback || creatives.length === 0;
+    if (usedUntargetedFallback) {
+      creatives = await AdvertisementCreative.find({ status: 'approved' })
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .lean();
+    }
 
     if (creatives.length === 0) {
       return shouldDebug ? {
@@ -748,38 +824,11 @@ class AdvertisementCreativeService {
     }
 
     // Filter out creatives whose packs have completed or are no longer active.
-    const advertisementIds = creatives.map((item) => String(item.advertisementId));
-    const growthDocs = await this.getReconciledGrowthDocsForAdvertisementIds(advertisementIds, now);
-    const activePackIds = new Set();
-    const packById = new Map();
+    let advertisementIds = creatives.map((item) => String(item.advertisementId));
+    let growthDocs = await this.getReconciledGrowthDocsForAdvertisementIds(advertisementIds, now);
+    let { activePackIds, packById } = this.getActivePackMaps(growthDocs, now);
 
-    for (const doc of growthDocs) {
-      for (const ad of doc.advertisements || []) {
-        const runStart = getAdRunStart(ad);
-        const durationDays = Number(ad.durationDays || 30);
-        const expiresAt = runStart ? new Date(new Date(runStart).getTime() + (durationDays * 24 * 60 * 60 * 1000)) : null;
-        const expired = expiresAt ? expiresAt.getTime() <= now.getTime() : false;
-        const hasRemainingImpressions = Number(ad.impressionsUsed || 0) < Number(ad.impressionsTotal || 0);
-        const packState = {
-          id: String(ad._id),
-          status: String(ad.status || ''),
-          paused: Boolean(ad.paused),
-          expired,
-          durationDays,
-          runStart,
-          expiresAt,
-          hasRemainingImpressions,
-          impressionsUsed: Number(ad.impressionsUsed || 0),
-          impressionsTotal: Number(ad.impressionsTotal || 0)
-        };
-        packById.set(String(ad._id), packState);
-        if (ad.status === 'active' && !ad.paused && !expired && Number(ad.impressionsUsed || 0) < Number(ad.impressionsTotal || 0)) {
-          activePackIds.add(String(ad._id));
-        }
-      }
-    }
-
-    const prioritized = creatives
+    let prioritized = creatives
       .map((item) => ({
         ...item,
         _pack: packById.get(String(item.advertisementId)) || null,
@@ -792,7 +841,7 @@ class AdvertisementCreativeService {
         }) + this.getCategoryPriority(item, normalizedProfession)
       }));
 
-    const filtered = prioritized
+    let filtered = prioritized
       .filter((item) => activePackIds.has(String(item.advertisementId)))
       .filter((item) => item._priority > 0)
       .sort((left, right) => {
@@ -802,6 +851,44 @@ class AdvertisementCreativeService {
         return new Date(right.updatedAt || right.createdAt || 0).getTime() - new Date(left.updatedAt || left.createdAt || 0).getTime();
       })
       .slice(0, Math.max(1, Math.min(Number(limit || 5), 8)));
+
+    let usedBroadRunningFallback = false;
+    if (filtered.length === 0 && !usedUntargetedFallback) {
+      creatives = await AdvertisementCreative.find({ status: 'approved' })
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .lean();
+      advertisementIds = creatives.map((item) => String(item.advertisementId));
+      growthDocs = await this.getReconciledGrowthDocsForAdvertisementIds(advertisementIds, now);
+      ({ activePackIds, packById } = this.getActivePackMaps(growthDocs, now));
+      prioritized = creatives.map((item) => ({
+        ...item,
+        _pack: packById.get(String(item.advertisementId)) || null,
+        _priority: this.getLevelPriority(item.level, {
+          city: normalizedCity,
+          state: normalizedState,
+          placement: cleanString(placement).toLowerCase() || 'home',
+          globalOnly: shouldShowGlobalOnly,
+          localOnly: shouldShowLocalOnly
+        }) + this.getCategoryPriority(item, normalizedProfession)
+      }));
+      usedBroadRunningFallback = true;
+    }
+
+    const usedRunningFallback = filtered.length === 0;
+    if (usedRunningFallback) {
+      filtered = prioritized
+        .filter((item) => activePackIds.has(String(item.advertisementId)))
+        .sort((left, right) => {
+          const leftRemaining = Number(left._pack?.impressionsTotal || 0) - Number(left._pack?.impressionsUsed || 0);
+          const rightRemaining = Number(right._pack?.impressionsTotal || 0) - Number(right._pack?.impressionsUsed || 0);
+          if (rightRemaining !== leftRemaining) {
+            return rightRemaining - leftRemaining;
+          }
+          return new Date(right.updatedAt || right.createdAt || 0).getTime() - new Date(left.updatedAt || left.createdAt || 0).getTime();
+        })
+        .slice(0, Math.max(1, Math.min(Number(limit || 5), 8)));
+    }
+
     if (filtered.length === 0) {
       return shouldDebug ? {
         items: [],
@@ -815,6 +902,9 @@ class AdvertisementCreativeService {
             limit: Math.max(1, Math.min(Number(limit || 5), 8))
           },
           matchedCreatives: creatives.length,
+          usedUntargetedFallback,
+          usedRunningFallback,
+          usedBroadRunningFallback,
           rows: prioritized.map((item) => this.buildActiveCreativeDebugRow(item, {
             city: normalizedCity,
             state: normalizedState,
@@ -827,47 +917,7 @@ class AdvertisementCreativeService {
       } : [];
     }
 
-    // Fetch provider profiles for click-through + ProviderGrowth for website slugs.
-    const userIds = [...new Set(filtered.map((item) => String(item.user)))];
-    const [profiles, growthStates] = await Promise.all([
-      ProfessionalProfile.find({ user: { $in: userIds } }).lean(),
-      ProviderGrowth.find({ user: { $in: userIds } }).lean()
-    ]);
-    const profileByUser = new Map(profiles.map((p) => [String(p.user), p]));
-    const growthByUser = new Map(growthStates.map((g) => [String(g.user), g]));
-
-    const items = filtered.map((item) => {
-      const profile = profileByUser.get(String(item.user));
-      const growth = growthByUser.get(String(item.user));
-      const websiteSlug = cleanString(growth?.websiteSlug) || '';
-      const hasWebsite = Boolean(growth?.website?.active) && Boolean(growth?.website?.expiryDate) && new Date(growth.website.expiryDate) > new Date() && Boolean(websiteSlug);
-      const targetPath = hasWebsite
-        ? `/provider/site/${websiteSlug}`
-        : profile?._id
-          ? `/provider/${profile._id.toString()}`
-          : '/search';
-
-      return {
-        id: item._id.toString(),
-        advertisementId: item.advertisementId,
-        campaignType: item.campaignType || 'location',
-        level: item.level,
-        city: item.city || '',
-        state: item.state || '',
-        cities: normalizeLocationList(item.cities),
-        states: normalizeLocationList(item.states),
-        categories: Array.isArray(item.categories) ? item.categories : [],
-        imagePath: item.imagePath,
-        imageWidth: Number(item.imageWidth || 0),
-        imageHeight: Number(item.imageHeight || 0),
-        providerName: '',
-        profession: cleanString(profile?.profession || ''),
-        targetPath,
-        ctaMessage: hasWebsite
-          ? 'Clicking this ad opens the provider website.'
-          : 'Clicking this ad opens the provider profile where customers can call or message.'
-      };
-    });
+    const items = await this.hydrateActiveCreativeItems(filtered);
 
     if (shouldDebug) {
       return {
@@ -882,6 +932,9 @@ class AdvertisementCreativeService {
             limit: Math.max(1, Math.min(Number(limit || 5), 8))
           },
           matchedCreatives: creatives.length,
+          usedUntargetedFallback,
+          usedRunningFallback,
+          usedBroadRunningFallback,
           rows: prioritized.map((item) => this.buildActiveCreativeDebugRow(item, {
             city: normalizedCity,
             state: normalizedState,
