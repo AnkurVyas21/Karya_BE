@@ -277,10 +277,11 @@ class AdminService {
     ]);
 
     const [pendingAds, approvedAds, rejectedAds, totalAdViews] = await Promise.all([
-      AdvertisementCreative.countDocuments({ status: 'pending' }),
-      AdvertisementCreative.countDocuments({ status: 'approved' }),
-      AdvertisementCreative.countDocuments({ status: 'rejected' }),
+      AdvertisementCreative.countDocuments({ status: 'pending', source: { $ne: 'admin' } }),
+      AdvertisementCreative.countDocuments({ status: 'approved', source: { $ne: 'admin' } }),
+      AdvertisementCreative.countDocuments({ status: 'rejected', source: { $ne: 'admin' } }),
       AdvertisementCreative.aggregate([
+        { $match: { source: { $ne: 'admin' } } },
         { $group: { _id: null, total: { $sum: { $ifNull: ['$views', 0] } } } }
       ]).then((rows) => Number(rows?.[0]?.total || 0))
     ]);

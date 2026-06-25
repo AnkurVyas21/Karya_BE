@@ -174,6 +174,55 @@ router.delete('/website-template-media/:id', async (req, res) => {
   }
 });
 
+router.get('/ads/managed', async (_req, res) => {
+  try {
+    const data = await advertisementCreativeService.listManagedForAdmin();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/ads/managed', upload.single('image'), persistUploadedFiles, async (req, res) => {
+  try {
+    const data = await advertisementCreativeService.createManagedForAdmin({
+      adminId: req.user?._id,
+      payload: req.body || {},
+      file: req.file || null
+    });
+    res.status(201).json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/ads/managed/:id', upload.single('image'), persistUploadedFiles, async (req, res) => {
+  try {
+    const data = await advertisementCreativeService.updateManagedForAdmin({
+      creativeId: req.params.id,
+      adminId: req.user?._id,
+      payload: req.body || {},
+      file: req.file || null
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.delete('/ads/managed/:id', async (req, res) => {
+  try {
+    const data = await advertisementCreativeService.archiveManagedForAdmin({
+      creativeId: req.params.id,
+      adminId: req.user?._id,
+      note: req.body?.note || 'Archived by admin.'
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/ads', async (req, res) => {
   try {
     const data = await advertisementCreativeService.listForAdmin({ status: req.query.status || '' });

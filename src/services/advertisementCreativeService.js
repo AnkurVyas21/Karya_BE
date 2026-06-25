@@ -2,13 +2,36 @@ const AdvertisementCreative = require('../models/AdvertisementCreative');
 const ProviderGrowth = require('../models/ProviderGrowth');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
 const logger = require('../utils/logger');
+const mongoose = require('mongoose');
 
 const cleanString = (value) => String(value || '').trim();
+const AD_PLACEMENTS = ['home', 'messages', 'search', 'category', 'internal'];
+const AD_PLACEMENT_SET = new Set(AD_PLACEMENTS);
 
+const parseListInput = (values = []) => {
+  if (Array.isArray(values)) {
+    return values;
+  }
+  const text = String(values || '').trim();
+  if (!text) {
+    return [];
+  }
+  if (text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch (_error) {
+      // Fall back to comma-separated parsing.
+    }
+  }
+  return text.split(',');
+};
 const normalizeCity = (value) => cleanString(value).replace(/\s+/g, ' ');
 const normalizeState = (value) => cleanString(value).replace(/\s+/g, ' ');
 const normalizeLocationList = (values = []) => {
-  const raw = Array.isArray(values) ? values : String(values || '').split(',');
+  const raw = parseListInput(values);
   const seen = new Set();
   const result = [];
   for (const value of raw) {
@@ -23,7 +46,7 @@ const normalizeLocationList = (values = []) => {
 const normalizeCategory = (value) => cleanString(value).replace(/\s+/g, ' ').slice(0, 80);
 const normalizeCategoryKey = (value) => normalizeCategory(value).toLowerCase();
 const normalizeCategories = (values = []) => {
-  const raw = Array.isArray(values) ? values : String(values || '').split(',');
+  const raw = parseListInput(values);
   const seen = new Set();
   const result = [];
   for (const value of raw) {
@@ -35,6 +58,42 @@ const normalizeCategories = (values = []) => {
     if (result.length >= 15) break;
   }
   return result;
+};
+const normalizePlacement = (value = '') => {
+  const placement = cleanString(value).toLowerCase();
+  return AD_PLACEMENT_SET.has(placement) ? placement : 'home';
+};
+const normalizePlacements = (values = []) => {
+  const raw = parseListInput(values);
+  const seen = new Set();
+  const result = [];
+  for (const value of raw) {
+    const normalized = normalizePlacement(value);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result.length ? result : ['home'];
+};
+const normalizeTargetUrl = (value = '') => {
+  const target = cleanString(value).slice(0, 1000);
+  if (!target) {
+    return '';
+  }
+  if (/^https?:\/\//i.test(target) || target.startsWith('/')) {
+    return target;
+  }
+  return `https://${target}`;
+};
+const parseOptionalDate = (value = '') => {
+  const raw = cleanString(value);
+  if (!raw) {
+    return null;
+  }
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date;
 };
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const getAdRunStart = (ad = {}) => ad?.startsAt || ad?.createdAt || null;
@@ -90,6 +149,97 @@ class AdvertisementCreativeService {
 
   cleanPauseNote(value = '') {
     return cleanString(value).slice(0, 500);
+  }
+
+  getAllowedPlacements() {
+    return [...AD_PLACEMENTS];
+  }
+
+  isAdminCreativeLive(creative = {}, now = new Date()) {
+    if (String(creative?.source || 'provider') !== 'admin') {
+      return false;
+    }
+    if (String(creative?.status || '').toLowerCase() !== 'approved') {
+      return false;
+    }
+    if (creative?.isActive === false) {
+      return false;
+    }
+    const startsAt = creative?.startsAt ? new Date(creative.startsAt) : null;
+    const endsAt = creative?.endsAt ? new Date(creative.endsAt) : null;
+    if (startsAt && startsAt.getTime() > now.getTime()) {
+      return false;
+    }
+    if (endsAt && endsAt.getTime() <= now.getTime()) {
+      return false;
+    }
+    return true;
+  }
+
+  getAdminCreativePriority(item, context = {}) {
+    const base = Number(item?.priority || 0) + 10000;
+    const locationPriority = this.getLevelPriority(item?.level, {
+      city: context.city || '',
+      state: context.state || '',
+      placement: normalizePlacement(context.placement),
+      globalOnly: Boolean(context.globalOnly),
+      localOnly: Boolean(context.localOnly)
+    });
+    const categoryPriority = this.getCategoryPriority(item, context.profession || '');
+    return base + locationPriority + categoryPriority;
+  }
+
+  adminCreativeMatchesContext(item, context = {}) {
+    const placement = normalizePlacement(context.placement);
+    const placements = normalizePlacements(item?.placements);
+    if (!placements.includes(placement)) {
+      return false;
+    }
+
+    const normalizedCity = normalizeCity(context.city);
+    const normalizedState = normalizeState(context.state);
+    const normalizedProfession = normalizeCategory(context.profession);
+    const normalizedLevel = cleanString(item?.level).toLowerCase() || 'national';
+    const campaignType = cleanString(item?.campaignType).toLowerCase() === 'category' ? 'category' : 'location';
+
+    if (context.globalOnly) {
+      return normalizedLevel === 'national' && campaignType !== 'category';
+    }
+
+    if (normalizedLevel === 'city') {
+      if (!normalizedCity) {
+        return false;
+      }
+      const targetCities = normalizeLocationList(item?.cities?.length ? item.cities : [item.city]);
+      const cityKey = normalizedCity.toLowerCase();
+      if (!targetCities.some((city) => city.toLowerCase() === cityKey)) {
+        return false;
+      }
+    }
+
+    if (normalizedLevel === 'state' || normalizedLevel === 'city') {
+      if (!normalizedState) {
+        return false;
+      }
+      const targetStates = normalizeLocationList(item?.states?.length ? item.states : [item.state]);
+      const stateKey = normalizedState.toLowerCase();
+      if (!targetStates.some((state) => state.toLowerCase() === stateKey)) {
+        return false;
+      }
+    }
+
+    if (context.localOnly && normalizedLevel === 'national') {
+      return false;
+    }
+
+    if (campaignType === 'category') {
+      if (!normalizedProfession || !['search', 'category'].includes(placement)) {
+        return false;
+      }
+      return this.getCategoryPriority(item, normalizedProfession) > 0;
+    }
+
+    return true;
   }
 
   getLevelPriority(level = '', { city = '', state = '', placement = 'home', globalOnly = false, localOnly = false } = {}) {
@@ -193,6 +343,279 @@ class AdvertisementCreativeService {
     const last = items[items.length - 1];
     const message = cleanString(last?.message);
     return message ? { message, createdAt: last?.createdAt || null } : null;
+  }
+
+  readBoolean(value, fallback = false) {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    const normalized = cleanString(value).toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'off', ''].includes(normalized)) {
+      return false;
+    }
+    return fallback;
+  }
+
+  hasPayloadField(payload = {}, key = '') {
+    return Object.prototype.hasOwnProperty.call(payload || {}, key);
+  }
+
+  buildManagedPayload(payload = {}, { partial = false } = {}) {
+    const set = {};
+    const include = (key) => !partial || this.hasPayloadField(payload, key);
+
+    if (include('title')) {
+      set.title = cleanString(payload.title).slice(0, 120) || 'Admin advertisement';
+    }
+
+    if (include('targetUrl')) {
+      const targetUrl = normalizeTargetUrl(payload.targetUrl);
+      if (!targetUrl) {
+        throw new Error('Ad link is required');
+      }
+      set.targetUrl = targetUrl;
+    }
+
+    if (include('placements')) {
+      set.placements = normalizePlacements(payload.placements);
+    }
+
+    if (include('priority')) {
+      const priority = Math.round(Number(payload.priority || 0));
+      set.priority = Math.max(0, Math.min(Number.isFinite(priority) ? priority : 0, 9999));
+    }
+
+    if (include('level')) {
+      const level = cleanString(payload.level).toLowerCase() || 'national';
+      if (!['city', 'state', 'national'].includes(level)) {
+        throw new Error('Invalid ad visibility level');
+      }
+      set.level = level;
+    }
+
+    if (include('campaignType')) {
+      set.campaignType = cleanString(payload.campaignType).toLowerCase() === 'category' ? 'category' : 'location';
+    }
+
+    if (include('city') || include('cities')) {
+      const cities = normalizeLocationList(payload.cities || payload.city);
+      set.city = cities[0] || normalizeCity(payload.city);
+      set.cities = cities.length ? cities : (set.city ? [set.city] : []);
+    }
+
+    if (include('state') || include('states')) {
+      const states = normalizeLocationList(payload.states || payload.state);
+      set.state = states[0] || normalizeState(payload.state);
+      set.states = states.length ? states : (set.state ? [set.state] : []);
+    }
+
+    if (include('categories')) {
+      set.categories = normalizeCategories(payload.categories);
+    }
+
+    if (include('startsAt')) {
+      set.startsAt = parseOptionalDate(payload.startsAt);
+    }
+
+    if (include('endsAt')) {
+      set.endsAt = parseOptionalDate(payload.endsAt);
+    }
+
+    if (include('isActive')) {
+      set.isActive = this.readBoolean(payload.isActive, true);
+    }
+
+    const level = set.level || 'national';
+    const campaignType = set.campaignType || 'location';
+    if (!partial) {
+      if (level === 'city' && normalizeLocationList(set.cities).length === 0) {
+        throw new Error('Choose at least one city for city-level admin ads');
+      }
+      if ((level === 'city' || level === 'state') && normalizeLocationList(set.states).length === 0) {
+        throw new Error('Choose at least one state for city or state admin ads');
+      }
+      if (campaignType === 'category' && normalizeCategories(set.categories).length === 0) {
+        throw new Error('Choose at least one profession/category for category admin ads');
+      }
+    }
+
+    const startsAt = this.hasPayloadField(set, 'startsAt') ? set.startsAt : null;
+    const endsAt = this.hasPayloadField(set, 'endsAt') ? set.endsAt : null;
+    if (startsAt && endsAt && startsAt.getTime() >= endsAt.getTime()) {
+      throw new Error('End date must be after start date');
+    }
+
+    return set;
+  }
+
+  managedStatusLabel(item = {}) {
+    if (String(item?.status || '').toLowerCase() === 'deleted') {
+      return 'archived';
+    }
+    if (!this.isAdminCreativeLive(item)) {
+      const now = Date.now();
+      if (item?.startsAt && new Date(item.startsAt).getTime() > now) {
+        return 'scheduled';
+      }
+      if (item?.endsAt && new Date(item.endsAt).getTime() <= now) {
+        return 'expired';
+      }
+      return 'paused';
+    }
+    return 'active';
+  }
+
+  serializeManagedAd(item = {}) {
+    return {
+      id: item._id?.toString?.() || String(item.id || ''),
+      advertisementId: item.advertisementId || '',
+      source: 'admin',
+      title: item.title || 'Admin advertisement',
+      targetUrl: item.targetUrl || '',
+      placements: normalizePlacements(item.placements),
+      priority: Number(item.priority || 0),
+      campaignType: item.campaignType || 'location',
+      level: item.level || 'national',
+      city: item.city || '',
+      state: item.state || '',
+      cities: normalizeLocationList(item.cities),
+      states: normalizeLocationList(item.states),
+      categories: Array.isArray(item.categories) ? item.categories : [],
+      status: item.status || 'approved',
+      managedStatus: this.managedStatusLabel(item),
+      isActive: item.isActive !== false,
+      startsAt: item.startsAt || null,
+      endsAt: item.endsAt || null,
+      deletedAt: item.deletedAt || null,
+      deletionNote: item.deletionNote || '',
+      imagePath: item.imagePath || '',
+      imageWidth: Number(item.imageWidth || 0),
+      imageHeight: Number(item.imageHeight || 0),
+      views: Number(item.views || 0),
+      clicks: Number(item.clicks || 0),
+      createdAt: item.createdAt || null,
+      updatedAt: item.updatedAt || null,
+      managedBy: item.managedBy
+        ? {
+            userId: item.managedBy._id?.toString?.() || String(item.managedBy || ''),
+            fullName: item.managedBy.fullName || '',
+            email: item.managedBy.email || ''
+          }
+        : null
+    };
+  }
+
+  async listManagedForAdmin({ includeDeleted = true } = {}) {
+    const match = { source: 'admin' };
+    if (!includeDeleted) {
+      match.status = { $ne: 'deleted' };
+    }
+
+    const items = await AdvertisementCreative.find(match)
+      .populate('managedBy')
+      .sort({ status: 1, priority: -1, updatedAt: -1, createdAt: -1 })
+      .lean();
+
+    return items.map((item) => this.serializeManagedAd(item));
+  }
+
+  async createManagedForAdmin({ adminId, payload = {}, file = null }) {
+    const imagePath = cleanString(file?.path);
+    if (!imagePath) {
+      throw new Error('Ad image is required');
+    }
+
+    const set = this.buildManagedPayload(payload);
+    const creative = await AdvertisementCreative.create({
+      ...set,
+      source: 'admin',
+      user: adminId,
+      managedBy: adminId || null,
+      professionalProfile: null,
+      advertisementId: `admin-${new mongoose.Types.ObjectId().toString()}`,
+      imagePath,
+      imageWidth: Number(payload.imageWidth || 0),
+      imageHeight: Number(payload.imageHeight || 0),
+      status: 'approved',
+      approvedAt: new Date(),
+      rejectionReason: '',
+      deletedAt: null,
+      deletedBy: null,
+      deletionNote: ''
+    });
+
+    logger.info(`Admin managed ad created: ${creative._id}`);
+    this.invalidateActiveCreativesCache();
+    return this.serializeManagedAd(creative.toObject());
+  }
+
+  async updateManagedForAdmin({ creativeId, adminId, payload = {}, file = null }) {
+    const creative = await AdvertisementCreative.findOne({ _id: creativeId, source: 'admin' });
+    if (!creative) {
+      throw new Error('Admin ad not found');
+    }
+    if (creative.status === 'deleted') {
+      throw new Error('Archived admin ads cannot be edited');
+    }
+
+    const set = this.buildManagedPayload(payload, { partial: true });
+    const nextLevel = set.level || creative.level || 'national';
+    const nextCampaignType = set.campaignType || creative.campaignType || 'location';
+    const nextCities = this.hasPayloadField(set, 'cities') ? set.cities : normalizeLocationList(creative.cities?.length ? creative.cities : [creative.city]);
+    const nextStates = this.hasPayloadField(set, 'states') ? set.states : normalizeLocationList(creative.states?.length ? creative.states : [creative.state]);
+    const nextCategories = this.hasPayloadField(set, 'categories') ? set.categories : normalizeCategories(creative.categories);
+    const nextStartsAt = this.hasPayloadField(set, 'startsAt') ? set.startsAt : (creative.startsAt || null);
+    const nextEndsAt = this.hasPayloadField(set, 'endsAt') ? set.endsAt : (creative.endsAt || null);
+
+    if (nextLevel === 'city' && nextCities.length === 0) {
+      throw new Error('Choose at least one city for city-level admin ads');
+    }
+    if ((nextLevel === 'city' || nextLevel === 'state') && nextStates.length === 0) {
+      throw new Error('Choose at least one state for city or state admin ads');
+    }
+    if (nextCampaignType === 'category' && nextCategories.length === 0) {
+      throw new Error('Choose at least one profession/category for category admin ads');
+    }
+    if (nextStartsAt && nextEndsAt && new Date(nextStartsAt).getTime() >= new Date(nextEndsAt).getTime()) {
+      throw new Error('End date must be after start date');
+    }
+
+    Object.assign(creative, set);
+    if (file?.path) {
+      creative.imagePath = cleanString(file.path);
+      creative.imageWidth = Number(payload.imageWidth || creative.imageWidth || 0);
+      creative.imageHeight = Number(payload.imageHeight || creative.imageHeight || 0);
+    }
+    creative.managedBy = adminId || creative.managedBy || null;
+    creative.status = 'approved';
+    creative.approvedAt = creative.approvedAt || new Date();
+    creative.deletedAt = null;
+    creative.deletedBy = null;
+    creative.deletionNote = '';
+
+    await creative.save();
+    this.invalidateActiveCreativesCache();
+    return this.serializeManagedAd(creative.toObject());
+  }
+
+  async archiveManagedForAdmin({ creativeId, adminId, note = '' }) {
+    const creative = await AdvertisementCreative.findOne({ _id: creativeId, source: 'admin' });
+    if (!creative) {
+      throw new Error('Admin ad not found');
+    }
+
+    creative.status = 'deleted';
+    creative.isActive = false;
+    creative.deletedAt = new Date();
+    creative.deletedBy = adminId || null;
+    creative.deletionNote = this.cleanDeletionNote(note) || 'Archived by admin.';
+    await creative.save();
+
+    this.invalidateActiveCreativesCache();
+    return this.serializeManagedAd(creative.toObject());
   }
 
   async createOrReplaceCreative({ userId, advertisementId, level, city = '', state = '', categories = [], imagePath, imageWidth = 0, imageHeight = 0 }) {
@@ -454,9 +877,94 @@ class AdvertisementCreativeService {
     });
   }
 
+  hydrateActiveAdminCreativeItems(items = []) {
+    return items.map((item) => ({
+      id: item._id.toString(),
+      advertisementId: item.advertisementId,
+      source: 'admin',
+      title: item.title || 'Sponsored',
+      campaignType: item.campaignType || 'location',
+      level: item.level,
+      city: item.city || '',
+      state: item.state || '',
+      cities: normalizeLocationList(item.cities),
+      states: normalizeLocationList(item.states),
+      categories: Array.isArray(item.categories) ? item.categories : [],
+      imagePath: item.imagePath,
+      imageWidth: Number(item.imageWidth || 0),
+      imageHeight: Number(item.imageHeight || 0),
+      providerName: 'Nasdiya',
+      profession: cleanString(item.title || 'Sponsored'),
+      targetUrl: item.targetUrl || '',
+      targetPath: item.targetUrl || '',
+      ctaMessage: 'Clicking this ad opens the advertiser link selected by Nasdiya.'
+    }));
+  }
+
+  async getActiveAdminCreatives({ city = '', state = '', profession = '', placement = 'home', globalOnly = false, localOnly = false, limit = 8 } = {}) {
+    const normalizedPlacement = normalizePlacement(placement);
+    const now = new Date();
+    const candidates = await AdvertisementCreative.find({
+      source: 'admin',
+      status: 'approved',
+      isActive: { $ne: false },
+      $or: [
+        { placements: normalizedPlacement },
+        { placements: { $exists: false } },
+        { placements: { $size: 0 } }
+      ]
+    })
+      .sort({ priority: -1, updatedAt: -1, createdAt: -1 })
+      .lean();
+
+    const filtered = candidates
+      .filter((item) => this.isAdminCreativeLive(item, now))
+      .filter((item) => this.adminCreativeMatchesContext(item, {
+        city,
+        state,
+        profession,
+        placement: normalizedPlacement,
+        globalOnly,
+        localOnly
+      }))
+      .map((item) => ({
+        ...item,
+        _priority: this.getAdminCreativePriority(item, {
+          city,
+          state,
+          profession,
+          placement: normalizedPlacement,
+          globalOnly,
+          localOnly
+        })
+      }))
+      .sort((left, right) => {
+        if (right._priority !== left._priority) {
+          return right._priority - left._priority;
+        }
+        return new Date(right.updatedAt || right.createdAt || 0).getTime() - new Date(left.updatedAt || left.createdAt || 0).getTime();
+      })
+      .slice(0, Math.max(1, Math.min(Number(limit || 8), 8)));
+
+    return this.hydrateActiveAdminCreativeItems(filtered);
+  }
+
+  mergeActiveAdItems(adminItems = [], providerItems = [], limit = 5) {
+    const seen = new Set();
+    const rows = [...adminItems, ...providerItems].filter((item) => {
+      const id = String(item?.id || '').trim();
+      if (!id || seen.has(id)) {
+        return false;
+      }
+      seen.add(id);
+      return true;
+    });
+    return rows.slice(0, Math.max(1, Math.min(Number(limit || 5), 8)));
+  }
+
   async listForAdmin({ status = '' } = {}) {
     const normalizedStatus = cleanString(status).toLowerCase();
-    const match = {};
+    const match = { source: { $ne: 'admin' } };
     if (['pending', 'approved', 'rejected', 'deleted'].includes(normalizedStatus)) {
       match.status = normalizedStatus;
     }
@@ -505,7 +1013,7 @@ class AdvertisementCreativeService {
   }
 
   async getForAdmin({ creativeId }) {
-    const creative = await AdvertisementCreative.findById(creativeId)
+    const creative = await AdvertisementCreative.findOne({ _id: creativeId, source: { $ne: 'admin' } })
       .populate('user')
       .populate('professionalProfile')
       .lean();
@@ -562,7 +1070,7 @@ class AdvertisementCreativeService {
     const shouldPause = Boolean(paused);
     const pauseNote = shouldPause ? this.cleanPauseNote(note) : '';
 
-    const creative = await AdvertisementCreative.findById(creativeId);
+    const creative = await AdvertisementCreative.findOne({ _id: creativeId, source: { $ne: 'admin' } });
     if (!creative) {
       throw new Error('Ad creative not found');
     }
@@ -606,7 +1114,7 @@ class AdvertisementCreativeService {
       throw new Error('Message is required');
     }
 
-    const creative = await AdvertisementCreative.findById(creativeId);
+    const creative = await AdvertisementCreative.findOne({ _id: creativeId, source: { $ne: 'admin' } });
     if (!creative) {
       throw new Error('Ad creative not found');
     }
@@ -629,7 +1137,7 @@ class AdvertisementCreativeService {
       throw new Error('Invalid status');
     }
 
-    const creative = await AdvertisementCreative.findById(creativeId);
+    const creative = await AdvertisementCreative.findOne({ _id: creativeId, source: { $ne: 'admin' } });
     if (!creative) {
       throw new Error('Ad creative not found');
     }
@@ -666,7 +1174,7 @@ class AdvertisementCreativeService {
   }
 
   async deleteForAdmin({ creativeId, adminId, note = '' }) {
-    const creative = await AdvertisementCreative.findById(creativeId);
+    const creative = await AdvertisementCreative.findOne({ _id: creativeId, source: { $ne: 'admin' } });
     if (!creative) {
       throw new Error('Ad creative not found');
     }
@@ -735,6 +1243,8 @@ class AdvertisementCreativeService {
     const normalizedCity = normalizeCity(city);
     const normalizedState = normalizeState(state);
     const normalizedProfession = normalizeCategory(profession);
+    const normalizedPlacement = normalizePlacement(placement);
+    const effectiveLimit = Math.max(1, Math.min(Number(limit || 5), 8));
     const shouldShowGlobalOnly = Boolean(globalOnly);
     const shouldShowLocalOnly = Boolean(localOnly) && !shouldShowGlobalOnly;
     const now = new Date();
@@ -743,7 +1253,7 @@ class AdvertisementCreativeService {
       city: normalizedCity,
       state: normalizedState,
       profession: normalizedProfession,
-      placement,
+      placement: normalizedPlacement,
       globalOnly: shouldShowGlobalOnly,
       localOnly: shouldShowLocalOnly,
       limit
@@ -753,7 +1263,17 @@ class AdvertisementCreativeService {
       return cached;
     }
 
-    const match = { status: 'approved' };
+    const adminItems = await this.getActiveAdminCreatives({
+      city: normalizedCity,
+      state: normalizedState,
+      profession: normalizedProfession,
+      placement: normalizedPlacement,
+      globalOnly: shouldShowGlobalOnly,
+      localOnly: shouldShowLocalOnly,
+      limit: effectiveLimit
+    });
+
+    const match = { status: 'approved', source: { $ne: 'admin' } };
     if (shouldShowGlobalOnly) {
       match.level = 'national';
       match.campaignType = { $ne: 'category' };
@@ -767,7 +1287,7 @@ class AdvertisementCreativeService {
         const stateMatch = { $regex: `^${escapeRegex(normalizedState)}$`, $options: 'i' };
         locationClauses.push({ level: 'state', campaignType: { $ne: 'category' }, $or: [{ state: stateMatch }, { states: stateMatch }] });
       }
-      if (normalizedProfession && ['search', 'category'].includes(cleanString(placement).toLowerCase())) {
+      if (normalizedProfession && ['search', 'category'].includes(normalizedPlacement)) {
         const categoryMatch = { $regex: `^${escapeRegex(normalizedProfession)}$`, $options: 'i' };
         if (!shouldShowLocalOnly) {
           locationClauses.push({ level: 'national', campaignType: 'category', categories: categoryMatch });
@@ -800,27 +1320,33 @@ class AdvertisementCreativeService {
 
     const usedUntargetedFallback = allowUntargetedFallback || creatives.length === 0;
     if (usedUntargetedFallback) {
-      creatives = await AdvertisementCreative.find({ status: 'approved' })
+      creatives = await AdvertisementCreative.find({ status: 'approved', source: { $ne: 'admin' } })
         .sort({ updatedAt: -1, createdAt: -1 })
         .lean();
     }
 
     if (creatives.length === 0) {
+      const combinedItems = this.mergeActiveAdItems(adminItems, [], effectiveLimit);
+      if (!shouldDebug && combinedItems.length > 0) {
+        this.writeActiveCreativesCache(cacheKey, combinedItems);
+        return combinedItems;
+      }
       return shouldDebug ? {
-        items: [],
+        items: combinedItems,
         debug: {
           query: {
             city: normalizedCity,
             state: normalizedState,
-            placement: cleanString(placement).toLowerCase() || 'home',
+            placement: normalizedPlacement,
             globalOnly: shouldShowGlobalOnly,
             localOnly: shouldShowLocalOnly,
-            limit: Math.max(1, Math.min(Number(limit || 5), 8))
+            limit: effectiveLimit
           },
           matchedCreatives: 0,
+          matchedAdminCreatives: adminItems.length,
           rows: []
         }
-      } : [];
+      } : combinedItems;
     }
 
     // Filter out creatives whose packs have completed or are no longer active.
@@ -835,7 +1361,7 @@ class AdvertisementCreativeService {
         _priority: this.getLevelPriority(item.level, {
           city: normalizedCity,
           state: normalizedState,
-          placement: cleanString(placement).toLowerCase() || 'home',
+          placement: normalizedPlacement,
           globalOnly: shouldShowGlobalOnly,
           localOnly: shouldShowLocalOnly
         }) + this.getCategoryPriority(item, normalizedProfession)
@@ -850,11 +1376,11 @@ class AdvertisementCreativeService {
         }
         return new Date(right.updatedAt || right.createdAt || 0).getTime() - new Date(left.updatedAt || left.createdAt || 0).getTime();
       })
-      .slice(0, Math.max(1, Math.min(Number(limit || 5), 8)));
+      .slice(0, effectiveLimit);
 
     let usedBroadRunningFallback = false;
     if (filtered.length === 0 && !usedUntargetedFallback) {
-      creatives = await AdvertisementCreative.find({ status: 'approved' })
+      creatives = await AdvertisementCreative.find({ status: 'approved', source: { $ne: 'admin' } })
         .sort({ updatedAt: -1, createdAt: -1 })
         .lean();
       advertisementIds = creatives.map((item) => String(item.advertisementId));
@@ -866,7 +1392,7 @@ class AdvertisementCreativeService {
         _priority: this.getLevelPriority(item.level, {
           city: normalizedCity,
           state: normalizedState,
-          placement: cleanString(placement).toLowerCase() || 'home',
+          placement: normalizedPlacement,
           globalOnly: shouldShowGlobalOnly,
           localOnly: shouldShowLocalOnly
         }) + this.getCategoryPriority(item, normalizedProfession)
@@ -886,22 +1412,28 @@ class AdvertisementCreativeService {
           }
           return new Date(right.updatedAt || right.createdAt || 0).getTime() - new Date(left.updatedAt || left.createdAt || 0).getTime();
         })
-        .slice(0, Math.max(1, Math.min(Number(limit || 5), 8)));
+        .slice(0, effectiveLimit);
     }
 
     if (filtered.length === 0) {
+      const combinedItems = this.mergeActiveAdItems(adminItems, [], effectiveLimit);
+      if (!shouldDebug && combinedItems.length > 0) {
+        this.writeActiveCreativesCache(cacheKey, combinedItems);
+        return combinedItems;
+      }
       return shouldDebug ? {
-        items: [],
+        items: combinedItems,
         debug: {
           query: {
             city: normalizedCity,
             state: normalizedState,
-            placement: cleanString(placement).toLowerCase() || 'home',
+            placement: normalizedPlacement,
             globalOnly: shouldShowGlobalOnly,
             localOnly: shouldShowLocalOnly,
-            limit: Math.max(1, Math.min(Number(limit || 5), 8))
+            limit: effectiveLimit
           },
           matchedCreatives: creatives.length,
+          matchedAdminCreatives: adminItems.length,
           usedUntargetedFallback,
           usedRunningFallback,
           usedBroadRunningFallback,
@@ -918,20 +1450,22 @@ class AdvertisementCreativeService {
     }
 
     const items = await this.hydrateActiveCreativeItems(filtered);
+    const combinedItems = this.mergeActiveAdItems(adminItems, items, effectiveLimit);
 
     if (shouldDebug) {
       return {
-        items,
+        items: combinedItems,
         debug: {
           query: {
             city: normalizedCity,
             state: normalizedState,
-            placement: cleanString(placement).toLowerCase() || 'home',
+            placement: normalizedPlacement,
             globalOnly: shouldShowGlobalOnly,
             localOnly: shouldShowLocalOnly,
-            limit: Math.max(1, Math.min(Number(limit || 5), 8))
+            limit: effectiveLimit
           },
           matchedCreatives: creatives.length,
+          matchedAdminCreatives: adminItems.length,
           usedUntargetedFallback,
           usedRunningFallback,
           usedBroadRunningFallback,
@@ -947,14 +1481,23 @@ class AdvertisementCreativeService {
       };
     }
 
-    this.writeActiveCreativesCache(cacheKey, items);
-    return items;
+    this.writeActiveCreativesCache(cacheKey, combinedItems);
+    return combinedItems;
   }
 
   async recordView({ creativeId } = {}) {
     const creative = await AdvertisementCreative.findById(creativeId);
     if (!creative || creative.status !== 'approved') {
       return null;
+    }
+
+    if (String(creative.source || 'provider') === 'admin') {
+      if (!this.isAdminCreativeLive(creative)) {
+        return null;
+      }
+      creative.views = Number(creative.views || 0) + 1;
+      await creative.save();
+      return { ok: true };
     }
 
     const growth = await ProviderGrowth.findOne({ user: creative.user });
@@ -1001,6 +1544,10 @@ class AdvertisementCreativeService {
   async recordClick({ creativeId } = {}) {
     const creative = await AdvertisementCreative.findById(creativeId);
     if (!creative || creative.status !== 'approved') {
+      return null;
+    }
+
+    if (String(creative.source || 'provider') === 'admin' && !this.isAdminCreativeLive(creative)) {
       return null;
     }
 

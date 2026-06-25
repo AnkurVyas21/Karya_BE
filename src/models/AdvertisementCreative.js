@@ -3,9 +3,23 @@ const mongoose = require('mongoose');
 const advertisementCreativeSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   professionalProfile: { type: mongoose.Schema.Types.ObjectId, ref: 'ProfessionalProfile', default: null, index: true },
+  source: { type: String, enum: ['provider', 'admin'], default: 'provider', index: true },
+  managedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 
   // Links to ProviderGrowth.advertisements subdocument _id (stringified ObjectId)
   advertisementId: { type: String, required: true, index: true },
+
+  title: { type: String, default: '' },
+  targetUrl: { type: String, default: '' },
+  placements: [{
+    type: String,
+    enum: ['home', 'messages', 'search', 'category', 'internal'],
+    index: true
+  }],
+  priority: { type: Number, default: 0, index: true },
+  startsAt: { type: Date, default: null, index: true },
+  endsAt: { type: Date, default: null, index: true },
+  isActive: { type: Boolean, default: true, index: true },
 
   campaignType: { type: String, enum: ['location', 'category'], default: 'location', index: true },
   level: { type: String, enum: ['city', 'state', 'national'], required: true, index: true },
@@ -49,6 +63,8 @@ const advertisementCreativeSchema = new mongoose.Schema({
 
 advertisementCreativeSchema.index({ level: 1, city: 1, status: 1, createdAt: -1 });
 advertisementCreativeSchema.index({ campaignType: 1, categories: 1, status: 1, createdAt: -1 });
+advertisementCreativeSchema.index({ source: 1, status: 1, isActive: 1, priority: -1, updatedAt: -1 });
+advertisementCreativeSchema.index({ source: 1, placements: 1, status: 1, isActive: 1, priority: -1 });
 advertisementCreativeSchema.index({ user: 1, advertisementId: 1 }, { unique: true });
 
 module.exports = mongoose.model('AdvertisementCreative', advertisementCreativeSchema);
