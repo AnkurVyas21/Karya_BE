@@ -4,6 +4,7 @@ const {
   login,
   verifyOTP,
   resendOTP,
+  getPasswordEncryptionKey,
   sendPasswordResetOtp,
   verifyPasswordResetOtp,
   resetPassword,
@@ -22,6 +23,7 @@ const {
 } = require('../controllers/authController');
 const authMiddleware = require('../middlewares/authMiddleware');
 const validationMiddleware = require('../middlewares/validationMiddleware');
+const decryptPasswordPayload = require('../middlewares/decryptPasswordPayload');
 const Joi = require('joi');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
@@ -171,15 +173,16 @@ const updateCurrentUserSchema = Joi.object({
   pincode: Joi.string().allow('').optional()
 });
 
-router.post('/signup', validationMiddleware(signupSchema), signup);
-router.post('/login', loginRateLimiter, validationMiddleware(loginSchema), login);
+router.get('/password-key', getPasswordEncryptionKey);
+router.post('/signup', decryptPasswordPayload, validationMiddleware(signupSchema), signup);
+router.post('/login', loginRateLimiter, decryptPasswordPayload, validationMiddleware(loginSchema), login);
 router.post('/verify-otp', validationMiddleware(otpSchema), verifyOTP);
 router.post('/resend-otp', resendOTP);
 router.post('/forgot-password/send-otp', validationMiddleware(forgotPasswordEmailSchema), sendPasswordResetOtp);
 router.post('/forgot-password/verify-otp', validationMiddleware(forgotPasswordOtpSchema), verifyPasswordResetOtp);
-router.post('/forgot-password/reset', validationMiddleware(resetPasswordSchema), resetPassword);
+router.post('/forgot-password/reset', decryptPasswordPayload, validationMiddleware(resetPasswordSchema), resetPassword);
 router.get('/me', authMiddleware, getCurrentUser);
-router.patch('/me', authMiddleware, validationMiddleware(updateCurrentUserSchema), updateCurrentUser);
+router.patch('/me', authMiddleware, decryptPasswordPayload, validationMiddleware(updateCurrentUserSchema), updateCurrentUser);
 router.post('/me/profile-picture', authMiddleware, profilePictureUpload.single('profilePicture'), persistUploadedFiles, updateCurrentUserProfilePicture);
 router.post('/me/account/deactivate', authMiddleware, deactivateCurrentUserAccount);
 router.post('/me/account/activate', authMiddleware, activateCurrentUserAccount);

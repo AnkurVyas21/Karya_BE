@@ -1,4 +1,5 @@
 const authService = require('../services/authService');
+const passwordCryptoService = require('../services/passwordCryptoService');
 const { socialAuthService } = require('../services/socialAuthService');
 
 const parseBooleanLike = (value) => {
@@ -146,6 +147,14 @@ const resetPassword = async (req, res) => {
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
+};
+
+const getPasswordEncryptionKey = (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    success: true,
+    data: passwordCryptoService.publicDescriptor()
+  });
 };
 
 const getCurrentUser = async (req, res) => {
@@ -343,6 +352,7 @@ module.exports = {
   login,
   verifyOTP,
   resendOTP,
+  getPasswordEncryptionKey,
   sendPasswordResetOtp,
   verifyPasswordResetOtp,
   resetPassword,

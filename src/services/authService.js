@@ -13,6 +13,7 @@ const professionInferenceService = require('./professionInferenceService');
 const professionalService = require('./professionalService');
 
 const ACCOUNT_DELETION_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
+const BCRYPT_HASH_PATTERN = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
 
 class AuthService {
   async signup(userData) {
@@ -171,8 +172,25 @@ class AuthService {
 
   async login(identifier, password) {
     const user = await this.findUserByIdentifier(identifier);
-    if (!user || !(await bcrypt.compare(password, user.password))) {
+    if (!user) {
       throw new Error('Invalid credentials');
+    }
+
+    const storedPassword = String(user.password || '');
+    const passwordMatches = BCRYPT_HASH_PATTERN.test(storedPassword)
+      ? await bcrypt.compare(password, storedPassword)
+      : storedPassword === String(password || '');
+
+    if (!passwordMatches) {
+      throw new Error('Invalid credentials');
+    }
+
+    if (!BCRYPT_HASH_PATTERN.test(storedPassword)) {
+      user.password = await bcrypt.hash(password, 10);
+      await user.save();
+      logger.info('Legacy plaintext password migrated to bcrypt hash', {
+        userId: user._id.toString()
+      });
     }
 
     const session = await this.buildAuthenticatedSession(user);

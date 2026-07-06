@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 
 const legacyNameKeys = ['first' + 'Name', 'last' + 'Name'];
 const legacyFullName = (source = {}) => legacyNameKeys
@@ -45,6 +46,44 @@ const userSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+const BCRYPT_HASH_PATTERN = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
+
+const isBcryptHash = (value = '') => BCRYPT_HASH_PATTERN.test(String(value || ''));
+
+const hashPasswordIfNeeded = async (value) => {
+  const password = String(value || '');
+  if (!password) {
+    throw new Error('Password cannot be empty');
+  }
+
+  if (isBcryptHash(password)) {
+    return password;
+  }
+
+  return bcrypt.hash(password, 10);
+};
+
+const hashPasswordInUpdate = async function hashPasswordInUpdate() {
+  const update = this.getUpdate();
+  if (!update) {
+    return;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(update, 'password')) {
+    update.password = await hashPasswordIfNeeded(update.password);
+  }
+
+  if (update.$set && Object.prototype.hasOwnProperty.call(update.$set, 'password')) {
+    update.$set.password = await hashPasswordIfNeeded(update.$set.password);
+  }
+
+  if (update.$setOnInsert && Object.prototype.hasOwnProperty.call(update.$setOnInsert, 'password')) {
+    update.$setOnInsert.password = await hashPasswordIfNeeded(update.$setOnInsert.password);
+  }
+
+  this.setUpdate(update);
+};
+
 userSchema.pre('init', function normalizeLegacyName(data) {
   if (!data.fullName) {
     data.fullName = legacyFullName(data);
@@ -52,10 +91,20 @@ userSchema.pre('init', function normalizeLegacyName(data) {
   legacyNameKeys.forEach((key) => delete data[key]);
 });
 
+userSchema.pre('save', async function hashPasswordBeforeSave() {
+  if (this.isModified('password')) {
+    this.password = await hashPasswordIfNeeded(this.password);
+  }
+});
+
 userSchema.pre('validate', function normalizeFullName(next) {
   const fullName = String(this.fullName || '').trim();
   this.fullName = fullName;
   next();
 });
+
+userSchema.pre('findOneAndUpdate', hashPasswordInUpdate);
+userSchema.pre('updateOne', hashPasswordInUpdate);
+userSchema.pre('updateMany', hashPasswordInUpdate);
 
 module.exports = mongoose.model('User', userSchema);
