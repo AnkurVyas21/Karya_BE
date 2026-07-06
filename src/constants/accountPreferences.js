@@ -1,4 +1,4 @@
-const SUPPORTED_APP_LANGUAGES = ['en', 'hi', 'bn', 'te', 'ta', 'gu'];
+const SUPPORTED_APP_LANGUAGES = ['en', 'hi', 'bn', 'te', 'ta', 'gu', 'pa'];
 const SUPPORTED_APP_THEMES = ['light', 'dark'];
 
 const normalizePreferredLanguage = (value = '') => {
