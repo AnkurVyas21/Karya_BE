@@ -11,6 +11,10 @@ const { deriveProfileTags, normalizeList } = require('../utils/profileTagUtils')
 const professionCatalogService = require('./professionCatalogService');
 const professionInferenceService = require('./professionInferenceService');
 const professionalService = require('./professionalService');
+const {
+  normalizePreferredLanguage,
+  normalizePreferredTheme
+} = require('../constants/accountPreferences');
 
 const ACCOUNT_DELETION_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
 const BCRYPT_HASH_PATTERN = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
@@ -34,6 +38,8 @@ class AuthService {
       town = '',
       area = '',
       pincode = '',
+      preferredLanguage = 'en',
+      preferredTheme = 'dark',
       serviceAreas = [],
       skills = [],
       specializations = [],
@@ -86,7 +92,9 @@ class AuthService {
       town: String(town || '').trim(),
       area: String(area || '').trim(),
       addressLine: String(addressLine || '').trim(),
-      pincode: String(pincode || '').trim()
+      pincode: String(pincode || '').trim(),
+      preferredLanguage: normalizePreferredLanguage(preferredLanguage),
+      preferredTheme: normalizePreferredTheme(preferredTheme)
     });
     await user.save();
 
@@ -218,6 +226,8 @@ class AuthService {
       passwordSetupRequired: true,
       role,
       isVerified: true,
+      preferredLanguage: normalizePreferredLanguage(options.preferredLanguage),
+      preferredTheme: normalizePreferredTheme(options.preferredTheme),
       socialAccounts: [normalizeSocialAccount({
         provider: socialProfile.provider,
         providerId: socialProfile.providerId,
@@ -593,6 +603,33 @@ class AuthService {
           rawInput: providedDescription || payload.profession
         });
       }
+    }
+
+    return this.getCurrentUserProfile(userId);
+  }
+
+  async updateCurrentUserPreferences(userId, payload = {}) {
+    const updates = {};
+
+    if ('preferredLanguage' in payload) {
+      updates.preferredLanguage = normalizePreferredLanguage(payload.preferredLanguage);
+    }
+
+    if ('preferredTheme' in payload) {
+      updates.preferredTheme = normalizePreferredTheme(payload.preferredTheme);
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return this.getCurrentUserProfile(userId);
+    }
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      updates,
+      { new: true, runValidators: true }
+    );
+    if (!user) {
+      throw new Error('User not found');
     }
 
     return this.getCurrentUserProfile(userId);

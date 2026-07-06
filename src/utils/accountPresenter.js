@@ -1,3 +1,8 @@
+const {
+  normalizePreferredLanguage,
+  normalizePreferredTheme
+} = require('../constants/accountPreferences');
+
 const toCleanString = (value) => String(value || '').trim();
 const isPlaceholderEmail = (value) => /@social\.karya\.local$/i.test(toCleanString(value));
 const isPlaceholderMobile = (value) => /^social-/i.test(toCleanString(value));
@@ -27,7 +32,9 @@ const sanitizeUser = (user) => {
     ...plain,
     fullName,
     email: toVisibleEmail(plain.email),
-    mobile: toVisibleMobile(plain.mobile)
+    mobile: toVisibleMobile(plain.mobile),
+    preferredLanguage: normalizePreferredLanguage(plain.preferredLanguage),
+    preferredTheme: normalizePreferredTheme(plain.preferredTheme)
   };
 };
 

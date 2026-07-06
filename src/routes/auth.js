@@ -10,6 +10,7 @@ const {
   resetPassword,
   getCurrentUser,
   updateCurrentUser,
+  updateCurrentUserPreferences,
   updateCurrentUserProfilePicture,
   deactivateCurrentUserAccount,
   activateCurrentUserAccount,
@@ -29,6 +30,10 @@ const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const persistUploadedFiles = require('../middlewares/persistUploadedFiles');
 const { getUploadDestination } = require('../utils/uploadPaths');
+const {
+  SUPPORTED_APP_LANGUAGES,
+  SUPPORTED_APP_THEMES
+} = require('../constants/accountPreferences');
 
 const router = express.Router();
 const upload = multer({ dest: getUploadDestination(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -75,6 +80,8 @@ const signupSchema = Joi.object({
   town: Joi.string().allow('').optional(),
   area: Joi.string().allow('').optional(),
   pincode: Joi.string().allow('').optional(),
+  preferredLanguage: Joi.string().valid(...SUPPORTED_APP_LANGUAGES).default('en'),
+  preferredTheme: Joi.string().valid(...SUPPORTED_APP_THEMES).default('dark'),
   serviceAreas: Joi.alternatives().try(
     Joi.array().items(Joi.string()),
     Joi.string().allow('')
@@ -173,6 +180,11 @@ const updateCurrentUserSchema = Joi.object({
   pincode: Joi.string().allow('').optional()
 });
 
+const preferencesSchema = Joi.object({
+  preferredLanguage: Joi.string().valid(...SUPPORTED_APP_LANGUAGES).optional(),
+  preferredTheme: Joi.string().valid(...SUPPORTED_APP_THEMES).optional()
+}).or('preferredLanguage', 'preferredTheme');
+
 router.get('/password-key', getPasswordEncryptionKey);
 router.post('/signup', decryptPasswordPayload, validationMiddleware(signupSchema), signup);
 router.post('/login', loginRateLimiter, decryptPasswordPayload, validationMiddleware(loginSchema), login);
@@ -183,6 +195,7 @@ router.post('/forgot-password/verify-otp', validationMiddleware(forgotPasswordOt
 router.post('/forgot-password/reset', decryptPasswordPayload, validationMiddleware(resetPasswordSchema), resetPassword);
 router.get('/me', authMiddleware, getCurrentUser);
 router.patch('/me', authMiddleware, decryptPasswordPayload, validationMiddleware(updateCurrentUserSchema), updateCurrentUser);
+router.patch('/me/preferences', authMiddleware, validationMiddleware(preferencesSchema), updateCurrentUserPreferences);
 router.post('/me/profile-picture', authMiddleware, profilePictureUpload.single('profilePicture'), persistUploadedFiles, updateCurrentUserProfilePicture);
 router.post('/me/account/deactivate', authMiddleware, deactivateCurrentUserAccount);
 router.post('/me/account/activate', authMiddleware, activateCurrentUserAccount);

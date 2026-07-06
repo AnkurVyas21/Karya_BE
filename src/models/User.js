@@ -1,5 +1,9 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const {
+  SUPPORTED_APP_LANGUAGES,
+  SUPPORTED_APP_THEMES
+} = require('../constants/accountPreferences');
 
 const legacyNameKeys = ['first' + 'Name', 'last' + 'Name'];
 const legacyFullName = (source = {}) => legacyNameKeys
@@ -41,6 +45,8 @@ const userSchema = new mongoose.Schema({
   area: { type: String, default: '' },
   addressLine: { type: String, default: '' },
   pincode: { type: String, default: '' },
+  preferredLanguage: { type: String, enum: SUPPORTED_APP_LANGUAGES, default: 'en' },
+  preferredTheme: { type: String, enum: SUPPORTED_APP_THEMES, default: 'dark' },
   isVerified: { type: Boolean, default: false },
   isBanned: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }

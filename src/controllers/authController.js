@@ -182,6 +182,19 @@ const updateCurrentUser = async (req, res) => {
   }
 };
 
+const updateCurrentUserPreferences = async (req, res) => {
+  try {
+    const user = await authService.updateCurrentUserPreferences(req.user._id, req.body);
+    res.json({
+      success: true,
+      message: 'Preferences updated',
+      data: user
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const updateCurrentUserProfilePicture = async (req, res) => {
   try {
     const file = req.file || req.files?.profilePicture?.[0] || req.files?.image?.[0];
@@ -358,6 +371,7 @@ module.exports = {
   resetPassword,
   getCurrentUser,
   updateCurrentUser,
+  updateCurrentUserPreferences,
   updateCurrentUserProfilePicture,
   deactivateCurrentUserAccount,
   activateCurrentUserAccount,
