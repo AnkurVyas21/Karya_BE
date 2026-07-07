@@ -8,12 +8,20 @@ const Bookmark = require('../models/Bookmark');
 const User = require('../models/User');
 const OTPVerification = require('../models/OTPVerification');
 const authService = require('../services/authService');
+const usageLimitService = require('../services/usageLimitService');
 const crypto = require('crypto');
 
 const generateOtp = () => process.env.TEST_OTP || crypto.randomInt(100000, 1000000).toString();
 
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 const normalizeMobile = (value) => String(value || '').replace(/\D/g, '').slice(0, 10);
+
+const sendError = (res, error) => {
+  if (error.retryAfterSeconds) {
+    res.set('Retry-After', String(error.retryAfterSeconds));
+  }
+  res.status(error.statusCode || 400).json({ success: false, message: error.message });
+};
 
 const parseBooleanLike = (value) => {
   if (typeof value === 'boolean') {
@@ -110,6 +118,10 @@ const aiSearch = async (req, res) => {
       selectedLocation,
       currentLocation
     } = req.body;
+    if (String(problem || '').trim()) {
+      await usageLimitService.assertAiSearchAllowed(req);
+    }
+
     const result = await professionalService.aiSearch({
       problem,
       provider,
@@ -119,7 +131,7 @@ const aiSearch = async (req, res) => {
     });
     res.json({ success: true, data: result });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    sendError(res, error);
   }
 };
 
@@ -220,10 +232,14 @@ const createSubscription = async (req, res) => {
 const detectProfession = async (req, res) => {
   try {
     const { description } = req.body;
+    if (String(description || '').trim()) {
+      await usageLimitService.assertAiSearchAllowed(req);
+    }
+
     const result = await professionalService.detectProfession(description);
     res.json({ success: true, data: result });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    sendError(res, error);
   }
 };
 
@@ -539,6 +555,14 @@ const requestContactOtp = async (req, res) => {
       throw new Error(`This ${type} is already used by another account.`);
     }
 
+    if (type === 'mobile') {
+      await usageLimitService.assertMobileOtpSendAllowed({
+        identifier,
+        userId: req.user._id.toString(),
+        ip: usageLimitService.getClientIp(req)
+      });
+    }
+
     const otp = generateOtp();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await OTPVerification.deleteMany({ user: req.user._id, type });
@@ -564,7 +588,7 @@ const requestContactOtp = async (req, res) => {
 
     res.json({ success: true, message: `OTP sent to your new ${type}.` });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    sendError(res, error);
   }
 };
 
@@ -581,8 +605,16 @@ const verifyContactOtp = async (req, res) => {
       throw new Error('Enter the 6-digit OTP.');
     }
 
+    const attemptContext = {
+      userId: req.user._id.toString(),
+      type,
+      identifier
+    };
+    await usageLimitService.assertOtpVerifyAllowed(attemptContext);
+
     const record = await OTPVerification.findOne({ user: req.user._id, type, identifier, otp });
     if (!record || record.expiresAt < new Date()) {
+      await usageLimitService.recordOtpVerifyFailure(attemptContext);
       throw new Error('Invalid or expired OTP.');
     }
 
@@ -593,6 +625,7 @@ const verifyContactOtp = async (req, res) => {
 
     await User.findByIdAndUpdate(req.user._id, { [type]: identifier, isVerified: true }, { runValidators: true });
     await OTPVerification.deleteOne({ _id: record._id });
+    await usageLimitService.clearOtpVerifyFailures(attemptContext);
 
     const profile = await professionalService.getProfileByUserId(req.user._id, req.user._id);
     res.json({
@@ -604,7 +637,7 @@ const verifyContactOtp = async (req, res) => {
       message: `${type === 'email' ? 'Email address' : 'Mobile number'} updated and verified.`
     });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    sendError(res, error);
   }
 };
 

@@ -2,6 +2,13 @@ const authService = require('../services/authService');
 const passwordCryptoService = require('../services/passwordCryptoService');
 const { socialAuthService } = require('../services/socialAuthService');
 
+const sendError = (res, error) => {
+  if (error.retryAfterSeconds) {
+    res.set('Retry-After', String(error.retryAfterSeconds));
+  }
+  res.status(error.statusCode || 400).json({ success: false, message: error.message });
+};
+
 const parseBooleanLike = (value) => {
   if (typeof value === 'boolean') {
     return value;
@@ -105,7 +112,7 @@ const verifyOTP = async (req, res) => {
       data: { user, token }
     });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    sendError(res, error);
   }
 };
 
@@ -135,7 +142,7 @@ const verifyPasswordResetOtp = async (req, res) => {
     await authService.verifyPasswordResetOtp(email, otp);
     res.json({ success: true, message: 'OTP verified successfully' });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    sendError(res, error);
   }
 };
 
@@ -145,7 +152,7 @@ const resetPassword = async (req, res) => {
     await authService.resetPasswordWithOtp(email, otp, password);
     res.json({ success: true, message: 'Password updated successfully' });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    sendError(res, error);
   }
 };
 
@@ -293,7 +300,7 @@ const verifyBecomeProviderOtp = async (req, res) => {
       data: { user, token, profile }
     });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    sendError(res, error);
   }
 };
 

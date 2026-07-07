@@ -114,7 +114,7 @@ router.post(
 router.get('/professions', getProfessions);
 router.get('/profession-catalog', getProfessionCatalogEntries);
 router.get('/search', optionalAuthMiddleware, searchProfessionals);
-router.post('/search/ai', aiSearch);
+router.post('/search/ai', optionalAuthMiddleware, aiSearch);
 router.get('/bookmarks', authMiddleware, getBookmarks);
 router.get('/my-requests', authMiddleware, getMyRequests);
 router.delete('/bookmark/:id', authMiddleware, removeBookmark);
@@ -130,6 +130,6 @@ router.post('/review', authMiddleware, createReview);
 router.patch('/review', authMiddleware, updateReview);
 router.post('/bookmark', authMiddleware, createBookmark);
 router.post('/subscription', authMiddleware, roleMiddleware(['professional']), createSubscription);
-router.post('/detect-profession', detectProfession);
+router.post('/detect-profession', optionalAuthMiddleware, detectProfession);
 
 module.exports = router;

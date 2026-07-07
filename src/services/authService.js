@@ -5,6 +5,7 @@ const OTPVerification = require('../models/OTPVerification');
 const ProfessionalProfile = require('../models/ProfessionalProfile');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
+const usageLimitService = require('./usageLimitService');
 const { buildAuthenticatedUser, composeLocation, sanitizeUser, toCleanString } = require('../utils/accountPresenter');
 const { normalizeSocialAccount } = require('../utils/socialAccountUtils');
 const { deriveProfileTags, normalizeList } = require('../utils/profileTagUtils');
@@ -412,10 +413,18 @@ class AuthService {
   async verifyProviderConversionOtp(userId, otp) {
     const otpRecord = await OTPVerification.findOne({
       user: userId,
+      type: 'provider_conversion'
+    }).sort({ expiresAt: -1 });
+    const attemptContext = {
+      userId,
       type: 'provider_conversion',
-      otp: String(otp || '').trim()
-    });
-    if (!otpRecord || otpRecord.expiresAt < new Date()) {
+      identifier: otpRecord?.identifier || ''
+    };
+
+    await usageLimitService.assertOtpVerifyAllowed(attemptContext);
+
+    if (!otpRecord || otpRecord.expiresAt < new Date() || otpRecord.otp !== String(otp || '').trim()) {
+      await usageLimitService.recordOtpVerifyFailure(attemptContext);
       throw new Error('Invalid or expired OTP');
     }
 
@@ -425,6 +434,7 @@ class AuthService {
       isVerified: true
     });
     await OTPVerification.deleteOne({ _id: otpRecord._id });
+    await usageLimitService.clearOtpVerifyFailures(attemptContext);
     return session;
   }
 
@@ -770,12 +780,21 @@ class AuthService {
     if (!user) {
       throw new Error('User not found');
     }
-    
-    const otpRecord = await OTPVerification.findOne({ user: user._id, otp, type });
+
+    const attemptContext = {
+      userId: user._id.toString(),
+      type,
+      identifier
+    };
+    await usageLimitService.assertOtpVerifyAllowed(attemptContext);
+
+    const otpRecord = await OTPVerification.findOne({ user: user._id, otp: String(otp || '').trim(), type });
     if (!otpRecord || otpRecord.expiresAt < new Date()) {
+      await usageLimitService.recordOtpVerifyFailure(attemptContext);
       throw new Error('Invalid or expired OTP');
     }
     await OTPVerification.deleteOne({ _id: otpRecord._id });
+    await usageLimitService.clearOtpVerifyFailures(attemptContext);
     const verifiedUser = await User.findByIdAndUpdate(
       user._id,
       { isVerified: true },
@@ -785,7 +804,15 @@ class AuthService {
     return this.buildAuthenticatedSession(verifiedUser);
   }
 
-  async sendOTP(user, type) {
+  async sendOTP(user, type, options = {}) {
+    if (type === 'mobile') {
+      await usageLimitService.assertMobileOtpSendAllowed({
+        identifier: user.mobile,
+        userId: user._id?.toString?.() || '',
+        ip: options.ip || ''
+      });
+    }
+
     const otp = process.env.TEST_OTP || crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
     await OTPVerification.create({ user: user._id, otp, type, expiresAt });
@@ -973,6 +1000,12 @@ class AuthService {
       throw new Error('No account found with this email address');
     }
 
+    await usageLimitService.assertOtpVerifyAllowed({
+      userId: user._id.toString(),
+      type: 'password_reset',
+      identifier: normalizedEmail
+    });
+
     const otpRecord = await OTPVerification.findOne({
       user: user._id,
       otp: String(otp || '').trim(),
@@ -981,8 +1014,19 @@ class AuthService {
     });
 
     if (!otpRecord || otpRecord.expiresAt < new Date()) {
+      await usageLimitService.recordOtpVerifyFailure({
+        userId: user._id.toString(),
+        type: 'password_reset',
+        identifier: normalizedEmail
+      });
       throw new Error('Invalid or expired OTP');
     }
+
+    await usageLimitService.clearOtpVerifyFailures({
+      userId: user._id.toString(),
+      type: 'password_reset',
+      identifier: normalizedEmail
+    });
 
     return { user, otpRecord };
   }
