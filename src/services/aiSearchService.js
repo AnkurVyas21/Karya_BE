@@ -2,6 +2,8 @@ const logger = require('../utils/logger');
 const professionInferenceService = require('./professionInferenceService');
 const openaiProviderService = require('./openaiProviderService');
 const { parseJsonObject } = require('../utils/llmJsonUtils');
+const crypto = require('crypto');
+const TtlCache = require('../utils/ttlCache');
 
 const AI_PROVIDERS = {
   GEMINI: 'gemini',
@@ -15,6 +17,9 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const OLLAMA_BASE_URL = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/+$/, '');
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:8b';
+const AI_SEARCH_CACHE_TTL_MS = Math.max(Number(process.env.AI_SEARCH_CACHE_TTL_MS || 2 * 60 * 1000), 1000);
+const AI_SEARCH_CACHE_MAX = Math.max(Number(process.env.AI_SEARCH_CACHE_MAX || 500), 50);
+const aiSearchCache = new TtlCache({ ttlMs: AI_SEARCH_CACHE_TTL_MS, maxSize: AI_SEARCH_CACHE_MAX });
 
 const normalizeText = (value = '') => String(value || '').trim().toLowerCase();
 const compactObject = (value = {}) => Object.fromEntries(
@@ -55,6 +60,17 @@ class AiSearchService {
     const selectedLocation = this.normalizeLocation(options.selectedLocation, 'selected-filters');
     const currentLocation = this.normalizeLocation(options.currentLocation, 'current-location');
     const requestedProvider = this.normalizeProvider(options.provider);
+    const cacheKey = this.buildCacheKey({
+      problem,
+      requestedProvider,
+      selectedLocation,
+      currentLocation,
+      allowedProfessions: options.allowedProfessions || []
+    });
+    const cached = aiSearchCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
 
     const professionInference = await professionInferenceService.inferProfession(problem, {
       context: 'search-ai',
@@ -95,13 +111,21 @@ class AiSearchService {
       currentLocation
     });
 
-    return {
+    return aiSearchCache.set(cacheKey, {
       ...normalized,
       providerRequested: requestedProvider,
       providerUsed,
       usedFallback: providerUsed === AI_PROVIDERS.FALLBACK,
       warning
-    };
+    });
+  }
+
+  buildCacheKey(value = {}) {
+    const digest = crypto
+      .createHash('sha1')
+      .update(JSON.stringify(value))
+      .digest('hex');
+    return `ai-search:${digest}`;
   }
 
   normalizeProvider(value) {

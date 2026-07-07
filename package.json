@@ -7,6 +7,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "check": "node --check src/server.js",
+    "backfill:search-index": "node scripts/backfill-profile-search-index.js",
     "test": "npm run check"
   },
   "dependencies": {

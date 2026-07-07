@@ -6,16 +6,19 @@ const ProviderWebsite = require('../models/ProviderWebsite');
 const ProviderService = require('../models/ProviderService');
 const mongoose = require('mongoose');
 const OpenAI = require('openai');
+const crypto = require('crypto');
 const logger = require('../utils/logger');
 const { buildProfessionalSummary } = require('../utils/professionalPresenter');
 const aiSearchService = require('./aiSearchService');
 const { composeLocation, isProfessionalProfileListable } = require('../utils/accountPresenter');
 const { deriveProfileTags, deriveRelatedProfessionTags, normalizeList, uniqueStrings } = require('../utils/profileTagUtils');
+const { buildProfileSearchIndex, normalizeSearchKey, tokenizeSearchText } = require('../utils/searchIndexUtils');
 const professionCatalogService = require('./professionCatalogService');
 const professionInferenceService = require('./professionInferenceService');
 const professionSearchService = require('./professionSearchService');
 const providerGrowthService = require('./providerGrowthService');
 const textNormalizationService = require('./textNormalizationService');
+const TtlCache = require('../utils/ttlCache');
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
@@ -66,6 +69,14 @@ const SEARCH_QUERY_STOPWORDS = new Set([
 ]);
 const ALL_INDIA_SERVICE_AREA = 'all over india';
 const ALL_INDIA_SERVICE_AREA_REGEX = /^all over india$/i;
+const ALL_INDIA_SERVICE_AREA_KEY = normalizeSearchKey(ALL_INDIA_SERVICE_AREA);
+const SEARCH_INDEX_FALLBACK_ENABLED = process.env.SEARCH_INDEX_FALLBACK !== 'false';
+const SEARCH_RESPONSE_CACHE_TTL_MS = Math.max(Number(process.env.SEARCH_RESPONSE_CACHE_TTL_MS || 30 * 1000), 1000);
+const SEARCH_RESPONSE_CACHE_MAX = Math.max(Number(process.env.SEARCH_RESPONSE_CACHE_MAX || 500), 50);
+const searchResponseCache = new TtlCache({
+  ttlMs: SEARCH_RESPONSE_CACHE_TTL_MS,
+  maxSize: SEARCH_RESPONSE_CACHE_MAX
+});
 const INDIA_TIME_ZONE = 'Asia/Kolkata';
 const PROVIDER_DELETION_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -124,6 +135,35 @@ class ProfessionalService {
     await profile.save();
     logger.info(`Profile created for user: ${userId}`);
     return profile;
+  }
+
+  buildPublicSearchCacheKey(kind = 'search', filters = {}, page = 1, limit = 10, viewerId = null) {
+    if (viewerId || process.env.SEARCH_RESPONSE_CACHE === 'false') {
+      return '';
+    }
+
+    const payload = {
+      kind,
+      filters,
+      page: Math.max(Number(page) || 1, 1),
+      limit: Math.max(Number(limit) || 10, 1)
+    };
+    const digest = crypto.createHash('sha1').update(JSON.stringify(payload)).digest('hex');
+    return `professional-search:${digest}`;
+  }
+
+  cloneSearchResponse(response = {}) {
+    return JSON.parse(JSON.stringify(response || {}));
+  }
+
+  recordSearchImpressionsFromDocs(docs = [], label = 'Search') {
+    const userIds = uniqueStrings((docs || []).map((item) => item?.userId).filter(Boolean));
+    if (userIds.length === 0) {
+      return;
+    }
+
+    providerGrowthService.recordAdImpressions(userIds)
+      .catch((error) => logger.warn(`${label} impression recording failed: ${error.message}`));
   }
 
   async upsertProfile(userId, profileData) {
@@ -232,6 +272,11 @@ class ProfessionalService {
       });
     }
 
+    update.searchIndex = buildProfileSearchIndex({
+      ...mergedProfile,
+      ...update
+    });
+
     const profile = await ProfessionalProfile.findOneAndUpdate(
       { user: userId },
       { $set: update },
@@ -302,6 +347,14 @@ class ProfessionalService {
       return this.searchBroadProfessionals(normalizedFilters, page, limit, viewerId);
     }
 
+    const cacheKey = this.buildPublicSearchCacheKey('search', normalizedFilters, page, limit, viewerId);
+    const cachedResponse = cacheKey ? searchResponseCache.get(cacheKey) : null;
+    if (cachedResponse) {
+      const cloned = this.cloneSearchResponse(cachedResponse);
+      this.recordSearchImpressionsFromDocs(cloned.docs, 'Cached search');
+      return cloned;
+    }
+
     const semanticFilters = await professionSearchService.resolveSearchFilters(normalizedFilters);
     const providerUserIds = await this.resolveProviderNameUserIds(normalizedFilters.providerName);
     const searchFilters = {
@@ -356,9 +409,10 @@ class ProfessionalService {
     const reviewStats = await this.getReviewStatsMap(profileIds);
     const bookmarkedIds = await this.getBookmarkedProfileIds(viewerId, profileIds);
     const shownUserIds = pagedProfiles.map((profile) => profile.user?._id?.toString()).filter(Boolean);
-    await providerGrowthService.recordAdImpressions(shownUserIds);
+    providerGrowthService.recordAdImpressions(shownUserIds)
+      .catch((error) => logger.warn(`Search impression recording failed: ${error.message}`));
 
-    return {
+    const response = {
       docs: pagedItems.map(({ profile }) => {
         const growthState = growthStateMap.get(profile.user?._id?.toString() || '') || {};
         const userId = profile.user?._id?.toString() || '';
@@ -380,11 +434,23 @@ class ProfessionalService {
       prevPage: pageNumber > 1 ? pageNumber - 1 : null,
       nextPage: pageNumber < totalPages ? pageNumber + 1 : null
     };
+    if (cacheKey) {
+      searchResponseCache.set(cacheKey, this.cloneSearchResponse(response));
+    }
+    return response;
   }
 
   async searchBroadProfessionals(filters, page, limit, viewerId = null) {
     const pageNumber = Math.max(Number(page) || 1, 1);
     const pageSize = Math.max(Number(limit) || 10, 1);
+    const cacheKey = this.buildPublicSearchCacheKey('broad-search', filters, pageNumber, pageSize, viewerId);
+    const cachedResponse = cacheKey ? searchResponseCache.get(cacheKey) : null;
+    if (cachedResponse) {
+      const cloned = this.cloneSearchResponse(cachedResponse);
+      this.recordSearchImpressionsFromDocs(cloned.docs, 'Cached broad search');
+      return cloned;
+    }
+
     const candidateQuery = this.buildSearchCandidateQuery(filters);
     const candidates = await ProfessionalProfile.find(candidateQuery)
       .populate('user')
@@ -419,11 +485,12 @@ class ProfessionalService {
     const reviewStats = await this.getReviewStatsMap(profileIds);
     const bookmarkedIds = await this.getBookmarkedProfileIds(viewerId, profileIds);
     const shownUserIds = pagedProfiles.map((profile) => profile.user?._id?.toString()).filter(Boolean);
-    await providerGrowthService.recordAdImpressions(shownUserIds);
+    providerGrowthService.recordAdImpressions(shownUserIds)
+      .catch((error) => logger.warn(`Broad search impression recording failed: ${error.message}`));
 
     logger.info(`Broad search performed with filters: ${JSON.stringify(filters)}`);
 
-    return {
+    const response = {
       docs: pagedItems.map(({ profile }) => {
         const userId = profile.user?._id?.toString() || '';
         return buildProfessionalSummary({
@@ -444,6 +511,10 @@ class ProfessionalService {
       prevPage: pageNumber > 1 ? pageNumber - 1 : null,
       nextPage: pageNumber < totalPages ? pageNumber + 1 : null
     };
+    if (cacheKey) {
+      searchResponseCache.set(cacheKey, this.cloneSearchResponse(response));
+    }
+    return response;
   }
 
   normalizeSearchSort(value = '') {
@@ -890,9 +961,24 @@ class ProfessionalService {
     const andConditions = [];
     const professionConditions = [];
     const locationConditions = [];
+    const pushIndexedKeyConditions = (bucket, fields, value) => {
+      const key = normalizeSearchKey(value);
+      if (!key) {
+        return;
+      }
+
+      fields.forEach((field) => {
+        bucket.push({ [field]: key });
+      });
+    };
+    const pushIndexedTokenConditions = (bucket, value) => {
+      tokenizeSearchText([value]).forEach((token) => {
+        bucket.push({ 'searchIndex.searchTokens': token });
+      });
+    };
     const pushRegexConditions = (bucket, fields, value) => {
       const term = String(value || '').trim();
-      if (!term) {
+      if (!term || !SEARCH_INDEX_FALLBACK_ENABLED) {
         return;
       }
 
@@ -920,13 +1006,46 @@ class ProfessionalService {
       andConditions.push({ user: { $in: filters.providerUserIds } });
     }
 
+    pushIndexedKeyConditions(professionConditions, [
+      'searchIndex.professionKey',
+      'searchIndex.professionKeys',
+      'searchIndex.skillKeys',
+      'searchIndex.tagKeys'
+    ], filters.profession);
+    pushIndexedTokenConditions(professionConditions, filters.profession);
     pushRegexConditions(professionConditions, ['profession', 'skills', 'tags'], filters.profession);
-    (filters.professionTerms || []).forEach((term) => pushRegexConditions(professionConditions, ['profession', 'skills', 'tags', 'description'], term));
-    (filters.skills || []).forEach((skill) => pushRegexConditions(professionConditions, ['skills', 'tags', 'profession', 'description'], skill));
+    (filters.professionTerms || []).forEach((term) => {
+      pushIndexedKeyConditions(professionConditions, [
+        'searchIndex.professionKeys',
+        'searchIndex.skillKeys',
+        'searchIndex.tagKeys'
+      ], term);
+      pushIndexedTokenConditions(professionConditions, term);
+      pushRegexConditions(professionConditions, ['profession', 'skills', 'tags', 'description'], term);
+    });
+    (filters.skills || []).forEach((skill) => {
+      pushIndexedKeyConditions(professionConditions, [
+        'searchIndex.skillKeys',
+        'searchIndex.tagKeys',
+        'searchIndex.professionKeys'
+      ], skill);
+      pushIndexedTokenConditions(professionConditions, skill);
+      pushRegexConditions(professionConditions, ['skills', 'tags', 'profession', 'description'], skill);
+    });
 
+    pushIndexedKeyConditions(locationConditions, ['searchIndex.cityKey', 'searchIndex.locationKeys'], filters.city);
     pushRegexConditions(locationConditions, ['city', 'location', 'serviceAreas'], filters.city);
+    pushIndexedKeyConditions(locationConditions, ['searchIndex.townKey', 'searchIndex.areaKey', 'searchIndex.locationKeys'], filters.town);
     pushRegexConditions(locationConditions, ['town', 'area', 'location', 'serviceAreas'], filters.town);
+    pushIndexedKeyConditions(locationConditions, ['searchIndex.stateKey', 'searchIndex.locationKeys'], filters.state);
     pushRegexConditions(locationConditions, ['state', 'location', 'serviceAreas'], filters.state);
+    pushIndexedKeyConditions(locationConditions, [
+      'searchIndex.locationKeys',
+      'searchIndex.cityKey',
+      'searchIndex.townKey',
+      'searchIndex.areaKey',
+      'searchIndex.stateKey'
+    ], filters.location);
     pushRegexConditions(locationConditions, ['location', 'city', 'town', 'area', 'state', 'serviceAreas'], filters.location);
 
     if (professionConditions.length > 0) {
@@ -934,6 +1053,7 @@ class ProfessionalService {
     }
 
     if (locationConditions.length > 0) {
+      locationConditions.push({ 'searchIndex.serviceAreaKeys': ALL_INDIA_SERVICE_AREA_KEY });
       locationConditions.push({ serviceAreas: ALL_INDIA_SERVICE_AREA_REGEX });
       andConditions.push({ $or: locationConditions });
     }
@@ -943,6 +1063,12 @@ class ProfessionalService {
       const queryConditions = [];
 
       queryTokens.forEach((token) => {
+        pushIndexedKeyConditions(queryConditions, [
+          'searchIndex.professionKeys',
+          'searchIndex.skillKeys',
+          'searchIndex.tagKeys',
+          'searchIndex.searchTokens'
+        ], token);
         pushRegexConditions(queryConditions, ['profession', 'skills', 'tags', 'description'], token);
       });
 

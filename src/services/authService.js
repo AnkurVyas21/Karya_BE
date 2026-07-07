@@ -9,6 +9,7 @@ const usageLimitService = require('./usageLimitService');
 const { buildAuthenticatedUser, composeLocation, sanitizeUser, toCleanString } = require('../utils/accountPresenter');
 const { normalizeSocialAccount } = require('../utils/socialAccountUtils');
 const { deriveProfileTags, normalizeList } = require('../utils/profileTagUtils');
+const { buildProfileSearchIndex } = require('../utils/searchIndexUtils');
 const professionCatalogService = require('./professionCatalogService');
 const professionInferenceService = require('./professionInferenceService');
 const professionalService = require('./professionalService');
@@ -127,27 +128,29 @@ class AuthService {
         area,
         professionCatalog
       });
+      const profilePayload = {
+        user: user._id,
+        profession: savedProfession,
+        description: normalizedDescription,
+        skills: normalizedSkills,
+        tags,
+        serviceAreas: normalizedServiceAreas,
+        country: String(country || 'India').trim() || 'India',
+        state: String(state || '').trim(),
+        addressLine: String(addressLine || '').trim(),
+        city: String(city || '').trim(),
+        town: String(town || '').trim(),
+        area: String(area || '').trim(),
+        pincode: String(pincode || '').trim(),
+        location,
+        allowContactDisplay: Boolean(allowContactDisplay)
+      };
+      profilePayload.searchIndex = buildProfileSearchIndex(profilePayload);
 
       await ProfessionalProfile.findOneAndUpdate(
         { user: user._id },
         {
-          $setOnInsert: {
-            user: user._id,
-            profession: savedProfession,
-            description: normalizedDescription,
-            skills: normalizedSkills,
-            tags,
-            serviceAreas: normalizedServiceAreas,
-            country: String(country || 'India').trim() || 'India',
-            state: String(state || '').trim(),
-            addressLine: String(addressLine || '').trim(),
-            city: String(city || '').trim(),
-            town: String(town || '').trim(),
-            area: String(area || '').trim(),
-            pincode: String(pincode || '').trim(),
-            location,
-            allowContactDisplay: Boolean(allowContactDisplay)
-          }
+          $setOnInsert: profilePayload
         },
         { upsert: true, new: true }
       );
@@ -594,6 +597,10 @@ class AuthService {
         professionCatalog
       })
       ]);
+      professionalUpdates.searchIndex = buildProfileSearchIndex({
+        ...(existingProfessionalProfile?.toObject?.() || {}),
+        ...professionalUpdates
+      });
 
       await ProfessionalProfile.findOneAndUpdate(
         { user: userId },
