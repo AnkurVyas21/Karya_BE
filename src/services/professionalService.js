@@ -73,7 +73,7 @@ const ALL_INDIA_SERVICE_AREA_KEY = normalizeSearchKey(ALL_INDIA_SERVICE_AREA);
 const SEARCH_INDEX_FALLBACK_ENABLED = process.env.SEARCH_INDEX_FALLBACK !== 'false';
 const SEARCH_RESPONSE_CACHE_TTL_MS = Math.max(Number(process.env.SEARCH_RESPONSE_CACHE_TTL_MS || 30 * 1000), 1000);
 const SEARCH_RESPONSE_CACHE_MAX = Math.max(Number(process.env.SEARCH_RESPONSE_CACHE_MAX || 500), 50);
-const HOME_PROVIDER_CANDIDATE_POOL_MAX = Math.max(Number(process.env.HOME_PROVIDER_CANDIDATE_POOL_MAX || 120), 48);
+const HOME_PROVIDER_CANDIDATE_POOL_MAX = Math.max(Number(process.env.HOME_PROVIDER_CANDIDATE_POOL_MAX || 240), 72);
 const searchResponseCache = new TtlCache({
   ttlMs: SEARCH_RESPONSE_CACHE_TTL_MS,
   maxSize: SEARCH_RESPONSE_CACHE_MAX
@@ -603,6 +603,14 @@ class ProfessionalService {
     this.sortSearchResults(scoredProfiles, 'best', reviewStats);
 
     const selectedItems = scoredProfiles.slice(0, pageSize);
+    if (selectedItems.length === 0) {
+      const fallbackResponse = await this.searchProfessionals(normalizedFilters, 1, pageSize, null);
+      if (cacheKey && Array.isArray(fallbackResponse.docs) && fallbackResponse.docs.length > 0) {
+        searchResponseCache.set(cacheKey, this.cloneSearchResponse(fallbackResponse));
+      }
+      return fallbackResponse;
+    }
+
     const selectedProfiles = selectedItems.map((item) => item.profile);
     const searchMetadata = await this.getSearchMetadata(selectedProfiles);
     const shownUserIds = selectedProfiles.map((profile) => profile.user?._id?.toString?.() || '').filter(Boolean);
