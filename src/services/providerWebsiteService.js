@@ -17,6 +17,7 @@ const ProfessionalProfile = require('../models/ProfessionalProfile');
 const Review = require('../models/Review');
 const SiteVisit = require('../models/SiteVisit');
 const User = require('../models/User');
+const OTPVerification = require('../models/OTPVerification');
 const logger = require('../utils/logger');
 const providerGrowthService = require('./providerGrowthService');
 const websitePaymentService = require('./websitePaymentService');
@@ -65,6 +66,7 @@ const cleanNumber = (value, fallback = 0) => {
 };
 const generateBookingOtp = () => String(crypto.randomInt(100000, 1000000));
 const hashBookingOtp = (value = '') => crypto.createHash('sha256').update(cleanString(value)).digest('hex');
+const UPI_CHANGE_OTP_TYPE = 'upi_change';
 const normalizeOfferCode = (value = '') => cleanString(value)
   .toUpperCase()
   .replace(/[^A-Z0-9]/g, '')
@@ -78,6 +80,25 @@ const slugify = (value = '') => cleanString(value)
 const escapeRegex = (value = '') => cleanString(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const isValidIndianPhone = (value = '') => /^[6-9]\d{9}$/.test(String(value || '').replace(/[^\d]/g, '').slice(-10));
 const isValidUpi = (value = '') => !cleanString(value) || /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(cleanString(value));
+const maskEmail = (value = '') => {
+  const email = cleanString(value).toLowerCase();
+  const [name = '', domain = ''] = email.split('@');
+  if (!name || !domain) {
+    return '';
+  }
+  const visibleName = name.length <= 2 ? `${name.charAt(0)}*` : `${name.slice(0, 2)}${'*'.repeat(Math.min(name.length - 2, 5))}`;
+  const [domainName = '', ...domainRest] = domain.split('.');
+  const visibleDomain = domainName.length <= 2 ? `${domainName.charAt(0)}*` : `${domainName.slice(0, 2)}${'*'.repeat(Math.min(domainName.length - 2, 4))}`;
+  return `${visibleName}@${[visibleDomain, ...domainRest].filter(Boolean).join('.')}`;
+};
+const codedError = (message, code, field = '') => {
+  const error = new Error(message);
+  error.code = code;
+  if (field) {
+    error.field = field;
+  }
+  return error;
+};
 const isValidObjectIdString = (value = '') => /^[a-f\d]{24}$/i.test(cleanString(value));
 const normalizeGallery = (value) => cleanArray(value).slice(0, 20);
 const normalizeVideos = (value) => cleanArray(value).slice(0, 8);
@@ -646,6 +667,153 @@ class ProviderWebsiteService {
     };
   }
 
+  async requestUpiChangeOtp(userId, rawPayload = {}) {
+    const payload = this.parsePayload(rawPayload);
+    const nextUpiId = cleanString(payload.upiId);
+    if (nextUpiId && !isValidUpi(nextUpiId)) {
+      throw new Error('Enter a valid UPI ID');
+    }
+
+    const [user, website] = await Promise.all([
+      User.findById(userId).lean(),
+      this.getOrCreateWebsite(userId)
+    ]);
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const email = cleanString(user.email).toLowerCase();
+    if (!isValidEmail(email) || /@social\.karya\.local$/i.test(email)) {
+      throw codedError('Add a valid account email before changing your UPI ID.', 'UPI_CHANGE_EMAIL_REQUIRED', 'upiId');
+    }
+
+    const currentUpiId = cleanString(website.upiId);
+    if (nextUpiId === currentUpiId) {
+      return {
+        required: false,
+        maskedEmail: maskEmail(email)
+      };
+    }
+
+    const otp = process.env.TEST_OTP || crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await OTPVerification.deleteMany({ user: user._id, type: UPI_CHANGE_OTP_TYPE });
+    await OTPVerification.create({
+      user: user._id,
+      otp,
+      type: UPI_CHANGE_OTP_TYPE,
+      identifier: email,
+      payload: {
+        upiId: nextUpiId,
+        previousUpiId: currentUpiId,
+        requestedAt: new Date()
+      },
+      expiresAt
+    });
+
+    const mailed = await receiptEmailService.sendReceipt({
+      to: [email],
+      subject: 'Verify your Nasdiya UPI ID change',
+      html: `
+        <div style="font-family:Arial,sans-serif;line-height:1.55;color:#1f2937;max-width:560px;margin:0 auto">
+          <h2 style="margin:0 0 12px">Verify UPI ID change</h2>
+          <p>Use this OTP to confirm the UPI ID change for your Nasdiya business website.</p>
+          <div style="font-size:30px;font-weight:800;letter-spacing:8px;padding:16px 20px;background:#f3f6fb;border-radius:12px;display:inline-block">${escapeHtml(otp)}</div>
+          <p style="margin:16px 0 6px">Requested UPI ID: <strong>${escapeHtml(nextUpiId || 'Remove saved UPI ID')}</strong></p>
+          ${currentUpiId ? `<p style="margin:0 0 6px;color:#667085">Current UPI ID: ${escapeHtml(currentUpiId)}</p>` : ''}
+          <p style="margin:16px 0 0;color:#667085">This OTP expires in 10 minutes. If you did not request this, reset your password immediately from <a href="${escapeHtml(`${frontendBaseUrl()}/provider/login`)}" style="color:#155dfc;text-decoration:none;font-weight:700">Nasdiya login</a>.</p>
+        </div>
+      `
+    });
+
+    if (!mailed) {
+      await OTPVerification.deleteMany({ user: user._id, type: UPI_CHANGE_OTP_TYPE });
+      throw new Error('OTP could not be emailed. Check email configuration or your account email.');
+    }
+
+    logger.info('UPI change OTP sent', {
+      userId: user._id.toString(),
+      email,
+      nextUpiId
+    });
+
+    return {
+      required: true,
+      maskedEmail: maskEmail(email),
+      expiresAt
+    };
+  }
+
+  async verifyUpiChangeOtpIfNeeded(userId, website, payload = {}) {
+    const nextUpiId = cleanString(payload.upiId);
+    const currentUpiId = cleanString(website?.upiId);
+    if (nextUpiId === currentUpiId) {
+      return;
+    }
+
+    const otpValue = cleanString(payload.upiChangeOtp || payload.upiOtp || payload.otp);
+    if (!otpValue) {
+      throw codedError('Email OTP verification is required to change your UPI ID.', 'UPI_CHANGE_OTP_REQUIRED', 'upiId');
+    }
+
+    const user = await User.findById(userId).lean();
+    if (!user) {
+      throw new Error('User not found');
+    }
+    const email = cleanString(user.email).toLowerCase();
+    const otpRecord = await OTPVerification.findOne({
+      user: user._id,
+      type: UPI_CHANGE_OTP_TYPE
+    }).sort({ expiresAt: -1 });
+
+    const isValidRecord = otpRecord
+      && otpRecord.expiresAt >= new Date()
+      && cleanString(otpRecord.otp) === otpValue
+      && cleanString(otpRecord.identifier).toLowerCase() === email
+      && cleanString(otpRecord.payload?.upiId) === nextUpiId;
+
+    if (!isValidRecord) {
+      await this.sendUpiChangeSecurityAlert(user, website, nextUpiId);
+      throw codedError('Invalid or expired UPI change OTP. A security alert was sent to your account email.', 'UPI_CHANGE_OTP_INVALID', 'upiId');
+    }
+
+    await OTPVerification.deleteOne({ _id: otpRecord._id });
+  }
+
+  async sendUpiChangeSecurityAlert(user, website, attemptedUpiId = '') {
+    const email = cleanString(user?.email).toLowerCase();
+    if (!isValidEmail(email) || /@social\.karya\.local$/i.test(email)) {
+      return false;
+    }
+
+    const businessName = cleanString(website?.businessName) || 'your Nasdiya business website';
+    const resetUrl = `${frontendBaseUrl()}/provider/login`;
+    const mailed = await receiptEmailService.sendReceipt({
+      to: [email],
+      subject: 'Security alert: UPI ID change attempt',
+      html: `
+        <div style="font-family:Arial,sans-serif;line-height:1.55;color:#1f2937;max-width:580px;margin:0 auto">
+          <h2 style="margin:0 0 12px;color:#b42318">UPI ID change attempt</h2>
+          <p>Someone entered an incorrect OTP while trying to change the UPI ID for <strong>${escapeHtml(businessName)}</strong>.</p>
+          <p style="margin:12px 0">Attempted UPI ID: <strong>${escapeHtml(cleanString(attemptedUpiId) || 'Remove saved UPI ID')}</strong></p>
+          <div style="margin:16px 0;padding:14px 16px;border-left:4px solid #dc2626;background:#fff1f2;color:#7f1d1d">
+            <p style="margin:0 0 8px"><strong>If this was not you, please reset your password immediately.</strong></p>
+            <p style="margin:0">If this was you, please enter the correct OTP that was sent to your email.</p>
+          </div>
+          <p style="margin:16px 0 0">Reset password from Nasdiya login: <a href="${escapeHtml(resetUrl)}" style="color:#155dfc;text-decoration:none;font-weight:700">${escapeHtml(resetUrl)}</a></p>
+        </div>
+      `
+    });
+
+    if (!mailed) {
+      logger.warn('UPI change security alert email could not be sent', {
+        userId: user?._id?.toString?.() || '',
+        email
+      });
+    }
+    return mailed;
+  }
+
   async saveManager(userId, rawPayload = {}, files = {}) {
     const payload = this.parsePayload(rawPayload);
     const [state, website] = await Promise.all([
@@ -676,6 +844,7 @@ class ProviderWebsiteService {
     if (payload.upiId && !isValidUpi(payload.upiId)) {
       throw new Error('Enter a valid UPI ID');
     }
+    await this.verifyUpiChangeOtpIfNeeded(userId, website, payload);
 
     const purchased = providerGrowthService.hasActiveWebsite(state);
 

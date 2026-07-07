@@ -20,6 +20,7 @@ const {
   getWebsiteManagerSummary,
   getMyRequests,
   checkWebsiteSlugAvailability,
+  requestWebsiteUpiChangeOtp,
   saveWebsiteManager,
   updateWebsitePublishStatus,
   updateWebsiteLeadStatus,
@@ -71,6 +72,7 @@ router.get('/growth/activity', authMiddleware, roleMiddleware(['professional', '
 router.get('/growth/website-manager/summary', authMiddleware, roleMiddleware(['professional', 'admin']), getWebsiteManagerSummary);
 router.get('/growth/website-manager', authMiddleware, roleMiddleware(['professional', 'admin']), getWebsiteManager);
 router.get('/growth/website-manager/slug-availability', authMiddleware, roleMiddleware(['professional', 'admin']), checkWebsiteSlugAvailability);
+router.post('/growth/website-manager/upi/request-otp', authMiddleware, roleMiddleware(['professional']), requestWebsiteUpiChangeOtp);
 router.post('/growth/activate', authMiddleware, roleMiddleware(['professional']), activateGrowthFeature);
 router.put(
   '/growth/website',

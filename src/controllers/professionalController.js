@@ -366,7 +366,16 @@ const saveWebsiteManager = async (req, res) => {
     const data = await providerWebsiteService.saveManager(req.user._id, req.body, req.files || {});
     res.json({ success: true, data });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    res.status(400).json({ success: false, message: error.message, code: error.code, field: error.field });
+  }
+};
+
+const requestWebsiteUpiChangeOtp = async (req, res) => {
+  try {
+    const data = await providerWebsiteService.requestUpiChangeOtp(req.user._id, req.body || {});
+    res.json({ success: true, data, message: data?.required ? 'OTP sent to your account email.' : 'UPI ID is already unchanged.' });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message, code: error.code, field: error.field });
   }
 };
 
@@ -791,6 +800,7 @@ module.exports = {
   getWebsiteManagerSummary,
   getMyRequests,
   checkWebsiteSlugAvailability,
+  requestWebsiteUpiChangeOtp,
   saveWebsiteManager,
   updateWebsitePublishStatus,
   updateWebsiteLeadStatus,
