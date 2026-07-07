@@ -1,6 +1,7 @@
 const express = require('express');
 const {
   createProfile,
+  getHomeProviders,
   searchProfessionals,
   aiSearch,
   getProfile,
@@ -115,6 +116,7 @@ router.post(
 );
 router.get('/professions', getProfessions);
 router.get('/profession-catalog', getProfessionCatalogEntries);
+router.get('/home-providers', optionalAuthMiddleware, getHomeProviders);
 router.get('/search', optionalAuthMiddleware, searchProfessionals);
 router.post('/search/ai', optionalAuthMiddleware, aiSearch);
 router.get('/bookmarks', authMiddleware, getBookmarks);

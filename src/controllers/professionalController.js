@@ -109,6 +109,29 @@ const searchProfessionals = async (req, res) => {
   }
 };
 
+const getHomeProviders = async (req, res) => {
+  try {
+    const {
+      location,
+      country,
+      state,
+      city,
+      town,
+      limit = 24
+    } = req.query;
+    const result = await professionalService.getHomeProviders({
+      location,
+      country,
+      state,
+      city,
+      town
+    }, limit);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 const aiSearch = async (req, res) => {
   try {
     const {
@@ -781,6 +804,7 @@ const getDashboardSummary = async (req, res) => {
 
 module.exports = {
   createProfile,
+  getHomeProviders,
   searchProfessionals,
   aiSearch,
   getProfile,

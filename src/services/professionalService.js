@@ -73,6 +73,7 @@ const ALL_INDIA_SERVICE_AREA_KEY = normalizeSearchKey(ALL_INDIA_SERVICE_AREA);
 const SEARCH_INDEX_FALLBACK_ENABLED = process.env.SEARCH_INDEX_FALLBACK !== 'false';
 const SEARCH_RESPONSE_CACHE_TTL_MS = Math.max(Number(process.env.SEARCH_RESPONSE_CACHE_TTL_MS || 30 * 1000), 1000);
 const SEARCH_RESPONSE_CACHE_MAX = Math.max(Number(process.env.SEARCH_RESPONSE_CACHE_MAX || 500), 50);
+const HOME_PROVIDER_CANDIDATE_POOL_MAX = Math.max(Number(process.env.HOME_PROVIDER_CANDIDATE_POOL_MAX || 120), 48);
 const searchResponseCache = new TtlCache({
   ttlMs: SEARCH_RESPONSE_CACHE_TTL_MS,
   maxSize: SEARCH_RESPONSE_CACHE_MAX
@@ -510,6 +511,124 @@ class ProfessionalService {
       hasNextPage: pageNumber < totalPages,
       prevPage: pageNumber > 1 ? pageNumber - 1 : null,
       nextPage: pageNumber < totalPages ? pageNumber + 1 : null
+    };
+    if (cacheKey) {
+      searchResponseCache.set(cacheKey, this.cloneSearchResponse(response));
+    }
+    return response;
+  }
+
+  async getHomeProviders(filters = {}, limit = 24) {
+    const pageSize = Math.min(Math.max(Number(limit) || 24, 1), 36);
+    const normalizedFilters = {
+      query: '',
+      profession: '',
+      providerName: '',
+      location: String(filters?.location || '').trim(),
+      country: String(filters?.country || '').trim(),
+      state: String(filters?.state || '').trim(),
+      city: String(filters?.city || '').trim(),
+      town: String(filters?.town || '').trim(),
+      skills: [],
+      sort: 'best',
+      priceBands: [],
+      availableToday: false,
+      verifiedOnly: false,
+      minRating: 0
+    };
+    const cacheKey = this.buildPublicSearchCacheKey('home-providers', normalizedFilters, 1, pageSize, null);
+    const cachedResponse = cacheKey ? searchResponseCache.get(cacheKey) : null;
+    if (cachedResponse) {
+      const cloned = this.cloneSearchResponse(cachedResponse);
+      this.recordSearchImpressionsFromDocs(cloned.docs, 'Cached home providers');
+      return cloned;
+    }
+
+    const candidateQuery = this.buildSearchCandidateQuery(normalizedFilters);
+    candidateQuery.accountStatus = { $in: ['active', ''] };
+    const candidatePoolLimit = Math.min(Math.max(pageSize * 4, 48), HOME_PROVIDER_CANDIDATE_POOL_MAX);
+    const candidates = await ProfessionalProfile.find(candidateQuery)
+      .select([
+        'user',
+        'profilePicture',
+        'profession',
+        'skills',
+        'tags',
+        'serviceAreas',
+        'experience',
+        'description',
+        'location',
+        'country',
+        'state',
+        'city',
+        'town',
+        'area',
+        'pincode',
+        'latitude',
+        'longitude',
+        'availability',
+        'availabilityStart',
+        'availabilityEnd',
+        'acceptsNightCalls',
+        'charges',
+        'allowContactDisplay',
+        'accountStatus',
+        'viewCount',
+        'createdAt'
+      ].join(' '))
+      .populate({
+        path: 'user',
+        select: 'fullName mobile email role accountStatus passwordSetupRequired gender'
+      })
+      .sort({ createdAt: -1 })
+      .limit(candidatePoolLimit)
+      .lean();
+
+    const listableProfiles = candidates.filter((profile) => isProfessionalProfileListable(profile));
+    const userIds = listableProfiles.map((profile) => profile.user?._id?.toString?.() || '').filter(Boolean);
+    const growthStateMap = await providerGrowthService.getGrowthStatesForUsers(userIds);
+    const scoredProfiles = listableProfiles.map((profile) => {
+      const growthState = growthStateMap.get(profile.user?._id?.toString?.() || '') || {};
+      return {
+        profile,
+        growthState,
+        ranking: {
+          include: true,
+          matchedSignals: 0,
+          score: providerGrowthService.getRankingBoost(growthState)
+        }
+      };
+    });
+    const reviewStats = await this.getReviewStatsMap(scoredProfiles.map((item) => item.profile._id.toString()));
+    this.sortSearchResults(scoredProfiles, 'best', reviewStats);
+
+    const selectedItems = scoredProfiles.slice(0, pageSize);
+    const selectedProfiles = selectedItems.map((item) => item.profile);
+    const searchMetadata = await this.getSearchMetadata(selectedProfiles);
+    const shownUserIds = selectedProfiles.map((profile) => profile.user?._id?.toString?.() || '').filter(Boolean);
+    providerGrowthService.recordAdImpressions(shownUserIds)
+      .catch((error) => logger.warn(`Home provider impression recording failed: ${error.message}`));
+
+    const response = {
+      docs: selectedItems.map(({ profile }) => {
+        const userId = profile.user?._id?.toString?.() || '';
+        return buildProfessionalSummary({
+          profile,
+          reviewStats: reviewStats[profile._id.toString()] || {},
+          bookmarkedIds: new Set(),
+          growthState: growthStateMap.get(userId) || {},
+          effectiveStartingPrice: searchMetadata.effectivePrices.get(userId) || 0
+        });
+      }),
+      totalDocs: listableProfiles.length,
+      limit: pageSize,
+      page: 1,
+      totalPages: 1,
+      pagingCounter: 1,
+      hasPrevPage: false,
+      hasNextPage: false,
+      prevPage: null,
+      nextPage: null
     };
     if (cacheKey) {
       searchResponseCache.set(cacheKey, this.cloneSearchResponse(response));
