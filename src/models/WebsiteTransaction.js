@@ -51,7 +51,14 @@ const websiteTransactionSchema = new mongoose.Schema({
   receipt: {
     receiptNumber: { type: String, default: '', index: true },
     issuedAt: { type: Date, default: null },
-    emailedAt: { type: Date, default: null }
+    emailedAt: { type: Date, default: null },
+    resendCount: { type: Number, default: 0 },
+    lastResentAt: { type: Date, default: null },
+    resendHistory: [{
+      email: { type: String, default: '' },
+      sentAt: { type: Date, default: null },
+      requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
+    }]
   },
   refund: {
     requestedAt: { type: Date, default: null },

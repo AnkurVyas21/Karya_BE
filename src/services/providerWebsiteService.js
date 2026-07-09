@@ -42,6 +42,7 @@ const DEFAULT_BOOKING_SLOTS = [
 ];
 
 const INDIA_TIME_ZONE = 'Asia/Kolkata';
+const RECEIPT_RESEND_LIMIT = 2;
 const cleanString = (value) => String(value || '').trim();
 const providerAccountStatus = (profile = {}) => cleanString(profile?.accountStatus || 'active') || 'active';
 const isProviderAccountInactive = (profile = {}) => ['deactivated', 'deletion_scheduled'].includes(providerAccountStatus(profile));
@@ -2271,13 +2272,41 @@ class ProviderWebsiteService {
       if (!['paid', 'refunded'].includes(cleanString(transaction.paymentStatus))) {
         throw new Error('Verify the payment before sending a receipt.');
       }
+      transaction.receipt = transaction.receipt || {};
+      const resendCount = Math.max(0, cleanNumber(transaction.receipt.resendCount, 0));
+      if (resendCount >= RECEIPT_RESEND_LIMIT) {
+        throw new Error('Receipt email resend limit reached. Generate a receipt copy and share it through another app.');
+      }
+      const requestedCustomerEmail = cleanString(payload.customerEmail).toLowerCase();
+      const customerUser = !requestedCustomerEmail && !cleanString(booking.customerEmail || transaction.customerEmail) && booking.customerUserId
+        ? await User.findById(booking.customerUserId).select('email').lean()
+        : null;
+      const customerEmail = requestedCustomerEmail
+        || cleanString(booking.customerEmail || transaction.customerEmail || customerUser?.email).toLowerCase();
+      if (!isValidEmail(customerEmail)) {
+        throw new Error('Enter a valid customer email address before resending the receipt.');
+      }
+      booking.customerEmail = customerEmail;
+      transaction.customerEmail = customerEmail;
       transaction.receipt.receiptNumber = transaction.receipt.receiptNumber || websitePaymentService.buildReceiptNumber('BK');
       transaction.receipt.issuedAt = transaction.receipt.issuedAt || new Date();
-      await transaction.save();
-      const mailed = await this.sendBookingReceiptCopy(userId, booking, transaction);
+      await Promise.all([transaction.save(), booking.save()]);
+      const mailed = await this.sendBookingReceiptCopy(userId, booking, transaction, '', { customerEmail });
       if (!mailed) {
         throw new Error('Receipt could not be emailed. Check email configuration or customer email.');
       }
+      const resentAt = new Date();
+      transaction.receipt.resendCount = resendCount + 1;
+      transaction.receipt.lastResentAt = resentAt;
+      transaction.receipt.resendHistory = Array.isArray(transaction.receipt.resendHistory)
+        ? transaction.receipt.resendHistory
+        : [];
+      transaction.receipt.resendHistory.push({
+        email: customerEmail,
+        sentAt: resentAt,
+        requestedBy: userId
+      });
+      await transaction.save();
     }
 
     return this.getManager(userId);
@@ -3376,7 +3405,7 @@ class ProviderWebsiteService {
     }
   }
 
-  async sendBookingReceiptCopy(providerUserId, booking, transaction, providerMessage = '') {
+  async sendBookingReceiptCopy(providerUserId, booking, transaction, providerMessage = '', options = {}) {
     if (!transaction?.receipt?.receiptNumber) {
       return false;
     }
@@ -3389,7 +3418,7 @@ class ProviderWebsiteService {
     const providerName = provider?.fullName || website?.businessName || 'Provider';
     const receipt = toReceiptPayload(transaction, providerName);
     const offerInfo = await this.getBookingOfferInfo(booking);
-    const customerEmail = cleanString(booking.customerEmail) || cleanString(customerUser?.email);
+    const customerEmail = cleanString(options.customerEmail) || cleanString(booking.customerEmail) || cleanString(customerUser?.email);
     const recipients = [
       customerEmail,
       cleanString(provider?.email)
