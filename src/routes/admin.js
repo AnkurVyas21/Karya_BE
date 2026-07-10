@@ -6,6 +6,7 @@ const persistUploadedFiles = require('../middlewares/persistUploadedFiles');
 const adminService = require('../services/adminService');
 const advertisementCreativeService = require('../services/advertisementCreativeService');
 const websiteTemplateMediaService = require('../services/websiteTemplateMediaService');
+const legalDocumentService = require('../services/legalDocumentService');
 const multer = require('multer');
 const { getUploadDestination } = require('../utils/uploadPaths');
 
@@ -142,6 +143,37 @@ router.get('/website-template-media', async (_req, res) => {
   try {
     const data = await websiteTemplateMediaService.list();
     res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/legal', async (_req, res) => {
+  try {
+    const data = await legalDocumentService.listForAdmin();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/legal/:type', async (req, res) => {
+  try {
+    const data = await legalDocumentService.updateDocument(req.params.type, req.body || {}, req.user?._id);
+    res.json({ success: true, data, message: 'Legal document updated.' });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/legal/:type/notify', async (req, res) => {
+  try {
+    const data = await legalDocumentService.notifyUsers(req.params.type, req.user?._id);
+    res.json({
+      success: true,
+      data,
+      message: `Notification email sent to ${data.sentCount} user${data.sentCount === 1 ? '' : 's'}.`
+    });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
